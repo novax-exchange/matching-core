@@ -1,3 +1,4 @@
+mod grpc;
 mod runtime;
 
 fn main() {

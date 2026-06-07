@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package matching;
+
+service MatchingAdminService {
+  rpc HealthCheck (HealthCheckRequest) returns (HealthCheckResponse);
+  rpc RuntimeStatus (RuntimeStatusRequest) returns (RuntimeStatusResponse);
+  rpc TriggerSnapshot (TriggerSnapshotRequest) returns (TriggerSnapshotResponse);
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string status = 1;
+}
+
+message RuntimeStatusRequest {
+  string symbol = 1;
+}
+
+message RuntimeStatusResponse {
+  string symbol = 1;
+  uint64 last_input_seq = 2;
+  uint64 order_book_checksum = 3;
+  string state = 4;
+}
+
+message TriggerSnapshotRequest {
+  string symbol = 1;
+}
+
+message TriggerSnapshotResponse {
+  bool success = 1;
+  string message = 2;
+}
