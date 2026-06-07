@@ -37,6 +37,27 @@ impl MatchingEngine {
         &self.symbol
     }
 
+    pub fn export_state(&self) -> (Vec<(Decimal, Vec<Order>)>, Vec<(Decimal, Vec<Order>)>) {
+        (self.order_book.export_bids(), self.order_book.export_asks())
+    }
+
+    pub fn from_state(
+        symbol: Symbol,
+        bids: Vec<(Decimal, Vec<Order>)>,
+        asks: Vec<(Decimal, Vec<Order>)>,
+        next_trade_id: u64,
+    ) -> Self {
+        MatchingEngine {
+            order_book: OrderBook::from_levels(symbol.clone(), bids, asks),
+            symbol,
+            next_trade_id,
+        }
+    }
+
+    pub fn next_trade_id(&self) -> u64 {
+        self.next_trade_id
+    }
+
     fn place_order(&mut self, command: OrderCommand, seq: JournalSeq) -> MatchResult {
         let mut taker = Order {
             order_id: command.order_id.clone(),

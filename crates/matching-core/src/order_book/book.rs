@@ -169,6 +169,41 @@ impl OrderBook {
         (bids, asks)
     }
 
+    pub fn from_levels(
+        symbol: Symbol,
+        bids: Vec<(Decimal, Vec<Order>)>,
+        asks: Vec<(Decimal, Vec<Order>)>,
+    ) -> Self {
+        let mut book = OrderBook::new(symbol);
+        for (_, orders) in bids {
+            for order in orders {
+                book.insert(order);
+            }
+        }
+        for (_, orders) in asks {
+            for order in orders {
+                book.insert(order);
+            }
+        }
+        book
+    }
+
+    pub fn export_bids(&self) -> Vec<(Decimal, Vec<Order>)> {
+        self.bids
+            .iter()
+            .map(|(BidPrice(Reverse(price)), level)| {
+                (*price, level.orders().cloned().collect())
+            })
+            .collect()
+    }
+
+    pub fn export_asks(&self) -> Vec<(Decimal, Vec<Order>)> {
+        self.asks
+            .iter()
+            .map(|(price, level)| (*price, level.orders().cloned().collect()))
+            .collect()
+    }
+
     fn order_still_resting(&self, order_id: &OrderId) -> bool {
         let Some((side, price)) = self.order_index.get(order_id) else {
             return false;
