@@ -13,3 +13,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [build-dependencies]
 tonic-build = "0.11"
+
+[dev-dependencies]
+rust_decimal = "1"
+rust_decimal_macros = "1"

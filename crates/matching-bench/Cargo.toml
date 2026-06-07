@@ -6,6 +6,7 @@ edition = "2021"
 [dev-dependencies]
 matching-core = { path = "../matching-core" }
 criterion = { version = "0.5", features = ["html_reports"] }
+rust_decimal = "1"
 rust_decimal_macros = "1"
 
 [[bench]]
