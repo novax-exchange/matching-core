@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "crates/matching-core",
+    "crates/matching-service",
+    "crates/matching-bench",
+]
+resolver = "2"
