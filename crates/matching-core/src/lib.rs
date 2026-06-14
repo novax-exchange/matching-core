@@ -7,3 +7,4 @@ pub mod replay;
 pub mod snapshot;
 pub mod types;
 pub mod symbol_runtime;
+pub mod runtime_manager;
