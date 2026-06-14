@@ -1,104 +1,82 @@
-use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OrderId(pub u64);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct TradeId(pub u64);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Symbol(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Price(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Quantity(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Buy,
+    Sell,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CommandId(pub u64);
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct ConfigVersion(pub u64);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TradeId(pub u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Checksum(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct JournalSeq(pub u64);
 
-impl JournalSeq {
-    pub fn next(self) -> Self {
-        JournalSeq(self.0 + 1)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn order_id_can_be_compared() {
+        let first = OrderId(1);
+        let second = OrderId(1);
+
+        assert_eq!(first, second);
     }
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Side {
-    Bid,
-    Ask,
-}
+    #[test]
+    fn symbol_can_be_cloned_and_compared() {
+        let btc = Symbol("BTC-USDT".to_string());
+        let same = btc.clone();
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum OrderType {
-    Limit,
-}
+        assert_eq!(btc, same);
+    }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RejectReason {
-    DuplicateOrderId,
-    InvalidSymbol,
-    InvalidPrice,
-    InvalidQuantity,
-    ConfigVersionMismatch,
-    UnknownCommand,
-}
+    #[test]
+    fn price_and_quality_can_be_compared() {
+        let price = Price(100);
+        let same_price = Price(100);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CancelRejectReason {
-    OrderNotFound,
-    AlreadyFilled,
-    AlreadyCancelled,
-    DuplicateCommandId,
-}
+        let quantity = Quantity(5);
+        let same_quantity = Quantity(5);
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Order {
-    pub order_id: OrderId,
-    pub symbol: Symbol,
-    pub side: Side,
-    pub order_type: OrderType,
-    pub price: Decimal,
-    pub quantity: Decimal,
-    pub remaining: Decimal,
-    pub journal_seq: JournalSeq,
-    pub timestamp_ns: i64,
-}
+        assert_eq!(price, same_price);
+        assert_eq!(quantity, same_quantity);
+    }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OrderCommand {
-    pub command_id: CommandId,
-    pub order_id: OrderId,
-    pub symbol: Symbol,
-    pub side: Side,
-    pub order_type: OrderType,
-    pub price: Decimal,
-    pub quantity: Decimal,
-    pub config_version: ConfigVersion,
-    pub timestamp_ns: i64,
-}
+    #[test]
+    fn side_distinguished_buy_and_sell() {
+        assert_eq!(Side::Buy, Side::Buy);
+        assert_ne!(Side::Buy, Side::Sell);
+    }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CancelCommand {
-    pub command_id: CommandId,
-    pub order_id: OrderId,
-    pub symbol: Symbol,
-    pub config_version: ConfigVersion,
-    pub timestamp_ns: i64,
-}
+    #[test]
+    fn command_id_and_journal_seq_can_be_compared() {
+        assert_eq!(CommandId(1), CommandId(1));
+        assert_eq!(JournalSeq(10), JournalSeq(10));
+        assert!(JournalSeq(10) < JournalSeq(11));
+        assert!(TradeId(1) < TradeId(2));
+    }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum MatchingCommand {
-    PlaceOrder(OrderCommand),
-    CancelOrder(CancelCommand),
-}
-
-#[derive(Debug, Clone)]
-pub struct SymbolConfig {
-    pub price_tick: Decimal,
-    pub quantity_tick: Decimal,
-    pub min_quantity: Decimal,
-    pub config_version: ConfigVersion,
+    #[test]
+    fn checksum_can_be_compared() {
+        assert_eq!(Checksum(123), Checksum(123));
+        assert_ne!(Checksum(123), Checksum(456));
+    }
 }

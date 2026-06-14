@@ -3,12 +3,4 @@ name = "matching-bench"
 version = "0.1.0"
 edition = "2021"
 
-[dev-dependencies]
-matching-core = { path = "../matching-core" }
-criterion = { version = "0.5", features = ["html_reports"] }
-rust_decimal = "1"
-rust_decimal_macros = "1"
-
-[[bench]]
-name = "matching_bench"
-harness = false
+[dependencies]
