@@ -69,41 +69,41 @@ The learning rule is: simple implementations are allowed, but the boundaries mus
 
 ## Roadmap
 
-| Phase | Goal | Verification |
-|---|---|---|
-| 0 | Minimal Rust workspace | Empty tests pass |
-| 1 | Core domain types | Type construction tests |
-| 2 | Order and command model | Place/cancel command tests |
-| 3 | Price level | FIFO tests |
-| 4 | Order book structure | Best bid/ask and index tests |
-| 5 | Limit order matching | Full/partial/resting match tests |
-| 6 | Cancellation | Successful and failed cancel tests |
-| 7 | Command ingress | Invalid symbol/price/quantity tests |
-| 8 | Output event model | Ack and trade event tests |
-| 9 | Deterministic checksum | Same input gives same checksum |
-| 10 | Journal contract | Append/read/latest sequence tests |
-| 11 | Replay runner | Replay checksum consistency |
-| 12 | Snapshot | Snapshot/restore checksum consistency |
-| 13 | Symbol runtime | Output commit advances safe point |
-| 14 | Batch processing | Batch failure stops at safe point |
-| 15 | Runtime manager | BTC/ETH runtimes remain isolated |
-| 16 | Symbol router | Entries route by symbol |
-| 17 | Bounded input handoff | Full queue and ordered consumption tests |
-| 18 | Thread model | Journal reader and runtime separation |
-| 19 | Output isolation | Slow output does not block input directly |
-| 20 | Durable journal adapter | Restart and replay recovery |
-| 21 | Admin/query API | Cursor, checksum, and depth queries |
-| 22 | Observability | Tracing and metrics visibility |
-| 23 | Benchmarks | Single-symbol and multi-symbol baselines |
-| 24 | Order book data structure evolution | Benchmark comparison |
-| 25 | RingBuffer-style handoff optimization | Queue benchmark improvements |
-| 26 | CPU stability optimization | p99 jitter comparison |
-| 27 | Sharding and hot-symbol placement | Symbol ownership and migration tests |
-| 28 | Standby replay | Standby checksum catches up |
-| 29 | Leader lease and fencing | Lost lease stops processing |
-| 30 | Failover drill | Promoted standby state is consistent |
-| 31 | Zero-downtime upgrade validation | Old/new versions replay consistently |
-| 32 | Final acceptance | Tests, benchmarks, drills, and docs |
+| Phase | Status | Goal | Verification |
+|---|---|---|---|
+| 0 | Completed | Minimal Rust workspace | Empty tests pass |
+| 1 | Completed | Core domain types | Type construction tests |
+| 2 | Completed | Order and command model | Place/cancel command tests |
+| 3 | Completed | Price level | FIFO tests |
+| 4 | Completed | Order book structure | Best bid/ask and index tests |
+| 5 | Completed | Limit order matching | Full/partial/resting match tests |
+| 6 | Completed | Cancellation | Successful and failed cancel tests |
+| 7 | Completed | Command ingress | Invalid symbol/price/quantity tests |
+| 8 | Completed | Output event model | Ack and trade event tests |
+| 9 | Completed | Deterministic checksum | Same input gives same checksum |
+| 10 | Completed | Journal contract | Append/read/latest sequence tests |
+| 11 | Completed | Replay runner | Replay checksum consistency |
+| 12 | Completed | Snapshot | Snapshot/restore checksum consistency |
+| 13 | Completed | Symbol runtime | Output commit advances safe point |
+| 14 | Completed | Batch processing | Batch failure stops at safe point |
+| 15 | Completed | Runtime manager | BTC/ETH runtimes remain isolated |
+| 16 | Next | Symbol router | Entries route by symbol |
+| 17 | Planned | Bounded input handoff | Full queue and ordered consumption tests |
+| 18 | Planned | Thread model | Journal reader and runtime separation |
+| 19 | Planned | Output isolation | Slow output does not block input directly |
+| 20 | Planned | Durable journal adapter | Restart and replay recovery |
+| 21 | Planned | Admin/query API | Cursor, checksum, and depth queries |
+| 22 | Planned | Observability | Tracing and metrics visibility |
+| 23 | Planned | Benchmarks | Single-symbol and multi-symbol baselines |
+| 24 | Planned | Order book data structure evolution | Benchmark comparison |
+| 25 | Planned | RingBuffer-style handoff optimization | Queue benchmark improvements |
+| 26 | Planned | CPU stability optimization | p99 jitter comparison |
+| 27 | Planned | Sharding and hot-symbol placement | Symbol ownership and migration tests |
+| 28 | Planned | Standby replay | Standby checksum catches up |
+| 29 | Planned | Leader lease and fencing | Lost lease stops processing |
+| 30 | Planned | Failover drill | Promoted standby state is consistent |
+| 31 | Planned | Zero-downtime upgrade validation | Old/new versions replay consistently |
+| 32 | Planned | Final acceptance | Tests, benchmarks, drills, and docs |
 
 ## Architecture Principles
 

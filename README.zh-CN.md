@@ -69,41 +69,41 @@ cargo test
 
 ## 路线图
 
-| Phase | 阶段目标 | 验证方式 |
-|---|---|---|
-| 0 | 创建最小 Rust workspace | 空测试通过 |
-| 1 | 定义核心领域类型 | 类型构造测试 |
-| 2 | 定义订单与命令模型 | 下单 / 撤单命令测试 |
-| 3 | 实现价格档位 | FIFO 测试 |
-| 4 | 实现订单簿基础结构 | best bid / best ask / index 测试 |
-| 5 | 实现限价单撮合 | 完全成交、部分成交、挂单测试 |
-| 6 | 实现撤单 | 撤单成功 / 失败测试 |
-| 7 | 实现 CommandIngress | 非法 symbol / price / quantity 测试 |
-| 8 | 实现输出事件模型 | Ack / TradeEvent 测试 |
-| 9 | 实现确定性 checksum | 相同输入 checksum 一致 |
-| 10 | 实现 Journal contract | append / read / latest seq 测试 |
-| 11 | 实现 Replay Runner | replay checksum 一致 |
-| 12 | 实现 Snapshot | snapshot / restore checksum 一致 |
-| 13 | 实现 SymbolRuntime | output commit 成功后推进安全点 |
-| 14 | 实现批量处理 | batch 失败停在安全点 |
-| 15 | 实现 RuntimeManager | BTC / ETH runtime 状态隔离 |
-| 16 | 实现 SymbolRouter | 按 symbol 分发输入 |
-| 17 | 实现 bounded input handoff | 队列满、顺序消费、水位测试 |
-| 18 | 引入线程模型 | Journal reader 与 runtime 分离 |
-| 19 | 实现 output isolation | 慢输出不直接阻塞输入读取 |
-| 20 | 实现持久化 Journal adapter | 重启后 replay 恢复 |
-| 21 | 实现 Admin / Query API | 查询 cursor、checksum、depth |
-| 22 | 实现可观测性 | tracing 和 metrics 可见 |
-| 23 | 建立性能基准 | 单 symbol / 多 symbol benchmark |
-| 24 | 强化订单簿数据结构 | benchmark 对比报告 |
-| 25 | 强化 RingBuffer-style handoff | queue benchmark 改善 |
-| 26 | 引入 CPU 稳定性优化 | p99 jitter 对比 |
-| 27 | 实现 shard / hot-symbol placement | symbol ownership 和迁移测试 |
-| 28 | 实现 standby replay | standby checksum 追平 |
-| 29 | 实现 leader lease / fencing | 失去 lease 后停止处理 |
-| 30 | 实现 failover 演练 | standby 晋升后状态一致 |
-| 31 | 实现 zero-downtime upgrade 验证 | 新旧版本 replay 一致 |
-| 32 | 完整验收与文档回填 | 测试、bench、故障演练和文档 |
+| Phase | 状态 | 阶段目标 | 验证方式 |
+|---|---|---|---|
+| 0 | 已完成 | 创建最小 Rust workspace | 空测试通过 |
+| 1 | 已完成 | 定义核心领域类型 | 类型构造测试 |
+| 2 | 已完成 | 定义订单与命令模型 | 下单 / 撤单命令测试 |
+| 3 | 已完成 | 实现价格档位 | FIFO 测试 |
+| 4 | 已完成 | 实现订单簿基础结构 | best bid / best ask / index 测试 |
+| 5 | 已完成 | 实现限价单撮合 | 完全成交、部分成交、挂单测试 |
+| 6 | 已完成 | 实现撤单 | 撤单成功 / 失败测试 |
+| 7 | 已完成 | 实现 CommandIngress | 非法 symbol / price / quantity 测试 |
+| 8 | 已完成 | 实现输出事件模型 | Ack / TradeEvent 测试 |
+| 9 | 已完成 | 实现确定性 checksum | 相同输入 checksum 一致 |
+| 10 | 已完成 | 实现 Journal contract | append / read / latest seq 测试 |
+| 11 | 已完成 | 实现 Replay Runner | replay checksum 一致 |
+| 12 | 已完成 | 实现 Snapshot | snapshot / restore checksum 一致 |
+| 13 | 已完成 | 实现 SymbolRuntime | output commit 成功后推进安全点 |
+| 14 | 已完成 | 实现批量处理 | batch 失败停在安全点 |
+| 15 | 已完成 | 实现 RuntimeManager | BTC / ETH runtime 状态隔离 |
+| 16 | 下一步 | 实现 SymbolRouter | 按 symbol 分发输入 |
+| 17 | 计划中 | 实现 bounded input handoff | 队列满、顺序消费、水位测试 |
+| 18 | 计划中 | 引入线程模型 | Journal reader 与 runtime 分离 |
+| 19 | 计划中 | 实现 output isolation | 慢输出不直接阻塞输入读取 |
+| 20 | 计划中 | 实现持久化 Journal adapter | 重启后 replay 恢复 |
+| 21 | 计划中 | 实现 Admin / Query API | 查询 cursor、checksum、depth |
+| 22 | 计划中 | 实现可观测性 | tracing 和 metrics 可见 |
+| 23 | 计划中 | 建立性能基准 | 单 symbol / 多 symbol benchmark |
+| 24 | 计划中 | 强化订单簿数据结构 | benchmark 对比报告 |
+| 25 | 计划中 | 强化 RingBuffer-style handoff | queue benchmark 改善 |
+| 26 | 计划中 | 引入 CPU 稳定性优化 | p99 jitter 对比 |
+| 27 | 计划中 | 实现 shard / hot-symbol placement | symbol ownership 和迁移测试 |
+| 28 | 计划中 | 实现 standby replay | standby checksum 追平 |
+| 29 | 计划中 | 实现 leader lease / fencing | 失去 lease 后停止处理 |
+| 30 | 计划中 | 实现 failover 演练 | standby 晋升后状态一致 |
+| 31 | 计划中 | 实现 zero-downtime upgrade 验证 | 新旧版本 replay 一致 |
+| 32 | 计划中 | 完整验收与文档回填 | 测试、bench、故障演练和文档 |
 
 ## 架构原则
 
