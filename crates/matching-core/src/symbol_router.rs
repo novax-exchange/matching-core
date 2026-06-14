@@ -1,10 +1,12 @@
 use crate::journal::InputJournalEntry;
 use crate::types::Symbol;
 use std::collections::{HashMap, HashSet};
+use crate::input_queue::PerSymbolInputQueue;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SymbolRouterError {
     UnknownSymbol,
+    QueueFull
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +59,39 @@ impl SymbolRouter {
         }
 
         Ok(RoutedInput { symbol, entry })
+    }
+
+    pub fn route_batch_to_queues(
+        &self,
+        entries: Vec<InputJournalEntry>,
+        queues: &mut HashMap<Symbol, PerSymbolInputQueue>,
+    ) -> Result<usize, SymbolRouterError> {
+        let mut routed = 0;
+
+        for entry in entries {
+            self.route_entry_to_queue(entry, queues)?;
+            routed += 1;
+        }
+
+        Ok(routed)
+    }
+
+    pub fn route_entry_to_queue(
+        &self,
+        entry: InputJournalEntry,
+        queues: &mut HashMap<Symbol, PerSymbolInputQueue>,
+    ) -> Result<(), SymbolRouterError> {
+        let routed = self.route_entry(entry)?;
+
+        let queue = queues
+            .get_mut(&routed.symbol)
+            .ok_or(SymbolRouterError::UnknownSymbol)?;
+
+        queue
+            .enqueue(routed.entry)
+            .map_err(|_| SymbolRouterError::QueueFull)?;
+            
+        Ok(())
     }
 }
 
@@ -158,5 +193,147 @@ mod tests {
             router.route_batch(entries),
             Err(SymbolRouterError::UnknownSymbol)
         );
+    }
+
+    #[test]
+    fn router_enqueues_entry_to_matching_symbol_queue() {
+        let mut router = SymbolRouter::new();
+        router.add_symbol(btc());
+        router.add_symbol(eth());
+
+        let mut queues = HashMap::new();
+        queues.insert(btc(), PerSymbolInputQueue::new(2));
+        queues.insert(eth(), PerSymbolInputQueue::new(2));
+
+        assert_eq!(
+            router.route_entry_to_queue(
+                input_entry(1, 10, 100, btc()),
+                &mut queues,
+            ),
+            Ok(())
+        );
+
+        let btc_entries = queues.get_mut(&btc()).unwrap().drain_batch(10);
+        let eth_entries = queues.get_mut(&eth()).unwrap().drain_batch(10);
+
+        assert_eq!(btc_entries.len(), 1);
+        assert_eq!(btc_entries[0].seq, JournalSeq(1));
+        assert_eq!(eth_entries.len(), 0);
+    }
+
+    #[test]
+    fn router_returns_queue_full_when_matching_symbol_queue_is_full() {
+        let mut router = SymbolRouter::new();
+        router.add_symbol(btc());
+
+        let mut queues = HashMap::new();
+        queues.insert(btc(), PerSymbolInputQueue::new(1));
+
+        assert_eq!(
+            router.route_entry_to_queue(
+                input_entry(1, 10, 100, btc()),
+                &mut queues,
+            ),
+            Ok(())
+        );
+
+        assert_eq!(
+            router.route_entry_to_queue(
+                input_entry(2, 11, 101, btc()),
+                &mut queues,
+            ),
+            Err(SymbolRouterError::QueueFull)
+        );
+
+        let btc_entries = queues.get_mut(&btc()).unwrap().drain_batch(10);
+
+        assert_eq!(btc_entries.len(), 1);
+        assert_eq!(btc_entries[0].seq, JournalSeq(1));
+    }
+
+    #[test]
+    fn router_enqueues_batch_to_matching_symbol_queues_in_input_order() {
+        let mut router = SymbolRouter::new();
+        router.add_symbol(btc());
+        router.add_symbol(eth());
+
+        let mut queues = HashMap::new();
+        queues.insert(btc(), PerSymbolInputQueue::new(4));
+        queues.insert(eth(), PerSymbolInputQueue::new(4));
+
+        let entries = vec![
+            input_entry(1, 10, 100, btc()),
+            input_entry(2, 11, 200, eth()),
+            input_entry(3, 12, 101, btc()),
+            input_entry(4, 13, 201, eth()),
+        ];
+
+        assert_eq!(router.route_batch_to_queues(entries, &mut queues), Ok(4));
+
+        let btc_entries = queues.get_mut(&btc()).unwrap().drain_batch(10);
+        let eth_entries = queues.get_mut(&eth()).unwrap().drain_batch(10);
+
+        assert_eq!(btc_entries.len(), 2);
+        assert_eq!(btc_entries[0].seq, JournalSeq(1));
+        assert_eq!(btc_entries[1].seq, JournalSeq(3));
+
+        assert_eq!(eth_entries.len(), 2);
+        assert_eq!(eth_entries[0].seq, JournalSeq(2));
+        assert_eq!(eth_entries[1].seq, JournalSeq(4));
+    }
+
+    #[test]
+    fn router_batch_to_queues_stops_at_queue_full_and_keeps_prior_enqueues() {
+        let mut router = SymbolRouter::new();
+        router.add_symbol(btc());
+        router.add_symbol(eth());
+
+        let mut queues = HashMap::new();
+        queues.insert(btc(), PerSymbolInputQueue::new(1));
+        queues.insert(eth(), PerSymbolInputQueue::new(2));
+
+        let entries = vec![
+            input_entry(1, 10, 100, btc()),
+            input_entry(2, 11, 101, btc()),
+            input_entry(3, 12, 200, eth()),
+        ];
+
+        assert_eq!(
+            router.route_batch_to_queues(entries, &mut queues),
+            Err(SymbolRouterError::QueueFull)
+        );
+
+        let btc_entries = queues.get_mut(&btc()).unwrap().drain_batch(10);
+        let eth_entries = queues.get_mut(&eth()).unwrap().drain_batch(10);
+
+        assert_eq!(btc_entries.len(), 1);
+        assert_eq!(btc_entries[0].seq, JournalSeq(1));
+
+        assert_eq!(eth_entries.len(), 0);
+    }
+
+    #[test]
+    fn router_batch_to_queues_stops_at_unknown_symbol_and_keeps_prior_enqueues() {
+        let mut router = SymbolRouter::new();
+        router.add_symbol(btc());
+
+        let mut queues = HashMap::new();
+        queues.insert(btc(), PerSymbolInputQueue::new(2));
+
+        let entries = vec![
+            input_entry(1, 10, 100, btc()),
+            input_entry(2, 11, 200, eth()),
+            input_entry(3, 12, 101, btc()),
+        ];
+
+        assert_eq!(
+            router.route_batch_to_queues(entries, &mut queues),
+            Err(SymbolRouterError::UnknownSymbol)
+        );
+
+        let btc_entries = queues.get_mut(&btc()).unwrap().drain_batch(10);
+
+        assert_eq!(btc_entries.len(), 1);
+        assert_eq!(btc_entries[0].seq, JournalSeq(1));
     }
 }
