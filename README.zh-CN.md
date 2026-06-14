@@ -28,9 +28,9 @@ NovaX Matching Core 是一个用 Rust 逐步重建中心化交易所撮合核心
 
 | 项目 | 状态 |
 |---|---|
-| 已完成阶段 | Phase 0-15 |
-| 当前里程碑 | 多交易对 Runtime 管理 |
-| 下一阶段 | Phase 16：SymbolRouter |
+| 已完成阶段 | Phase 0-16 |
+| 当前里程碑 | Symbol 路由边界 |
+| 下一阶段 | Phase 17：Bounded input handoff |
 | 最新验证方式 | `cargo test` |
 
 已实现能力：
@@ -47,6 +47,7 @@ NovaX Matching Core 是一个用 Rust 逐步重建中心化交易所撮合核心
 - 单交易对 `SymbolRuntime`，支持安全点推进。
 - 批量处理，支持失败后可重试语义。
 - 多交易对 `RuntimeManager`，支持 per-symbol 状态隔离。
+- `SymbolRouter`，支持已注册 symbol 路由和 batch 分组。
 
 运行测试：
 
@@ -87,8 +88,8 @@ cargo test
 | 13 | 已完成 | 实现 SymbolRuntime | output commit 成功后推进安全点 |
 | 14 | 已完成 | 实现批量处理 | batch 失败停在安全点 |
 | 15 | 已完成 | 实现 RuntimeManager | BTC / ETH runtime 状态隔离 |
-| 16 | 下一步 | 实现 SymbolRouter | 按 symbol 分发输入 |
-| 17 | 计划中 | 实现 bounded input handoff | 队列满、顺序消费、水位测试 |
+| 16 | 已完成 | 实现 SymbolRouter | 按 symbol 分发输入 |
+| 17 | 下一步 | 实现 bounded input handoff | 队列满、顺序消费、水位测试 |
 | 18 | 计划中 | 引入线程模型 | Journal reader 与 runtime 分离 |
 | 19 | 计划中 | 实现 output isolation | 慢输出不直接阻塞输入读取 |
 | 20 | 计划中 | 实现持久化 Journal adapter | 重启后 replay 恢复 |

@@ -28,9 +28,9 @@ Current progress:
 
 | Item | Status |
 |---|---|
-| Completed phases | Phase 0-15 |
-| Current milestone | Multi-symbol runtime management |
-| Next phase | Phase 16: Symbol router |
+| Completed phases | Phase 0-16 |
+| Current milestone | Symbol routing boundary |
+| Next phase | Phase 17: Bounded input handoff |
 | Latest verification | `cargo test` |
 
 Implemented capabilities:
@@ -47,6 +47,7 @@ Implemented capabilities:
 - Single-symbol `SymbolRuntime` with safe-point processing.
 - Batch processing with retry-safe failure behavior.
 - Multi-symbol `RuntimeManager` with per-symbol state isolation.
+- `SymbolRouter` with registered-symbol routing and batch grouping.
 
 Run the test suite:
 
@@ -87,8 +88,8 @@ The learning rule is: simple implementations are allowed, but the boundaries mus
 | 13 | Completed | Symbol runtime | Output commit advances safe point |
 | 14 | Completed | Batch processing | Batch failure stops at safe point |
 | 15 | Completed | Runtime manager | BTC/ETH runtimes remain isolated |
-| 16 | Next | Symbol router | Entries route by symbol |
-| 17 | Planned | Bounded input handoff | Full queue and ordered consumption tests |
+| 16 | Completed | Symbol router | Entries route by symbol |
+| 17 | Next | Bounded input handoff | Full queue and ordered consumption tests |
 | 18 | Planned | Thread model | Journal reader and runtime separation |
 | 19 | Planned | Output isolation | Slow output does not block input directly |
 | 20 | Planned | Durable journal adapter | Restart and replay recovery |
