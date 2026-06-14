@@ -32,6 +32,15 @@ impl PerSymbolInputQueue {
         Ok(())
     }
 
+    pub fn prepend_entries(
+        &mut self,
+        entries: Vec<InputJournalEntry>,
+    ) {
+        for entry in entries.into_iter().rev() {
+            self.entries.push_front(entry);
+        }
+    }
+
     pub fn drain_batch(
         &mut self,
         max_entries: usize
@@ -174,5 +183,24 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].seq, JournalSeq(1));
         assert_eq!(entries[1].seq, JournalSeq(2));
+    }
+
+    #[test]
+    fn queue_can_prepend_entries_back_to_front_in_original_order() {
+        let mut queue = PerSymbolInputQueue::new(4);
+
+        assert_eq!(queue.enqueue(input_entry(3, 12, 102)), Ok(()));
+
+        queue.prepend_entries(vec![
+            input_entry(1, 10, 100),
+            input_entry(2, 11, 101),
+        ]);
+
+        let entries = queue.drain_batch(10);
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].seq, JournalSeq(1));
+        assert_eq!(entries[1].seq, JournalSeq(2));
+        assert_eq!(entries[2].seq, JournalSeq(3));
     }
 }

@@ -28,9 +28,9 @@ Current progress:
 
 | Item | Status |
 |---|---|
-| Completed phases | Phase 0-17 |
-| Current milestone | Bounded input handoff |
-| Next phase | Phase 18: Thread model |
+| Completed phases | Phase 0-18 |
+| Current milestone | Thread-ready runtime loop |
+| Next phase | Phase 19: Output isolation |
 | Latest verification | `cargo test` |
 
 Implemented capabilities:
@@ -49,6 +49,7 @@ Implemented capabilities:
 - Multi-symbol `RuntimeManager` with per-symbol state isolation.
 - `SymbolRouter` with registered-symbol routing and batch grouping.
 - `PerSymbolInputQueue` with bounded capacity, FIFO drain, watermarks, and router enqueue support.
+- Runtime loop step and one-shot worker thread for processing queued symbol input.
 
 Run the test suite:
 
@@ -91,8 +92,8 @@ The learning rule is: simple implementations are allowed, but the boundaries mus
 | 15 | Completed | Runtime manager | BTC/ETH runtimes remain isolated |
 | 16 | Completed | Symbol router | Entries route by symbol |
 | 17 | Completed | Bounded input handoff | Full queue and ordered consumption tests |
-| 18 | Next | Thread model | Journal reader and runtime separation |
-| 19 | Planned | Output isolation | Slow output does not block input directly |
+| 18 | Completed | Thread model | Journal reader and runtime separation |
+| 19 | Next | Output isolation | Slow output does not block input directly |
 | 20 | Planned | Durable journal adapter | Restart and replay recovery |
 | 21 | Planned | Admin/query API | Cursor, checksum, and depth queries |
 | 22 | Planned | Observability | Tracing and metrics visibility |

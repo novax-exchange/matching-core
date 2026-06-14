@@ -28,9 +28,9 @@ NovaX Matching Core 是一个用 Rust 逐步重建中心化交易所撮合核心
 
 | 项目 | 状态 |
 |---|---|
-| 已完成阶段 | Phase 0-17 |
-| 当前里程碑 | 有界输入交接 |
-| 下一阶段 | Phase 18：线程模型 |
+| 已完成阶段 | Phase 0-18 |
+| 当前里程碑 | 可线程化 Runtime Loop |
+| 下一阶段 | Phase 19：Output isolation |
 | 最新验证方式 | `cargo test` |
 
 已实现能力：
@@ -49,6 +49,7 @@ NovaX Matching Core 是一个用 Rust 逐步重建中心化交易所撮合核心
 - 多交易对 `RuntimeManager`，支持 per-symbol 状态隔离。
 - `SymbolRouter`，支持已注册 symbol 路由和 batch 分组。
 - `PerSymbolInputQueue`，支持有界容量、FIFO drain、水位状态和 router enqueue。
+- Runtime loop step 和 one-shot worker thread，用于处理队列中的 symbol input。
 
 运行测试：
 
@@ -91,8 +92,8 @@ cargo test
 | 15 | 已完成 | 实现 RuntimeManager | BTC / ETH runtime 状态隔离 |
 | 16 | 已完成 | 实现 SymbolRouter | 按 symbol 分发输入 |
 | 17 | 已完成 | 实现 bounded input handoff | 队列满、顺序消费、水位测试 |
-| 18 | 下一步 | 引入线程模型 | Journal reader 与 runtime 分离 |
-| 19 | 计划中 | 实现 output isolation | 慢输出不直接阻塞输入读取 |
+| 18 | 已完成 | 引入线程模型 | Journal reader 与 runtime 分离 |
+| 19 | 下一步 | 实现 output isolation | 慢输出不直接阻塞输入读取 |
 | 20 | 计划中 | 实现持久化 Journal adapter | 重启后 replay 恢复 |
 | 21 | 计划中 | 实现 Admin / Query API | 查询 cursor、checksum、depth |
 | 22 | 计划中 | 实现可观测性 | tracing 和 metrics 可见 |

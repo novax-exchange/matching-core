@@ -34,3 +34,22 @@ fn input_queue_is_available_from_public_api() {
     assert_eq!(entries[0].seq, JournalSeq(1));
     assert_eq!(entries[1].seq, JournalSeq(2));
 }
+
+#[test]
+fn input_queue_can_prepend_entries_from_public_api() {
+    let mut queue = PerSymbolInputQueue::new(4);
+
+    assert_eq!(queue.enqueue(command_entry(3)), Ok(()));
+
+    queue.prepend_entries(vec![
+        command_entry(1),
+        command_entry(2),
+    ]);
+
+    let entries = queue.drain_batch(10);
+
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0].seq, JournalSeq(1));
+    assert_eq!(entries[1].seq, JournalSeq(2));
+    assert_eq!(entries[2].seq, JournalSeq(3));
+}
