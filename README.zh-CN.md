@@ -24,7 +24,16 @@ NovaX Matching Core 是一个用 Rust 逐步重建中心化交易所撮合核心
 
 ## 当前状态
 
-目前已经完成到 Phase 15：
+当前进度：
+
+| 项目 | 状态 |
+|---|---|
+| 已完成阶段 | Phase 0-15 |
+| 当前里程碑 | 多交易对 Runtime 管理 |
+| 下一阶段 | Phase 16：SymbolRouter |
+| 最新验证方式 | `cargo test` |
+
+已实现能力：
 
 - 核心领域类型和命令模型。
 - FIFO 价格档位和带索引的订单簿。
@@ -128,4 +137,3 @@ Commit message 使用英文和简洁的 Conventional Commit 风格，例如：
 ```text
 feat(core): add runtime manager
 ```
-

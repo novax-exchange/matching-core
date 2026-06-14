@@ -24,7 +24,16 @@ The project intentionally starts with simple implementations where useful, but t
 
 ## Current Status
 
-Implemented through Phase 15:
+Current progress:
+
+| Item | Status |
+|---|---|
+| Completed phases | Phase 0-15 |
+| Current milestone | Multi-symbol runtime management |
+| Next phase | Phase 16: Symbol router |
+| Latest verification | `cargo test` |
+
+Implemented capabilities:
 
 - Core domain types and command model.
 - FIFO price levels and indexed order book.
@@ -128,4 +137,3 @@ Commit messages are written in English using concise Conventional Commit style, 
 ```text
 feat(core): add runtime manager
 ```
-
