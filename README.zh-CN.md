@@ -114,6 +114,13 @@ cargo test
 - 背压和输出隔离是明确的系统边界，不是事后补丁。
 - 性能优化必须基于 benchmark，而不是提前猜测。
 
+架构文档：
+
+- [架构文档入口](docs/architecture/README.zh-CN.md)
+- [撮合引擎架构](docs/architecture/matching-engine.zh-CN.md)
+- [Journal 模型](docs/architecture/journal-model.zh-CN.md)
+- [Runtime 模型](docs/architecture/runtime-model.zh-CN.md)
+
 ## 仓库结构
 
 ```text

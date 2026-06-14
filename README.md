@@ -114,6 +114,13 @@ The learning rule is: simple implementations are allowed, but the boundaries mus
 - Backpressure and output isolation are explicit system boundaries, not afterthoughts.
 - Performance work is driven by benchmark evidence, not premature optimization.
 
+Architecture notes:
+
+- [Architecture Documentation](docs/architecture/README.md)
+- [Matching Engine Architecture](docs/architecture/matching-engine.md)
+- [Journal Model](docs/architecture/journal-model.md)
+- [Runtime Model](docs/architecture/runtime-model.md)
+
 ## Repository Layout
 
 ```text
