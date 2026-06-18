@@ -27,9 +27,9 @@ Use that reference directory for the application architecture, component documen
 
 | Item | Status |
 | --- | --- |
-| Completed phases | Phase 0-19 |
-| Current milestone | Runtime handoff and output commit boundary |
-| Current phase | Phase 20: Confirmed Input Consumer |
+| Completed phases | Phase 0-20 |
+| Current milestone | Service-facing query boundary |
+| Current phase | Phase 21: Admin/query API |
 | Latest verification | `cargo test -p matching-core` |
 
 Implemented capabilities:
@@ -51,6 +51,7 @@ Implemented capabilities:
 - Runtime loop step and one-shot worker thread.
 - Output queue isolation.
 - Output committer and output commit loop.
+- Confirmed input consumer with bounded batch reads, gap detection, and backpressure-safe enqueue.
 - Project roadmap document in this repository.
 
 ## Documentation

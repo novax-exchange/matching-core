@@ -6,9 +6,9 @@ This document is the repository-local roadmap for NovaX Matching Core. It record
 
 | Item | Status |
 | --- | --- |
-| Completed phases | Phase 0-19 |
-| Current milestone | Runtime handoff and output commit boundary |
-| Current phase | Phase 20: Confirmed Input Consumer |
+| Completed phases | Phase 0-20 |
+| Current milestone | Service-facing query boundary |
+| Current phase | Phase 21: Admin/query API |
 | Verification command | `cargo test -p matching-core` |
 
 The project has completed the single-process matching core path:
@@ -25,7 +25,7 @@ Journal Adapter input reader
   -> Journal output adapter contract
 ```
 
-The next major shift is input intake: adding Confirmed Input Consumer so the service can read confirmed input through Journal Adapter and hand it off to Symbol Routing / Bounded Handoff without treating the adapter as Journal ownership.
+The next major shift is the service-facing query boundary: exposing safe runtime state queries without letting API reads mutate deterministic matching state.
 
 ## Phase Roadmap
 
@@ -51,8 +51,8 @@ The next major shift is input intake: adding Confirmed Input Consumer so the ser
 | 17 | Completed | Bounded handoff | Full queue, ordered consumption, and watermarks |
 | 18 | Completed | Runtime loop worker | Journal reader and runtime separation shape |
 | 19 | Completed | Output isolation | Runtime can enqueue output requests before commit confirmation |
-| 20 | In progress | Confirmed input consumer | Read confirmed input through Journal Adapter and route to symbol handoffs |
-| 21 | Planned | Admin/query API | Cursor, checksum, and depth queries |
+| 20 | Completed | Confirmed input consumer | Read confirmed input through Journal Adapter and route to symbol handoffs |
+| 21 | In progress | Admin/query API | Cursor, checksum, and depth queries |
 | 22 | Planned | Observability | Tracing and metrics visibility |
 | 23 | Planned | Benchmarks | Single-symbol and multi-symbol baselines |
 | 24 | Planned | Order book data structure evolution | Benchmark comparison |
@@ -83,18 +83,17 @@ The next major shift is input intake: adding Confirmed Input Consumer so the ser
 | Runtime loop | Completed for current stage | `runtime_loop.rs` |
 | Output queue | Completed | `output_queue.rs` |
 | Output commit boundary | Completed for current stage | `output_committer.rs`, `output_commit_loop.rs` |
-| Confirmed input consumer | In progress | `confirmed_input_consumer.rs` |
+| Confirmed input consumer | Completed for current stage | `confirmed_input_consumer.rs`; bounded batch read, gap detection, and backpressure-safe enqueue |
 | Service/API boundary | Planned | `matching-service` placeholder |
 | Benchmarks | Planned | `matching-bench` placeholder |
 
-## Current Phase: Confirmed Input Consumer
+## Current Phase: Admin/query API
 
-The current phase uses the existing Journal Adapter contracts while adding the component that consumes confirmed input for Matching Service. It must preserve these semantics:
+The current phase starts the service-facing query boundary. It should expose read-only state needed by operators and service code without changing matching state.
 
-- read only confirmed input through `JournalInputReader`;
-- route entries through `SymbolRouting`;
-- enqueue routed entries into `BoundedHandoff`;
-- stop on unknown symbols or handoff backpressure;
-- keep the read cursor separate from execution safe points.
+Initial scope:
 
-The first implementation is intentionally small: one `poll_once` step that reads from a starting sequence, routes available entries, and advances only its local next-read cursor after successful enqueue.
+- query registered symbols;
+- query per-symbol runtime safe point / last committed input sequence;
+- query per-symbol checksum;
+- keep query APIs read-only and deterministic.
