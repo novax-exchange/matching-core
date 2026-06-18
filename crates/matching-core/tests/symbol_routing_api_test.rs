@@ -1,10 +1,10 @@
+use matching_core::bounded_handoff::BoundedHandoff;
 use matching_core::journal::InputJournalEntry;
 use matching_core::order::{Command, Order};
-use matching_core::symbol_router::{SymbolRouter, SymbolRouterError};
+use matching_core::symbol_routing::{SymbolRouting, SymbolRoutingError};
 use matching_core::types::{
     CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol,
 };
-use matching_core::input_queue::PerSymbolInputQueue;
 use std::collections::HashMap;
 
 fn command_entry(seq: u64, symbol: Symbol) -> InputJournalEntry {
@@ -22,9 +22,9 @@ fn command_entry(seq: u64, symbol: Symbol) -> InputJournalEntry {
 }
 
 #[test]
-fn symbol_router_is_available_from_public_api() {
+fn symbol_routing_is_available_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut router = SymbolRouter::new();
+    let mut router = SymbolRouting::new();
 
     router.add_symbol(btc.clone());
 
@@ -35,27 +35,27 @@ fn symbol_router_is_available_from_public_api() {
 }
 
 #[test]
-fn symbol_router_error_is_available_from_public_api() {
+fn symbol_routing_error_is_available_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut router = SymbolRouter::new();
+    let mut router = SymbolRouting::new();
 
     router.add_symbol(btc);
 
     assert_eq!(
         router.route_entry(command_entry(1, eth)),
-        Err(SymbolRouterError::UnknownSymbol)
+        Err(SymbolRoutingError::UnknownSymbol)
     );
 }
 
 #[test]
-fn symbol_router_can_enqueue_to_public_input_queue_api() {
+fn symbol_routing_can_enqueue_to_public_bounded_handoff_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut router = SymbolRouter::new();
+    let mut router = SymbolRouting::new();
     router.add_symbol(btc.clone());
 
     let mut queues = HashMap::new();
-    queues.insert(btc.clone(), PerSymbolInputQueue::new(1));
+    queues.insert(btc.clone(), BoundedHandoff::new(1));
 
     assert_eq!(
         router.route_entry_to_queue(command_entry(1, btc.clone()), &mut queues),
@@ -64,6 +64,6 @@ fn symbol_router_can_enqueue_to_public_input_queue_api() {
 
     assert_eq!(
         router.route_entry_to_queue(command_entry(2, btc.clone()), &mut queues),
-        Err(SymbolRouterError::QueueFull)
+        Err(SymbolRoutingError::QueueFull)
     );
 }

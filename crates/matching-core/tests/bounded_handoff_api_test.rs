@@ -1,4 +1,4 @@
-use matching_core::input_queue::{InputQueueError, PerSymbolInputQueue};
+use matching_core::bounded_handoff::{BoundedHandoff, BoundedHandoffError};
 use matching_core::journal::InputJournalEntry;
 use matching_core::order::{Command, Order};
 use matching_core::types::{
@@ -20,13 +20,13 @@ fn command_entry(seq: u64) -> InputJournalEntry {
 }
 
 #[test]
-fn input_queue_is_available_from_public_api() {
-    let mut queue = PerSymbolInputQueue::new(2);
+fn bounded_handoff_is_available_from_public_api() {
+    let mut queue = BoundedHandoff::new(2);
 
     assert_eq!(queue.capacity(), 2);
     assert_eq!(queue.enqueue(command_entry(1)), Ok(()));
     assert_eq!(queue.enqueue(command_entry(2)), Ok(()));
-    assert_eq!(queue.enqueue(command_entry(3)), Err(InputQueueError::QueueFull));
+    assert_eq!(queue.enqueue(command_entry(3)), Err(BoundedHandoffError::QueueFull));
 
     let entries = queue.drain_batch(10);
 
@@ -36,8 +36,8 @@ fn input_queue_is_available_from_public_api() {
 }
 
 #[test]
-fn input_queue_can_prepend_entries_from_public_api() {
-    let mut queue = PerSymbolInputQueue::new(4);
+fn bounded_handoff_can_prepend_entries_from_public_api() {
+    let mut queue = BoundedHandoff::new(4);
 
     assert_eq!(queue.enqueue(command_entry(3)), Ok(()));
 

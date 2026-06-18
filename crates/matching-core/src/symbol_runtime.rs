@@ -3,6 +3,8 @@ use crate::command_ingress::{CommandIngress, IngressError};
 use crate::journal::{InputJournalEntry, OutputJournal, OutputJournalError};
 use crate::order::Command;
 use crate::order_book::OrderBook;
+use crate::output_committer::OutputCommitRequest;
+use crate::output_queue::{OutputQueue, OutputQueueError};
 use crate::types::{JournalSeq, Symbol, TradeId};
 
 
@@ -35,6 +37,10 @@ impl SymbolRuntime {
         self.last_input_seq
     }
 
+    pub fn mark_output_committed(&mut self, journal_seq: JournalSeq) {
+        self.last_input_seq = Some(journal_seq);
+    }
+
     pub fn process_batch(
         &mut self,
         entries: Vec<InputJournalEntry>,
@@ -55,6 +61,42 @@ impl SymbolRuntime {
         entry: InputJournalEntry,
         output: &mut dyn OutputJournal,
     ) -> Result<(), OutputJournalError> {
+        let order_book_before = self.order_book.clone();
+        let next_trade_id_before = self.next_trade_id;
+        let request = self.process_entry_to_output_request(entry);
+
+        if let Err(error) = output.append(request.command_id, request.journal_seq, request.events) {
+            self.order_book = order_book_before;
+            self.next_trade_id = next_trade_id_before;
+            return Err(error);
+        }
+
+        self.last_input_seq = Some(request.journal_seq);
+        Ok(())
+    }
+
+    pub fn process_entry_into_output_queue(
+        &mut self,
+        entry: InputJournalEntry,
+        output_queue: &mut OutputQueue,
+    ) -> Result<(), OutputQueueError> {
+        let order_book_before = self.order_book.clone();
+        let next_trade_id_before = self.next_trade_id;
+        let request = self.process_entry_to_output_request(entry);
+
+        if let Err(error) = output_queue.enqueue(request) {
+            self.order_book = order_book_before;
+            self.next_trade_id = next_trade_id_before;
+            return Err(error);
+        }
+
+        Ok(())
+    }
+
+    pub fn process_entry_to_output_request(
+        &mut self,
+        entry: InputJournalEntry,
+    ) -> OutputCommitRequest {
         let command = match self.ingress.validate(entry.command) {
             Ok(command) => command, 
             Err(error) => {
@@ -65,16 +107,16 @@ impl SymbolRuntime {
                     reason: reject_reason_from_ingress_error(error),
                 })];
 
-                output.append(entry.command_id, entry.seq, events)?;
-                self.last_input_seq = Some(entry.seq);
-                return Ok(());
+                return OutputCommitRequest {
+                    command_id: entry.command_id,
+                    journal_seq: entry.seq,
+                    events,
+                };
             }
         };
         match command {
             Command::PlaceLimit(order) => {
                 let order_id = order.order_id;
-                let order_book_before = self.order_book.clone();
-                let nex_trade_id_before = self.next_trade_id;
 
                 let result = self.order_book.place_limit(order);
 
@@ -100,18 +142,13 @@ impl SymbolRuntime {
                     }));
                 }
 
-                if let Err(error) = output.append(entry.command_id, entry.seq, events) {
-                    self.order_book = order_book_before;
-                    self.next_trade_id = nex_trade_id_before;
-                    return Err(error);
+                OutputCommitRequest {
+                    command_id: entry.command_id,
+                    journal_seq: entry.seq,
+                    events,
                 }
-
-                self.last_input_seq = Some(entry.seq);
-                Ok(())
             },
             Command::Cancel { order_id, .. } => {
-                let order_book_before = self.order_book.clone();
-
                 let events = match self.order_book.cancel(order_id) {
                     Ok(_) => vec![EngineEvent::OrderAck(OrderAck::Cancelled { 
                         command_id: entry.command_id, 
@@ -126,13 +163,11 @@ impl SymbolRuntime {
                     })],
                 };
 
-                if let Err(error) = output.append(entry.command_id, entry.seq, events) {
-                    self.order_book = order_book_before;
-                    return Err(error);
+                OutputCommitRequest {
+                    command_id: entry.command_id,
+                    journal_seq: entry.seq,
+                    events,
                 }
-
-                self.last_input_seq = Some(entry.seq);
-                Ok(())
             }
         }
     }
@@ -146,6 +181,7 @@ mod tests {
     };
     use crate::engine::{EngineEvent, OrderAck, TradeEvent};
     use crate::order::{Command, Order};
+    use crate::output_queue::{OutputQueue, OutputQueueError};
     use crate::types::{
         CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol,
     };
@@ -222,6 +258,69 @@ mod tests {
                 journal_seq: JournalSeq(1),
             })]
         );
+    }
+
+    #[test]
+    fn process_entry_to_output_request_does_not_advance_last_input_seq_before_commit() {
+        let mut runtime = SymbolRuntime::new(symbol());
+
+        let request = runtime.process_entry_to_output_request(input_entry(1, 10, 100));
+
+        assert_eq!(request.command_id, CommandId(10));
+        assert_eq!(request.journal_seq, JournalSeq(1));
+        assert_eq!(
+            request.events,
+            vec![EngineEvent::OrderAck(OrderAck::Accepted {
+                command_id: CommandId(10),
+                order_id: OrderId(100),
+                journal_seq: JournalSeq(1),
+            })]
+        );
+        assert_eq!(runtime.last_input_seq(), None);
+    }
+
+    #[test]
+    fn mark_output_committed_advances_last_input_seq_after_request_is_committed() {
+        let mut runtime = SymbolRuntime::new(symbol());
+
+        let request = runtime.process_entry_to_output_request(input_entry(1, 10, 100));
+        assert_eq!(runtime.last_input_seq(), None);
+
+        runtime.mark_output_committed(request.journal_seq);
+
+        assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
+    }
+
+    #[test]
+    fn output_queue_full_rolls_back_runtime_state_before_retry() {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let mut full_queue = OutputQueue::new(0);
+
+        assert_eq!(
+            runtime.process_entry_into_output_queue(input_entry(1, 10, 100), &mut full_queue),
+            Err(OutputQueueError::QueueFull)
+        );
+        assert_eq!(runtime.last_input_seq(), None);
+
+        let mut retry_queue = OutputQueue::new(1);
+
+        assert_eq!(
+            runtime.process_entry_into_output_queue(input_entry(1, 10, 100), &mut retry_queue),
+            Ok(())
+        );
+
+        let requests = retry_queue.drain_batch(10);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].journal_seq, JournalSeq(1));
+        assert_eq!(
+            requests[0].events,
+            vec![EngineEvent::OrderAck(OrderAck::Accepted {
+                command_id: CommandId(10),
+                order_id: OrderId(100),
+                journal_seq: JournalSeq(1),
+            })]
+        );
+        assert_eq!(runtime.last_input_seq(), None);
     }
 
     struct FailingOutputJournal;
@@ -767,74 +866,74 @@ mod tests {
     }
 
     #[test]
-fn failed_batch_trade_entry_can_be_retried_with_same_trade_id() {
-    let mut runtime = SymbolRuntime::new(symbol());
+    fn failed_batch_trade_entry_can_be_retried_with_same_trade_id() {
+        let mut runtime = SymbolRuntime::new(symbol());
 
-    let resting_sell = InputJournalEntry {
-        seq: JournalSeq(1),
-        command_id: CommandId(10),
-        command: Command::PlaceLimit(Order {
-            order_id: OrderId(100),
-            symbol: symbol(),
-            side: Side::Sell,
-            price: Price(100),
-            quantity: Quantity(3),
-        }),
-    };
-
-    let crossing_buy = InputJournalEntry {
-        seq: JournalSeq(2),
-        command_id: CommandId(11),
-        command: Command::PlaceLimit(Order {
-            order_id: OrderId(101),
-            symbol: symbol(),
-            side: Side::Buy,
-            price: Price(100),
-            quantity: Quantity(3),
-        }),
-    };
-
-    let later_entry = input_entry(3, 12, 102);
-
-    let mut output = FailOnSecondAppendOutputJournal::new();
-    assert_eq!(
-        runtime.process_batch(
-            vec![resting_sell, crossing_buy.clone(), later_entry],
-            &mut output
-        ),
-        Err(OutputJournalError::AppendFailed)
-    );
-
-    assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
-
-    let output_entries = output.read_all();
-    assert_eq!(output_entries.len(), 1);
-    assert_eq!(output_entries[0].journal_seq, JournalSeq(1));
-
-    let mut retry_output = InMemoryOutputJournal::new();
-    assert_eq!(runtime.process_entry(crossing_buy, &mut retry_output), Ok(()));
-    assert_eq!(runtime.last_input_seq(), Some(JournalSeq(2)));
-
-    let retry_entries = retry_output.read_all();
-    assert_eq!(retry_entries.len(), 1);
-    assert_eq!(
-        retry_entries[0].events,
-        vec![
-            EngineEvent::OrderAck(OrderAck::Accepted {
-                command_id: CommandId(11),
-                order_id: OrderId(101),
-                journal_seq: JournalSeq(2),
-            }),
-            EngineEvent::Trade(TradeEvent {
-                trade_id: TradeId(1),
-                command_id: CommandId(11),
-                journal_seq: JournalSeq(2),
-                maker_order_id: OrderId(100),
-                taker_order_id: OrderId(101),
+        let resting_sell = InputJournalEntry {
+            seq: JournalSeq(1),
+            command_id: CommandId(10),
+            command: Command::PlaceLimit(Order {
+                order_id: OrderId(100),
+                symbol: symbol(),
+                side: Side::Sell,
                 price: Price(100),
                 quantity: Quantity(3),
             }),
-        ]
-    );
-}
+        };
+
+        let crossing_buy = InputJournalEntry {
+            seq: JournalSeq(2),
+            command_id: CommandId(11),
+            command: Command::PlaceLimit(Order {
+                order_id: OrderId(101),
+                symbol: symbol(),
+                side: Side::Buy,
+                price: Price(100),
+                quantity: Quantity(3),
+            }),
+        };
+
+        let later_entry = input_entry(3, 12, 102);
+
+        let mut output = FailOnSecondAppendOutputJournal::new();
+        assert_eq!(
+            runtime.process_batch(
+                vec![resting_sell, crossing_buy.clone(), later_entry],
+                &mut output
+            ),
+            Err(OutputJournalError::AppendFailed)
+        );
+
+        assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
+
+        let output_entries = output.read_all();
+        assert_eq!(output_entries.len(), 1);
+        assert_eq!(output_entries[0].journal_seq, JournalSeq(1));
+
+        let mut retry_output = InMemoryOutputJournal::new();
+        assert_eq!(runtime.process_entry(crossing_buy, &mut retry_output), Ok(()));
+        assert_eq!(runtime.last_input_seq(), Some(JournalSeq(2)));
+
+        let retry_entries = retry_output.read_all();
+        assert_eq!(retry_entries.len(), 1);
+        assert_eq!(
+            retry_entries[0].events,
+            vec![
+                EngineEvent::OrderAck(OrderAck::Accepted {
+                    command_id: CommandId(11),
+                    order_id: OrderId(101),
+                    journal_seq: JournalSeq(2),
+                }),
+                EngineEvent::Trade(TradeEvent {
+                    trade_id: TradeId(1),
+                    command_id: CommandId(11),
+                    journal_seq: JournalSeq(2),
+                    maker_order_id: OrderId(100),
+                    taker_order_id: OrderId(101),
+                    price: Price(100),
+                    quantity: Quantity(3),
+                }),
+            ]
+        );
+    }
 }

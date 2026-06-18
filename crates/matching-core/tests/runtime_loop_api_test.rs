@@ -1,10 +1,13 @@
 use matching_core::engine::EngineEvent;
-use matching_core::input_queue::PerSymbolInputQueue;
+use matching_core::bounded_handoff::BoundedHandoff;
 use matching_core::journal::{
     InputJournalEntry, OutputJournal, OutputJournalEntry, OutputJournalError,
 };
 use matching_core::order::{Command, Order};
-use matching_core::runtime_loop::{run_symbol_runtime_step, spawn_symbol_runtime_once};
+use matching_core::output_queue::OutputQueue;
+use matching_core::runtime_loop::{
+    run_symbol_runtime_step, run_symbol_runtime_step_to_output_queue, spawn_symbol_runtime_once,
+};
 use matching_core::symbol_runtime::SymbolRuntime;
 use matching_core::types::{
     CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol,
@@ -63,7 +66,7 @@ fn command_entry(seq: u64) -> InputJournalEntry {
 
 #[test]
 fn runtime_loop_step_is_available_from_public_api() {
-    let mut queue = PerSymbolInputQueue::new(4);
+    let mut queue = BoundedHandoff::new(4);
     let mut runtime = SymbolRuntime::new(symbol());
     let mut output = TestOutputJournal::new();
 
@@ -81,8 +84,36 @@ fn runtime_loop_step_is_available_from_public_api() {
 }
 
 #[test]
+fn runtime_loop_step_to_output_queue_is_available_from_public_api() {
+    let mut input_queue = BoundedHandoff::new(4);
+    let mut output_queue = OutputQueue::new(4);
+    let mut runtime = SymbolRuntime::new(symbol());
+
+    assert_eq!(input_queue.enqueue(command_entry(1)), Ok(()));
+    assert_eq!(input_queue.enqueue(command_entry(2)), Ok(()));
+
+    assert_eq!(
+        run_symbol_runtime_step_to_output_queue(
+            &mut runtime,
+            &mut input_queue,
+            &mut output_queue,
+            10,
+        ),
+        Ok(2)
+    );
+
+    assert_eq!(runtime.last_input_seq(), None);
+    assert_eq!(input_queue.len(), 0);
+
+    let requests = output_queue.drain_batch(10);
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].journal_seq, JournalSeq(1));
+    assert_eq!(requests[1].journal_seq, JournalSeq(2));
+}
+
+#[test]
 fn one_shot_symbol_runtime_worker_is_available_from_public_api() {
-    let mut queue = PerSymbolInputQueue::new(4);
+    let mut queue = BoundedHandoff::new(4);
     let runtime = SymbolRuntime::new(symbol());
     let output = TestOutputJournal::new();
 

@@ -1,16 +1,21 @@
-use crate::{input_queue::PerSymbolInputQueue, journal::{OutputJournal, OutputJournalError}, symbol_runtime::SymbolRuntime};
+use crate::{
+    bounded_handoff::BoundedHandoff,
+    journal::{OutputJournal, OutputJournalError},
+    output_queue::{OutputQueue, OutputQueueError},
+    symbol_runtime::SymbolRuntime,
+};
 use std::thread::{self, JoinHandle};
 
 pub type SymbolRuntimeWorkerResult<O> = (
     SymbolRuntime,
-    PerSymbolInputQueue,
+    BoundedHandoff,
     O,
     Result<usize, OutputJournalError>,
 );
 
 pub fn spawn_symbol_runtime_once<O>(
     mut runtime: SymbolRuntime,
-    mut queue: PerSymbolInputQueue,
+    mut queue: BoundedHandoff,
     mut output: O,
     max_entries: usize,
 ) -> JoinHandle<SymbolRuntimeWorkerResult<O>>
@@ -31,7 +36,7 @@ where
 
 pub fn run_symbol_runtime_step(
     runtime: &mut SymbolRuntime,
-    queue: &mut PerSymbolInputQueue,
+    queue: &mut BoundedHandoff,
     output: &mut dyn OutputJournal,
     max_entries: usize,
 ) -> Result<usize, OutputJournalError> {
@@ -54,13 +59,39 @@ pub fn run_symbol_runtime_step(
     Ok(processed)
 }
 
+pub fn run_symbol_runtime_step_to_output_queue(
+    runtime: &mut SymbolRuntime,
+    input_queue: &mut BoundedHandoff,
+    output_queue: &mut OutputQueue,
+    max_entries: usize,
+) -> Result<usize, OutputQueueError> {
+    let entries = input_queue.drain_batch(max_entries);
+    let mut remaining = entries.into_iter();
+    let mut processed = 0;
+
+    while let Some(entry) = remaining.next() {
+        match runtime.process_entry_into_output_queue(entry.clone(), output_queue) {
+            Ok(()) => processed += 1,
+            Err(error) => {
+                let mut to_prepend = vec![entry];
+                to_prepend.extend(remaining);
+                input_queue.prepend_entries(to_prepend);
+                return Err(error);
+            }
+        }
+    }
+
+    Ok(processed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::engine::{EngineEvent, OrderAck};
-    use crate::input_queue::PerSymbolInputQueue;
+    use crate::bounded_handoff::BoundedHandoff;
     use crate::journal::{InputJournalEntry, OutputJournal, OutputJournalEntry, OutputJournalError};
     use crate::order::{Command, Order};
+    use crate::output_queue::{OutputQueue, OutputQueueError};
     use crate::symbol_runtime::SymbolRuntime;
     use crate::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
@@ -114,7 +145,7 @@ mod tests {
 
     #[test]
     fn runtime_loop_step_drains_queue_and_processes_entries() {
-        let mut queue = PerSymbolInputQueue::new(4);
+        let mut queue = BoundedHandoff::new(4);
         let mut runtime = SymbolRuntime::new(symbol());
         let mut output = InMemoryOutputJournal::new();
 
@@ -187,7 +218,7 @@ mod tests {
 
     #[test]
     fn runtime_loop_step_keeps_unprocessed_entries_when_batch_fails() {
-        let mut queue = PerSymbolInputQueue::new(4);
+        let mut queue = BoundedHandoff::new(4);
         let mut runtime = SymbolRuntime::new(symbol());
         let mut output = FailOnSecondAppendOutputJournal::new();
 
@@ -213,7 +244,7 @@ mod tests {
 
     #[test]
     fn symbol_runtime_worker_thread_processes_one_batch_and_returns_state() {
-        let mut queue = PerSymbolInputQueue::new(4);
+        let mut queue = BoundedHandoff::new(4);
         let runtime = SymbolRuntime::new(symbol());
         let output = InMemoryOutputJournal::new();
 
@@ -230,5 +261,61 @@ mod tests {
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(2)));
         assert_eq!(queue.len(), 0);
         assert_eq!(output.read_all().len(), 2);
+    }
+
+    #[test]
+    fn runtime_loop_step_can_enqueue_output_requests_without_advancing_safe_point() {
+        let mut input_queue = BoundedHandoff::new(4);
+        let mut output_queue = OutputQueue::new(4);
+        let mut runtime = SymbolRuntime::new(symbol());
+
+        assert_eq!(input_queue.enqueue(input_entry(1, 10, 100)), Ok(()));
+        assert_eq!(input_queue.enqueue(input_entry(2, 11, 101)), Ok(()));
+
+        let processed = run_symbol_runtime_step_to_output_queue(
+            &mut runtime,
+            &mut input_queue,
+            &mut output_queue,
+            10,
+        );
+
+        assert_eq!(processed, Ok(2));
+        assert_eq!(input_queue.len(), 0);
+        assert_eq!(runtime.last_input_seq(), None);
+
+        let requests = output_queue.drain_batch(10);
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].journal_seq, JournalSeq(1));
+        assert_eq!(requests[1].journal_seq, JournalSeq(2));
+    }
+
+    #[test]
+    fn runtime_loop_step_requeues_unprocessed_input_when_output_queue_is_full() {
+        let mut input_queue = BoundedHandoff::new(4);
+        let mut output_queue = OutputQueue::new(1);
+        let mut runtime = SymbolRuntime::new(symbol());
+
+        assert_eq!(input_queue.enqueue(input_entry(1, 10, 100)), Ok(()));
+        assert_eq!(input_queue.enqueue(input_entry(2, 11, 101)), Ok(()));
+        assert_eq!(input_queue.enqueue(input_entry(3, 12, 102)), Ok(()));
+
+        let result = run_symbol_runtime_step_to_output_queue(
+            &mut runtime,
+            &mut input_queue,
+            &mut output_queue,
+            10,
+        );
+
+        assert_eq!(result, Err(OutputQueueError::QueueFull));
+        assert_eq!(runtime.last_input_seq(), None);
+
+        let output_requests = output_queue.drain_batch(10);
+        assert_eq!(output_requests.len(), 1);
+        assert_eq!(output_requests[0].journal_seq, JournalSeq(1));
+
+        let remaining_inputs = input_queue.drain_batch(10);
+        assert_eq!(remaining_inputs.len(), 2);
+        assert_eq!(remaining_inputs[0].seq, JournalSeq(2));
+        assert_eq!(remaining_inputs[1].seq, JournalSeq(3));
     }
 }
