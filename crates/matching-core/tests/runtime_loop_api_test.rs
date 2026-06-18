@@ -1,7 +1,7 @@
-use matching_core::engine::EngineEvent;
 use matching_core::bounded_handoff::BoundedHandoff;
-use matching_core::journal::{
-    InputJournalEntry, OutputJournal, OutputJournalEntry, OutputJournalError,
+use matching_core::engine::EngineEvent;
+use matching_core::journal_adapter::{
+    JournalAdapterError, JournalInputEntry, JournalOutputAppender, JournalOutputEntry,
 };
 use matching_core::order::{Command, Order};
 use matching_core::output_queue::OutputQueue;
@@ -9,15 +9,13 @@ use matching_core::runtime_loop::{
     run_symbol_runtime_step, run_symbol_runtime_step_to_output_queue, spawn_symbol_runtime_once,
 };
 use matching_core::symbol_runtime::SymbolRuntime;
-use matching_core::types::{
-    CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol,
-};
+use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
-struct TestOutputJournal {
-    entries: Vec<OutputJournalEntry>,
+struct TestJournalOutputAppender {
+    entries: Vec<JournalOutputEntry>,
 }
 
-impl TestOutputJournal {
+impl TestJournalOutputAppender {
     fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -25,14 +23,14 @@ impl TestOutputJournal {
     }
 }
 
-impl OutputJournal for TestOutputJournal {
+impl JournalOutputAppender for TestJournalOutputAppender {
     fn append(
         &mut self,
         command_id: CommandId,
         journal_seq: JournalSeq,
         events: Vec<EngineEvent>,
-    ) -> Result<(), OutputJournalError> {
-        self.entries.push(OutputJournalEntry {
+    ) -> Result<(), JournalAdapterError> {
+        self.entries.push(JournalOutputEntry {
             command_id,
             journal_seq,
             events,
@@ -41,7 +39,7 @@ impl OutputJournal for TestOutputJournal {
         Ok(())
     }
 
-    fn read_all(&self) -> Vec<OutputJournalEntry> {
+    fn read_all(&self) -> Vec<JournalOutputEntry> {
         self.entries.clone()
     }
 }
@@ -50,8 +48,8 @@ fn symbol() -> Symbol {
     Symbol("BTC-USDT".to_string())
 }
 
-fn command_entry(seq: u64) -> InputJournalEntry {
-    InputJournalEntry {
+fn command_entry(seq: u64) -> JournalInputEntry {
+    JournalInputEntry {
         seq: JournalSeq(seq),
         command_id: CommandId(seq),
         command: Command::PlaceLimit(Order {
@@ -68,7 +66,7 @@ fn command_entry(seq: u64) -> InputJournalEntry {
 fn runtime_loop_step_is_available_from_public_api() {
     let mut queue = BoundedHandoff::new(4);
     let mut runtime = SymbolRuntime::new(symbol());
-    let mut output = TestOutputJournal::new();
+    let mut output = TestJournalOutputAppender::new();
 
     assert_eq!(queue.enqueue(command_entry(1)), Ok(()));
     assert_eq!(queue.enqueue(command_entry(2)), Ok(()));
@@ -93,12 +91,7 @@ fn runtime_loop_step_to_output_queue_is_available_from_public_api() {
     assert_eq!(handoff.enqueue(command_entry(2)), Ok(()));
 
     assert_eq!(
-        run_symbol_runtime_step_to_output_queue(
-            &mut runtime,
-            &mut handoff,
-            &mut output_queue,
-            10,
-        ),
+        run_symbol_runtime_step_to_output_queue(&mut runtime, &mut handoff, &mut output_queue, 10,),
         Ok(2)
     );
 
@@ -115,7 +108,7 @@ fn runtime_loop_step_to_output_queue_is_available_from_public_api() {
 fn one_shot_symbol_runtime_worker_is_available_from_public_api() {
     let mut queue = BoundedHandoff::new(4);
     let runtime = SymbolRuntime::new(symbol());
-    let output = TestOutputJournal::new();
+    let output = TestJournalOutputAppender::new();
 
     assert_eq!(queue.enqueue(command_entry(1)), Ok(()));
     assert_eq!(queue.enqueue(command_entry(2)), Ok(()));

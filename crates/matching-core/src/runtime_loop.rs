@@ -1,6 +1,6 @@
 use crate::{
     bounded_handoff::BoundedHandoff,
-    journal::{OutputJournal, OutputJournalError},
+    journal_adapter::{JournalAdapterError, JournalOutputAppender},
     output_queue::{OutputQueue, OutputQueueError},
     symbol_runtime::SymbolRuntime,
 };
@@ -10,7 +10,7 @@ pub type SymbolRuntimeWorkerResult<O> = (
     SymbolRuntime,
     BoundedHandoff,
     O,
-    Result<usize, OutputJournalError>,
+    Result<usize, JournalAdapterError>,
 );
 
 pub fn spawn_symbol_runtime_once<O>(
@@ -20,15 +20,10 @@ pub fn spawn_symbol_runtime_once<O>(
     max_entries: usize,
 ) -> JoinHandle<SymbolRuntimeWorkerResult<O>>
 where
-    O: OutputJournal + Send + 'static,
+    O: JournalOutputAppender + Send + 'static,
 {
     thread::spawn(move || {
-        let result = run_symbol_runtime_step(
-            &mut runtime, 
-            &mut queue,
-            &mut output, 
-            max_entries,
-        );
+        let result = run_symbol_runtime_step(&mut runtime, &mut queue, &mut output, max_entries);
 
         (runtime, queue, output, result)
     })
@@ -37,10 +32,10 @@ where
 pub fn run_symbol_runtime_step(
     runtime: &mut SymbolRuntime,
     queue: &mut BoundedHandoff,
-    output: &mut dyn OutputJournal,
+    output: &mut dyn JournalOutputAppender,
     max_entries: usize,
-) -> Result<usize, OutputJournalError> {
-    let entries = queue.drain_batch(max_entries); 
+) -> Result<usize, JournalAdapterError> {
+    let entries = queue.drain_batch(max_entries);
     let mut remaining = entries.into_iter();
     let mut processed = 0;
 
@@ -87,32 +82,36 @@ pub fn run_symbol_runtime_step_to_output_queue(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{EngineEvent, OrderAck};
     use crate::bounded_handoff::BoundedHandoff;
-    use crate::journal::{InputJournalEntry, OutputJournal, OutputJournalEntry, OutputJournalError};
+    use crate::engine::{EngineEvent, OrderAck};
+    use crate::journal_adapter::{
+        JournalAdapterError, JournalInputEntry, JournalOutputAppender, JournalOutputEntry,
+    };
     use crate::order::{Command, Order};
     use crate::output_queue::{OutputQueue, OutputQueueError};
     use crate::symbol_runtime::SymbolRuntime;
     use crate::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
-    struct InMemoryOutputJournal {
-        entries: Vec<OutputJournalEntry>,
+    struct InMemoryJournalOutputAppender {
+        entries: Vec<JournalOutputEntry>,
     }
 
-    impl InMemoryOutputJournal {
+    impl InMemoryJournalOutputAppender {
         fn new() -> Self {
-            Self { entries: Vec::new() }
+            Self {
+                entries: Vec::new(),
+            }
         }
     }
 
-    impl OutputJournal for InMemoryOutputJournal {
+    impl JournalOutputAppender for InMemoryJournalOutputAppender {
         fn append(
             &mut self,
             command_id: CommandId,
             journal_seq: JournalSeq,
             events: Vec<EngineEvent>,
-        ) -> Result<(), OutputJournalError> {
-            self.entries.push(OutputJournalEntry {
+        ) -> Result<(), JournalAdapterError> {
+            self.entries.push(JournalOutputEntry {
                 command_id,
                 journal_seq,
                 events,
@@ -120,7 +119,7 @@ mod tests {
             Ok(())
         }
 
-        fn read_all(&self) -> Vec<OutputJournalEntry> {
+        fn read_all(&self) -> Vec<JournalOutputEntry> {
             self.entries.clone()
         }
     }
@@ -129,8 +128,8 @@ mod tests {
         Symbol("BTC-USDT".to_string())
     }
 
-    fn input_entry(seq: u64, command_id: u64, order_id: u64) -> InputJournalEntry {
-        InputJournalEntry {
+    fn input_entry(seq: u64, command_id: u64, order_id: u64) -> JournalInputEntry {
+        JournalInputEntry {
             seq: JournalSeq(seq),
             command_id: CommandId(command_id),
             command: Command::PlaceLimit(Order {
@@ -147,17 +146,12 @@ mod tests {
     fn runtime_loop_step_drains_queue_and_processes_entries() {
         let mut queue = BoundedHandoff::new(4);
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut output = InMemoryOutputJournal::new();
+        let mut output = InMemoryJournalOutputAppender::new();
 
         assert_eq!(queue.enqueue(input_entry(1, 10, 100)), Ok(()));
         assert_eq!(queue.enqueue(input_entry(2, 11, 101)), Ok(()));
 
-        let processed = run_symbol_runtime_step(
-            &mut runtime,
-            &mut queue,
-            &mut output,
-            10,
-        );
+        let processed = run_symbol_runtime_step(&mut runtime, &mut queue, &mut output, 10);
 
         assert_eq!(processed, Ok(2));
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(2)));
@@ -175,12 +169,12 @@ mod tests {
         );
     }
 
-    struct FailOnSecondAppendOutputJournal {
-        entries: Vec<OutputJournalEntry>,
+    struct FailOnSecondAppendJournalOutputAppender {
+        entries: Vec<JournalOutputEntry>,
         append_count: usize,
     }
-    
-    impl FailOnSecondAppendOutputJournal {
+
+    impl FailOnSecondAppendJournalOutputAppender {
         fn new() -> Self {
             Self {
                 entries: Vec::new(),
@@ -188,30 +182,30 @@ mod tests {
             }
         }
     }
-    
-    impl OutputJournal for FailOnSecondAppendOutputJournal {
+
+    impl JournalOutputAppender for FailOnSecondAppendJournalOutputAppender {
         fn append(
             &mut self,
             command_id: CommandId,
             journal_seq: JournalSeq,
             events: Vec<EngineEvent>,
-        ) -> Result<(), OutputJournalError> {
+        ) -> Result<(), JournalAdapterError> {
             self.append_count += 1;
-    
+
             if self.append_count == 2 {
-                return Err(OutputJournalError::AppendFailed);
+                return Err(JournalAdapterError::AppendFailed);
             }
-    
-            self.entries.push(OutputJournalEntry {
+
+            self.entries.push(JournalOutputEntry {
                 command_id,
                 journal_seq,
                 events,
             });
-    
+
             Ok(())
         }
-    
-        fn read_all(&self) -> Vec<OutputJournalEntry> {
+
+        fn read_all(&self) -> Vec<JournalOutputEntry> {
             self.entries.clone()
         }
     }
@@ -220,20 +214,15 @@ mod tests {
     fn runtime_loop_step_keeps_unprocessed_entries_when_batch_fails() {
         let mut queue = BoundedHandoff::new(4);
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut output = FailOnSecondAppendOutputJournal::new();
+        let mut output = FailOnSecondAppendJournalOutputAppender::new();
 
         assert_eq!(queue.enqueue(input_entry(1, 10, 100)), Ok(()));
         assert_eq!(queue.enqueue(input_entry(2, 11, 101)), Ok(()));
         assert_eq!(queue.enqueue(input_entry(3, 12, 102)), Ok(()));
 
-        let result = run_symbol_runtime_step(
-            &mut runtime,
-            &mut queue,
-            &mut output,
-            10,
-        );
+        let result = run_symbol_runtime_step(&mut runtime, &mut queue, &mut output, 10);
 
-        assert_eq!(result, Err(OutputJournalError::AppendFailed));
+        assert_eq!(result, Err(JournalAdapterError::AppendFailed));
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
 
         let remaining = queue.drain_batch(10);
@@ -246,7 +235,7 @@ mod tests {
     fn symbol_runtime_worker_thread_processes_one_batch_and_returns_state() {
         let mut queue = BoundedHandoff::new(4);
         let runtime = SymbolRuntime::new(symbol());
-        let output = InMemoryOutputJournal::new();
+        let output = InMemoryJournalOutputAppender::new();
 
         assert_eq!(queue.enqueue(input_entry(1, 10, 100)), Ok(()));
         assert_eq!(queue.enqueue(input_entry(2, 11, 101)), Ok(()));

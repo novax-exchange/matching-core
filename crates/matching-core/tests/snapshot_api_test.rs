@@ -1,4 +1,4 @@
-use matching_core::journal::{InputJournal, InputJournalEntry};
+use matching_core::journal_adapter::{JournalInputEntry, JournalInputReader};
 use matching_core::order::{Command, Order};
 use matching_core::order_book::OrderBook;
 use matching_core::replay::ReplayRunner;
@@ -27,11 +27,11 @@ fn snapshot_can_be_created_and_restored_from_public_api() {
     assert_eq!(restored.resting_orders(), snapshot.resting_orders);
 }
 
-struct TestInputJournal {
-    entries: Vec<InputJournalEntry>,
+struct TestJournalInputReader {
+    entries: Vec<JournalInputEntry>,
 }
 
-impl TestInputJournal {
+impl TestJournalInputReader {
     fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -39,11 +39,11 @@ impl TestInputJournal {
     }
 }
 
-impl InputJournal for TestInputJournal {
+impl JournalInputReader for TestJournalInputReader {
     fn append(&mut self, command_id: CommandId, command: Command) -> JournalSeq {
         let seq = JournalSeq(self.entries.len() as u64 + 1);
 
-        self.entries.push(InputJournalEntry {
+        self.entries.push(JournalInputEntry {
             seq,
             command_id,
             command,
@@ -52,7 +52,7 @@ impl InputJournal for TestInputJournal {
         seq
     }
 
-    fn read_from(&self, from: JournalSeq) -> Vec<InputJournalEntry> {
+    fn read_from(&self, from: JournalSeq) -> Vec<JournalInputEntry> {
         self.entries
             .iter()
             .filter(|entry| entry.seq >= from)
@@ -81,7 +81,7 @@ fn restored_snapshot_can_continue_replay_from_public_api() {
     let snapshot = OrderBookSnapshot::from_order_book(&snapshot_book, JournalSeq(1));
     let restored = snapshot.restore_order_book();
 
-    let mut journal = TestInputJournal::new();
+    let mut journal = TestJournalInputReader::new();
     journal.append(
         CommandId(1),
         Command::PlaceLimit(Order {

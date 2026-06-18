@@ -1,11 +1,13 @@
 use matching_core::engine::{EngineEvent, OrderAck};
-use matching_core::journal::{InputJournal, InputJournalEntry};
-use matching_core::journal::{OutputJournal, OutputJournalEntry, OutputJournalError};
+use matching_core::journal_adapter::{
+    JournalAdapterError, JournalOutputAppender, JournalOutputEntry,
+};
+use matching_core::journal_adapter::{JournalInputEntry, JournalInputReader};
 use matching_core::order::{Command, Order};
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
 struct TestJournal {
-    entries: Vec<InputJournalEntry>,
+    entries: Vec<JournalInputEntry>,
 }
 
 impl TestJournal {
@@ -16,11 +18,11 @@ impl TestJournal {
     }
 }
 
-impl InputJournal for TestJournal {
+impl JournalInputReader for TestJournal {
     fn append(&mut self, command_id: CommandId, command: Command) -> JournalSeq {
         let seq = JournalSeq(self.entries.len() as u64 + 1);
 
-        self.entries.push(InputJournalEntry {
+        self.entries.push(JournalInputEntry {
             seq,
             command_id,
             command,
@@ -29,7 +31,7 @@ impl InputJournal for TestJournal {
         seq
     }
 
-    fn read_from(&self, from: JournalSeq) -> Vec<InputJournalEntry> {
+    fn read_from(&self, from: JournalSeq) -> Vec<JournalInputEntry> {
         self.entries
             .iter()
             .filter(|entry| entry.seq >= from)
@@ -56,11 +58,11 @@ fn limit_command(order_id: u64) -> Command {
     })
 }
 
-struct TestOutputJournal {
-    entries: Vec<OutputJournalEntry>,
+struct TestJournalOutputAppender {
+    entries: Vec<JournalOutputEntry>,
 }
 
-impl TestOutputJournal {
+impl TestJournalOutputAppender {
     fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -68,14 +70,14 @@ impl TestOutputJournal {
     }
 }
 
-impl OutputJournal for TestOutputJournal {
+impl JournalOutputAppender for TestJournalOutputAppender {
     fn append(
         &mut self,
         command_id: CommandId,
         journal_seq: JournalSeq,
         events: Vec<EngineEvent>,
-    ) -> Result<(), OutputJournalError> {
-        self.entries.push(OutputJournalEntry {
+    ) -> Result<(), JournalAdapterError> {
+        self.entries.push(JournalOutputEntry {
             command_id,
             journal_seq,
             events,
@@ -84,13 +86,13 @@ impl OutputJournal for TestOutputJournal {
         Ok(())
     }
 
-    fn read_all(&self) -> Vec<OutputJournalEntry> {
+    fn read_all(&self) -> Vec<JournalOutputEntry> {
         self.entries.clone()
     }
 }
 
 #[test]
-fn input_journal_contract_is_available_from_public_api() {
+fn journal_input_reader_contract_is_available_from_public_api() {
     let mut journal = TestJournal::new();
 
     let seq = journal.append(CommandId(1), limit_command(1));
@@ -104,8 +106,8 @@ fn input_journal_contract_is_available_from_public_api() {
 }
 
 #[test]
-fn output_journal_contract_is_available_from_public_api() {
-    let mut journal = TestOutputJournal::new();
+fn journal_output_appender_contract_is_available_from_public_api() {
+    let mut journal = TestJournalOutputAppender::new();
 
     let events = vec![EngineEvent::OrderAck(OrderAck::Accepted {
         command_id: CommandId(1),

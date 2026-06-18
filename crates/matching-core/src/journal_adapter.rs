@@ -3,39 +3,39 @@ use crate::order::Command;
 use crate::types::{CommandId, JournalSeq};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InputJournalEntry {
+pub struct JournalInputEntry {
     pub seq: JournalSeq,
     pub command_id: CommandId,
     pub command: Command,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutputJournalEntry {
+pub struct JournalOutputEntry {
     pub command_id: CommandId,
     pub journal_seq: JournalSeq,
     pub events: Vec<EngineEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OutputJournalError {
+pub enum JournalAdapterError {
     AppendFailed,
 }
 
-pub trait InputJournal {
+pub trait JournalInputReader {
     fn append(&mut self, command_id: CommandId, command: Command) -> JournalSeq;
-    fn read_from(&self, from: JournalSeq) -> Vec<InputJournalEntry>;
+    fn read_from(&self, from: JournalSeq) -> Vec<JournalInputEntry>;
     fn latest_seq(&self) -> Option<JournalSeq>;
 }
 
-pub trait OutputJournal {
+pub trait JournalOutputAppender {
     fn append(
         &mut self,
         command_id: CommandId,
         journal_seq: JournalSeq,
         events: Vec<EngineEvent>,
-    ) -> Result<(), OutputJournalError>;
+    ) -> Result<(), JournalAdapterError>;
 
-    fn read_all(&self) -> Vec<OutputJournalEntry>;
+    fn read_all(&self) -> Vec<JournalOutputEntry>;
 }
 
 #[cfg(test)]
@@ -61,7 +61,7 @@ mod tests {
 
     #[test]
     fn append_assigns_increasing_sequence_and_read_from_returns_ordered_entries() {
-        let mut journal = InMemoryInputJournal::new();
+        let mut journal = InMemoryJournalInputReader::new();
 
         let first_seq = journal.append(CommandId(1), limit_command(1));
         let second_seq = journal.append(CommandId(2), limit_command(2));
@@ -82,11 +82,11 @@ mod tests {
         assert_eq!(from_second[0].command_id, CommandId(2));
     }
 
-    struct InMemoryInputJournal {
-        entries: Vec<InputJournalEntry>,
+    struct InMemoryJournalInputReader {
+        entries: Vec<JournalInputEntry>,
     }
 
-    impl InMemoryInputJournal {
+    impl InMemoryJournalInputReader {
         fn new() -> Self {
             Self {
                 entries: Vec::new(),
@@ -94,11 +94,11 @@ mod tests {
         }
     }
 
-    impl InputJournal for InMemoryInputJournal {
+    impl JournalInputReader for InMemoryJournalInputReader {
         fn append(&mut self, command_id: CommandId, command: Command) -> JournalSeq {
             let seq = JournalSeq(self.entries.len() as u64 + 1);
 
-            self.entries.push(InputJournalEntry {
+            self.entries.push(JournalInputEntry {
                 seq,
                 command_id,
                 command,
@@ -107,7 +107,7 @@ mod tests {
             seq
         }
 
-        fn read_from(&self, from: JournalSeq) -> Vec<InputJournalEntry> {
+        fn read_from(&self, from: JournalSeq) -> Vec<JournalInputEntry> {
             self.entries
                 .iter()
                 .filter(|entry| entry.seq >= from)
@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn read_from_future_sequence_returns_empty_entries() {
-        let mut journal = InMemoryInputJournal::new();
+        let mut journal = InMemoryJournalInputReader::new();
 
         journal.append(CommandId(1), limit_command(1));
 
@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn latest_seq_tracks_most_recent_appended_entry() {
-        let mut journal = InMemoryInputJournal::new();
+        let mut journal = InMemoryJournalInputReader::new();
 
         assert_eq!(journal.latest_seq(), None);
 
@@ -145,8 +145,8 @@ mod tests {
     }
 
     #[test]
-    fn output_journal_appends_and_reads_output_entries_in_order() {
-        let mut journal = InMemoryOutputJournal::new();
+    fn journal_output_appender_appends_and_reads_output_entries_in_order() {
+        let mut journal = InMemoryJournalOutputAppender::new();
 
         let first_events = vec![EngineEvent::OrderAck(OrderAck::Accepted {
             command_id: CommandId(1),
@@ -180,11 +180,11 @@ mod tests {
         assert_eq!(entries[1].events, second_events);
     }
 
-    struct InMemoryOutputJournal {
-        entries: Vec<OutputJournalEntry>,
+    struct InMemoryJournalOutputAppender {
+        entries: Vec<JournalOutputEntry>,
     }
 
-    impl InMemoryOutputJournal {
+    impl InMemoryJournalOutputAppender {
         fn new() -> Self {
             Self {
                 entries: Vec::new(),
@@ -192,14 +192,14 @@ mod tests {
         }
     }
 
-    impl OutputJournal for InMemoryOutputJournal {
+    impl JournalOutputAppender for InMemoryJournalOutputAppender {
         fn append(
             &mut self,
             command_id: CommandId,
             journal_seq: JournalSeq,
             events: Vec<EngineEvent>,
-        ) -> Result<(), OutputJournalError> {
-            self.entries.push(OutputJournalEntry {
+        ) -> Result<(), JournalAdapterError> {
+            self.entries.push(JournalOutputEntry {
                 command_id,
                 journal_seq,
                 events,
@@ -208,7 +208,7 @@ mod tests {
             Ok(())
         }
 
-        fn read_all(&self) -> Vec<OutputJournalEntry> {
+        fn read_all(&self) -> Vec<JournalOutputEntry> {
             self.entries.clone()
         }
     }

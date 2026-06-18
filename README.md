@@ -1,37 +1,36 @@
 # NovaX Matching Core
 
-English | [Simplified Chinese](README.zh-CN.md)
+NovaX Matching Core is a Rust learning project that rebuilds the core of a centralized exchange matching subsystem step by step. The repository is now the project source of truth for implementation progress and roadmap.
 
-NovaX Matching Core is a Rust learning project that rebuilds the core of a centralized exchange matching engine step by step. The goal is not to finish the code as quickly as possible, but to learn Rust while implementing a production-oriented matching subsystem with explicit tests, recovery boundaries, journal contracts, replay, snapshots, and deterministic state transitions.
+The target architecture follows a Matching Service reference model:
 
-This repository is part of the broader NovaX exchange system. It focuses on the matching core: domain types, orders, order books, matching results, command ingress, journals, replay, snapshots, symbol runtimes, and multi-symbol runtime management.
+- `Matching Service` is the runtime container: confirmed input consumption, symbol routing, bounded handoff, per-symbol execution loops, output commit, snapshot coordination, recovery, and service-facing runtime behavior.
+- `Matching Core` is the deterministic matching kernel inside that runtime: command application, order book mutation, matching result generation, checksums, replay, and snapshots.
 
-## Goals
+This repository implements the project in stages. It does not copy the whole target architecture at once; it extracts the active capabilities needed for the current phase while keeping names, boundaries, and direction aligned with the target model.
 
-The long-term target is a complete matching engine subsystem with:
+The architecture reference remains the external CEX Matching Service reference directory. This repository keeps a symlink for convenient lookup:
 
-- Multi-symbol runtime support.
-- Single-writer execution per symbol.
-- Journal-before-matching input flow.
-- Output journal confirmation before safe-point advancement.
-- Snapshot, replay, and checksum verification.
-- Batch input processing with clear failure semantics.
-- RingBuffer-style bounded input handoff and output isolation.
-- Observability, benchmarks, and performance-oriented data structure evolution.
-- Standby replay, leader lease, fencing, failover, and zero-downtime upgrade validation.
+```text
+docs/matching-service-reference
+```
 
-The project intentionally starts with simple implementations where useful, but the public contracts and tests are designed to point toward a production-grade architecture.
+The symlink points to:
+
+```text
+/Users/andrew/Library/Mobile Documents/iCloud~md~obsidian/Documents/My vault/28 - CEX/Architecture/Application/Matching Service
+```
+
+Use that reference directory for the application architecture, component documents, and engineering strategy notes. If implementation work reveals that the reference architecture needs adjustment, update the CEX reference documents through the symlink rather than creating a separate architecture source in this repository.
 
 ## Current Status
 
-Current progress:
-
 | Item | Status |
-|---|---|
-| Completed phases | Phase 0-18 |
-| Current milestone | Thread-ready runtime loop |
-| Next phase | Phase 19: Output isolation |
-| Latest verification | `cargo test` |
+| --- | --- |
+| Completed phases | Phase 0-19 |
+| Current milestone | Runtime handoff and output commit boundary |
+| Current phase | Phase 20: Confirmed Input Consumer |
+| Latest verification | `cargo test -p matching-core` |
 
 Implemented capabilities:
 
@@ -41,80 +40,33 @@ Implemented capabilities:
 - Command ingress validation.
 - Engine output events, including order acknowledgements and trade events.
 - Deterministic checksum support.
-- In-memory input and output journal contracts.
+- Journal adapter input reader and output appender contracts.
 - Replay runner.
 - Order book snapshot and restore.
 - Single-symbol `SymbolRuntime` with safe-point processing.
 - Batch processing with retry-safe failure behavior.
 - Multi-symbol `RuntimeManager` with per-symbol state isolation.
-- `SymbolRouter` with registered-symbol routing and batch grouping.
-- `PerSymbolInputQueue` with bounded capacity, FIFO drain, watermarks, and router enqueue support.
-- Runtime loop step and one-shot worker thread for processing queued symbol input.
+- `SymbolRouting` with registered-symbol routing and queue enqueue support.
+- `BoundedHandoff` with bounded capacity, FIFO drain, watermarks, and retry prepend.
+- Runtime loop step and one-shot worker thread.
+- Output queue isolation.
+- Output committer and output commit loop.
+- Project roadmap document in this repository.
 
-Run the test suite:
+## Documentation
 
-```bash
-cargo test
-```
+- [Roadmap](docs/roadmap.md)
 
-## Learning Method
-
-This project is developed in learning mode:
-
-1. Define the phase goal and Rust concept.
-2. Write a minimal failing test.
-3. Implement the smallest behavior that makes the test pass.
-4. Review the design choice and Rust concept.
-5. Run verification before moving to the next phase.
-6. Commit and push each completed phase.
-
-The learning rule is: simple implementations are allowed, but the boundaries must remain compatible with the production direction. For example, cloning an order book can be used to prove retry semantics early, but later phases replace hot-path mechanisms with more realistic output isolation and recovery behavior.
-
-## Roadmap
-
-| Phase | Status | Goal | Verification |
-|---|---|---|---|
-| 0 | Completed | Minimal Rust workspace | Empty tests pass |
-| 1 | Completed | Core domain types | Type construction tests |
-| 2 | Completed | Order and command model | Place/cancel command tests |
-| 3 | Completed | Price level | FIFO tests |
-| 4 | Completed | Order book structure | Best bid/ask and index tests |
-| 5 | Completed | Limit order matching | Full/partial/resting match tests |
-| 6 | Completed | Cancellation | Successful and failed cancel tests |
-| 7 | Completed | Command ingress | Invalid symbol/price/quantity tests |
-| 8 | Completed | Output event model | Ack and trade event tests |
-| 9 | Completed | Deterministic checksum | Same input gives same checksum |
-| 10 | Completed | Journal contract | Append/read/latest sequence tests |
-| 11 | Completed | Replay runner | Replay checksum consistency |
-| 12 | Completed | Snapshot | Snapshot/restore checksum consistency |
-| 13 | Completed | Symbol runtime | Output commit advances safe point |
-| 14 | Completed | Batch processing | Batch failure stops at safe point |
-| 15 | Completed | Runtime manager | BTC/ETH runtimes remain isolated |
-| 16 | Completed | Symbol router | Entries route by symbol |
-| 17 | Completed | Bounded input handoff | Full queue and ordered consumption tests |
-| 18 | Completed | Thread model | Journal reader and runtime separation |
-| 19 | Next | Output isolation | Slow output does not block input directly |
-| 20 | Planned | Durable journal adapter | Restart and replay recovery |
-| 21 | Planned | Admin/query API | Cursor, checksum, and depth queries |
-| 22 | Planned | Observability | Tracing and metrics visibility |
-| 23 | Planned | Benchmarks | Single-symbol and multi-symbol baselines |
-| 24 | Planned | Order book data structure evolution | Benchmark comparison |
-| 25 | Planned | RingBuffer-style handoff optimization | Queue benchmark improvements |
-| 26 | Planned | CPU stability optimization | p99 jitter comparison |
-| 27 | Planned | Sharding and hot-symbol placement | Symbol ownership and migration tests |
-| 28 | Planned | Standby replay | Standby checksum catches up |
-| 29 | Planned | Leader lease and fencing | Lost lease stops processing |
-| 30 | Planned | Failover drill | Promoted standby state is consistent |
-| 31 | Planned | Zero-downtime upgrade validation | Old/new versions replay consistently |
-| 32 | Planned | Final acceptance | Tests, benchmarks, drills, and docs |
+This file replaces external project-progress notes for this repository. Architecture direction should still be read from `docs/matching-service-reference`.
 
 ## Architecture Principles
 
-- The order book for a single symbol has exactly one writer.
+- A single symbol's order book has exactly one writer.
 - Input commands are confirmed by a journal before matching.
 - Output events must be committed before the runtime advances its safe point.
 - Replay and snapshot behavior must remain deterministic.
-- Backpressure and output isolation are explicit system boundaries, not afterthoughts.
+- Bounded handoff is a runtime transfer and backpressure boundary, not a recovery source.
+- Slow downstream consumers must not directly block the matching execution loop.
 - Performance work is driven by benchmark evidence, not premature optimization.
 
 ## Repository Layout
@@ -124,6 +76,11 @@ crates/
   matching-core/     Core matching engine library
   matching-service/  Service entry point placeholder
   matching-bench/    Benchmark crate placeholder
+
+docs/
+  roadmap.md         Project phase plan and current progress
+  matching-service-reference/
+                     Symlink to the external CEX Matching Service reference directory
 ```
 
 ## Development

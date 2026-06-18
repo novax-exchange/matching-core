@@ -1,4 +1,4 @@
-use crate::journal::InputJournal;
+use crate::journal_adapter::JournalInputReader;
 use crate::order::Command;
 use crate::order_book::OrderBook;
 use crate::types::{Checksum, JournalSeq, Symbol};
@@ -17,11 +17,11 @@ impl ReplayRunner {
         ReplayRunner { symbol }
     }
 
-    pub fn replay(&self, journal: &dyn InputJournal) -> Checksum {
+    pub fn replay(&self, journal: &dyn JournalInputReader) -> Checksum {
         self.replay_from(journal, JournalSeq(1))
     }
 
-    pub fn replay_from(&self, journal: &dyn InputJournal, from: JournalSeq) -> Checksum {
+    pub fn replay_from(&self, journal: &dyn JournalInputReader, from: JournalSeq) -> Checksum {
         let book = OrderBook::new(self.symbol.clone());
         self.replay_from_order_book(book, journal, from)
     }
@@ -29,7 +29,7 @@ impl ReplayRunner {
     pub fn replay_from_order_book(
         &self,
         mut book: OrderBook,
-        journal: &dyn InputJournal,
+        journal: &dyn JournalInputReader,
         from: JournalSeq,
     ) -> Checksum {
         for entry in journal.read_from(from) {
@@ -46,7 +46,7 @@ impl ReplayRunner {
         book.checksum()
     }
 
-    pub fn replay_result(&self, journal: &dyn InputJournal) -> ReplayResult {
+    pub fn replay_result(&self, journal: &dyn JournalInputReader) -> ReplayResult {
         ReplayResult {
             checksum: self.replay_from(journal, JournalSeq(1)),
             last_replayed_seq: journal.latest_seq(),
@@ -57,15 +57,15 @@ impl ReplayRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::journal::{InputJournal, InputJournalEntry};
+    use crate::journal_adapter::{JournalInputEntry, JournalInputReader};
     use crate::order::{Command, Order};
     use crate::types::{Checksum, CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
-    struct InMemoryInputJournal {
-        entries: Vec<InputJournalEntry>,
+    struct InMemoryJournalInputReader {
+        entries: Vec<JournalInputEntry>,
     }
 
-    impl InMemoryInputJournal {
+    impl InMemoryJournalInputReader {
         fn new() -> Self {
             Self {
                 entries: Vec::new(),
@@ -73,11 +73,11 @@ mod tests {
         }
     }
 
-    impl InputJournal for InMemoryInputJournal {
+    impl JournalInputReader for InMemoryJournalInputReader {
         fn append(&mut self, command_id: CommandId, command: Command) -> JournalSeq {
             let seq = JournalSeq(self.entries.len() as u64 + 1);
 
-            self.entries.push(InputJournalEntry {
+            self.entries.push(JournalInputEntry {
                 seq,
                 command_id,
                 command,
@@ -86,7 +86,7 @@ mod tests {
             seq
         }
 
-        fn read_from(&self, from: JournalSeq) -> Vec<InputJournalEntry> {
+        fn read_from(&self, from: JournalSeq) -> Vec<JournalInputEntry> {
             self.entries
                 .iter()
                 .filter(|entry| entry.seq >= from)
@@ -114,8 +114,8 @@ mod tests {
     }
 
     #[test]
-    fn replaying_same_input_journal_produces_same_checksum() {
-        let mut journal = InMemoryInputJournal::new();
+    fn replaying_same_journal_input_sequence_produces_same_checksum() {
+        let mut journal = InMemoryJournalInputReader::new();
 
         journal.append(CommandId(1), limit_order(1, Side::Buy, 100, 5));
         journal.append(CommandId(2), limit_order(2, Side::Sell, 101, 3));
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn replay_applies_cancel_commands_before_calculating_checksum() {
-        let mut with_cancel = InMemoryInputJournal::new();
+        let mut with_cancel = InMemoryJournalInputReader::new();
 
         with_cancel.append(CommandId(1), limit_order(1, Side::Buy, 100, 5));
         with_cancel.append(
@@ -141,7 +141,7 @@ mod tests {
             },
         );
 
-        let empty = InMemoryInputJournal::new();
+        let empty = InMemoryJournalInputReader::new();
 
         let cancelled_checksum = ReplayRunner::new(symbol()).replay(&with_cancel);
         let empty_checksum = ReplayRunner::new(symbol()).replay(&empty);
@@ -151,14 +151,14 @@ mod tests {
 
     #[test]
     fn replay_from_starts_at_requested_sequence() {
-        let mut journal = InMemoryInputJournal::new();
+        let mut journal = InMemoryJournalInputReader::new();
 
         journal.append(CommandId(1), limit_order(1, Side::Buy, 100, 5));
         journal.append(CommandId(2), limit_order(2, Side::Buy, 101, 3));
 
         let replay_from_second = ReplayRunner::new(symbol()).replay_from(&journal, JournalSeq(2));
 
-        let mut expected_journal = InMemoryInputJournal::new();
+        let mut expected_journal = InMemoryJournalInputReader::new();
         expected_journal.append(CommandId(2), limit_order(2, Side::Buy, 101, 3));
 
         let expected = ReplayRunner::new(symbol()).replay(&expected_journal);
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn replay_result_exposes_final_checksum() {
-        let mut journal = InMemoryInputJournal::new();
+        let mut journal = InMemoryJournalInputReader::new();
 
         journal.append(CommandId(1), limit_order(1, Side::Buy, 100, 5));
 
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn replay_result_exposes_last_replayed_sequence() {
-        let mut journal = InMemoryInputJournal::new();
+        let mut journal = InMemoryJournalInputReader::new();
 
         journal.append(CommandId(1), limit_order(1, Side::Buy, 100, 5));
         journal.append(CommandId(2), limit_order(2, Side::Sell, 101, 3));
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn replay_result_has_no_last_replayed_sequence_for_empty_journal() {
-        let journal = InMemoryInputJournal::new();
+        let journal = InMemoryJournalInputReader::new();
 
         let result = ReplayRunner::new(symbol()).replay_result(&journal);
 

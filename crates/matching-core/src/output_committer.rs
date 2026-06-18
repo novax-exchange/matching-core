@@ -1,5 +1,5 @@
 use crate::engine::EngineEvent;
-use crate::journal::{OutputJournal, OutputJournalError};
+use crate::journal_adapter::{JournalAdapterError, JournalOutputAppender};
 use crate::types::{CommandId, JournalSeq};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,16 +19,16 @@ impl OutputCommitter {
     pub fn commit_one(
         &mut self,
         request: OutputCommitRequest,
-        journal: &mut dyn OutputJournal,
-    ) -> Result<(), OutputJournalError> {
+        journal: &mut dyn JournalOutputAppender,
+    ) -> Result<(), JournalAdapterError> {
         journal.append(request.command_id, request.journal_seq, request.events)
     }
 
     pub fn commit_batch(
         &mut self,
         requests: Vec<OutputCommitRequest>,
-        journal: &mut dyn OutputJournal,
-    ) -> Result<usize, OutputJournalError> {
+        journal: &mut dyn JournalOutputAppender,
+    ) -> Result<usize, JournalAdapterError> {
         let mut committed = 0;
 
         for request in requests {
@@ -44,14 +44,14 @@ impl OutputCommitter {
 mod tests {
     use super::*;
     use crate::engine::{EngineEvent, OrderAck};
-    use crate::journal::{OutputJournal, OutputJournalEntry, OutputJournalError};
+    use crate::journal_adapter::{JournalAdapterError, JournalOutputAppender, JournalOutputEntry};
     use crate::types::{CommandId, JournalSeq, OrderId};
 
-    struct InMemoryOutputJournal {
-        entries: Vec<OutputJournalEntry>,
+    struct InMemoryJournalOutputAppender {
+        entries: Vec<JournalOutputEntry>,
     }
 
-    impl InMemoryOutputJournal {
+    impl InMemoryJournalOutputAppender {
         fn new() -> Self {
             Self {
                 entries: Vec::new(),
@@ -59,14 +59,14 @@ mod tests {
         }
     }
 
-    impl OutputJournal for InMemoryOutputJournal {
+    impl JournalOutputAppender for InMemoryJournalOutputAppender {
         fn append(
             &mut self,
             command_id: CommandId,
             journal_seq: JournalSeq,
             events: Vec<EngineEvent>,
-        ) -> Result<(), OutputJournalError> {
-            self.entries.push(OutputJournalEntry {
+        ) -> Result<(), JournalAdapterError> {
+            self.entries.push(JournalOutputEntry {
                 command_id,
                 journal_seq,
                 events,
@@ -75,7 +75,7 @@ mod tests {
             Ok(())
         }
 
-        fn read_all(&self) -> Vec<OutputJournalEntry> {
+        fn read_all(&self) -> Vec<JournalOutputEntry> {
             self.entries.clone()
         }
     }
@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn committer_appends_output_requests_in_order() {
-        let mut journal = InMemoryOutputJournal::new();
+        let mut journal = InMemoryJournalOutputAppender::new();
         let mut committer = OutputCommitter::new();
 
         let requests = vec![request(1, 10, 100), request(2, 11, 101)];
@@ -107,12 +107,12 @@ mod tests {
         assert_eq!(entries[1].journal_seq, JournalSeq(2));
     }
 
-    struct FailOnSecondAppendOutputJournal {
-        entries: Vec<OutputJournalEntry>,
+    struct FailOnSecondAppendJournalOutputAppender {
+        entries: Vec<JournalOutputEntry>,
         append_count: usize,
     }
 
-    impl FailOnSecondAppendOutputJournal {
+    impl FailOnSecondAppendJournalOutputAppender {
         fn new() -> Self {
             Self {
                 entries: Vec::new(),
@@ -121,20 +121,20 @@ mod tests {
         }
     }
 
-    impl OutputJournal for FailOnSecondAppendOutputJournal {
+    impl JournalOutputAppender for FailOnSecondAppendJournalOutputAppender {
         fn append(
             &mut self,
             command_id: CommandId,
             journal_seq: JournalSeq,
             events: Vec<EngineEvent>,
-        ) -> Result<(), OutputJournalError> {
+        ) -> Result<(), JournalAdapterError> {
             self.append_count += 1;
 
             if self.append_count == 2 {
-                return Err(OutputJournalError::AppendFailed);
+                return Err(JournalAdapterError::AppendFailed);
             }
 
-            self.entries.push(OutputJournalEntry {
+            self.entries.push(JournalOutputEntry {
                 command_id,
                 journal_seq,
                 events,
@@ -143,14 +143,14 @@ mod tests {
             Ok(())
         }
 
-        fn read_all(&self) -> Vec<OutputJournalEntry> {
+        fn read_all(&self) -> Vec<JournalOutputEntry> {
             self.entries.clone()
         }
     }
 
     #[test]
     fn committer_stops_at_first_append_failure() {
-        let mut journal = FailOnSecondAppendOutputJournal::new();
+        let mut journal = FailOnSecondAppendJournalOutputAppender::new();
         let mut committer = OutputCommitter::new();
 
         let requests = vec![
@@ -161,7 +161,7 @@ mod tests {
 
         assert_eq!(
             committer.commit_batch(requests, &mut journal),
-            Err(OutputJournalError::AppendFailed)
+            Err(JournalAdapterError::AppendFailed)
         );
 
         let entries = journal.read_all();

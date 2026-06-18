@@ -1,12 +1,11 @@
-use crate::engine::{EngineEvent, OrderAck, RejectReason, TradeEvent};
 use crate::command_ingress::{CommandIngress, IngressError};
-use crate::journal::{InputJournalEntry, OutputJournal, OutputJournalError};
+use crate::engine::{EngineEvent, OrderAck, RejectReason, TradeEvent};
+use crate::journal_adapter::{JournalAdapterError, JournalInputEntry, JournalOutputAppender};
 use crate::order::Command;
 use crate::order_book::OrderBook;
 use crate::output_committer::OutputCommitRequest;
 use crate::output_queue::{OutputQueue, OutputQueueError};
 use crate::types::{JournalSeq, Symbol, TradeId};
-
 
 pub struct SymbolRuntime {
     ingress: CommandIngress,
@@ -43,10 +42,10 @@ impl SymbolRuntime {
 
     pub fn process_batch(
         &mut self,
-        entries: Vec<InputJournalEntry>,
-        output: &mut dyn OutputJournal,
-    ) -> Result<usize, OutputJournalError> {
-        let mut processed = 0; 
+        entries: Vec<JournalInputEntry>,
+        output: &mut dyn JournalOutputAppender,
+    ) -> Result<usize, JournalAdapterError> {
+        let mut processed = 0;
 
         for entry in entries {
             self.process_entry(entry, output)?;
@@ -58,9 +57,9 @@ impl SymbolRuntime {
 
     pub fn process_entry(
         &mut self,
-        entry: InputJournalEntry,
-        output: &mut dyn OutputJournal,
-    ) -> Result<(), OutputJournalError> {
+        entry: JournalInputEntry,
+        output: &mut dyn JournalOutputAppender,
+    ) -> Result<(), JournalAdapterError> {
         let order_book_before = self.order_book.clone();
         let next_trade_id_before = self.next_trade_id;
         let request = self.process_entry_to_output_request(entry);
@@ -77,7 +76,7 @@ impl SymbolRuntime {
 
     pub fn process_entry_into_output_queue(
         &mut self,
-        entry: InputJournalEntry,
+        entry: JournalInputEntry,
         output_queue: &mut OutputQueue,
     ) -> Result<(), OutputQueueError> {
         let order_book_before = self.order_book.clone();
@@ -95,15 +94,15 @@ impl SymbolRuntime {
 
     pub fn process_entry_to_output_request(
         &mut self,
-        entry: InputJournalEntry,
+        entry: JournalInputEntry,
     ) -> OutputCommitRequest {
         let command = match self.ingress.validate(entry.command) {
-            Ok(command) => command, 
+            Ok(command) => command,
             Err(error) => {
-                let events = vec![EngineEvent::OrderAck(OrderAck::Rejected { 
-                    command_id: entry.command_id, 
-                    order_id: None, 
-                    journal_seq: entry.seq, 
+                let events = vec![EngineEvent::OrderAck(OrderAck::Rejected {
+                    command_id: entry.command_id,
+                    order_id: None,
+                    journal_seq: entry.seq,
                     reason: reject_reason_from_ingress_error(error),
                 })];
 
@@ -120,25 +119,24 @@ impl SymbolRuntime {
 
                 let result = self.order_book.place_limit(order);
 
-                let mut events = vec![EngineEvent::OrderAck(OrderAck::Accepted { 
-                    command_id: entry.command_id, 
-                    order_id: order_id, 
-                    journal_seq: entry.seq, 
+                let mut events = vec![EngineEvent::OrderAck(OrderAck::Accepted {
+                    command_id: entry.command_id,
+                    order_id: order_id,
+                    journal_seq: entry.seq,
                 })];
 
                 for trade in result.trades {
                     let trade_id = TradeId(self.next_trade_id);
                     self.next_trade_id += 1;
 
-
                     events.push(EngineEvent::Trade(TradeEvent {
-                        trade_id, 
-                        command_id: entry.command_id, 
-                        journal_seq: entry.seq, 
-                        maker_order_id: trade.maker_order_id, 
-                        taker_order_id: trade.taker_order_id, 
-                        price: trade.price, 
-                        quantity: trade.quantity 
+                        trade_id,
+                        command_id: entry.command_id,
+                        journal_seq: entry.seq,
+                        maker_order_id: trade.maker_order_id,
+                        taker_order_id: trade.taker_order_id,
+                        price: trade.price,
+                        quantity: trade.quantity,
                     }));
                 }
 
@@ -147,19 +145,19 @@ impl SymbolRuntime {
                     journal_seq: entry.seq,
                     events,
                 }
-            },
+            }
             Command::Cancel { order_id, .. } => {
                 let events = match self.order_book.cancel(order_id) {
-                    Ok(_) => vec![EngineEvent::OrderAck(OrderAck::Cancelled { 
-                        command_id: entry.command_id, 
-                        order_id, 
-                        journal_seq: entry.seq
+                    Ok(_) => vec![EngineEvent::OrderAck(OrderAck::Cancelled {
+                        command_id: entry.command_id,
+                        order_id,
+                        journal_seq: entry.seq,
                     })],
-                    Err(_) => vec![EngineEvent::OrderAck(OrderAck::Rejected { 
-                        command_id: entry.command_id, 
-                        order_id: Some(order_id), 
-                        journal_seq: entry.seq, 
-                        reason: RejectReason::OrderNotFound 
+                    Err(_) => vec![EngineEvent::OrderAck(OrderAck::Rejected {
+                        command_id: entry.command_id,
+                        order_id: Some(order_id),
+                        journal_seq: entry.seq,
+                        reason: RejectReason::OrderNotFound,
                     })],
                 };
 
@@ -176,21 +174,19 @@ impl SymbolRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::journal::{
-        InputJournalEntry, OutputJournal, OutputJournalEntry, OutputJournalError,
-    };
     use crate::engine::{EngineEvent, OrderAck, TradeEvent};
+    use crate::journal_adapter::{
+        JournalAdapterError, JournalInputEntry, JournalOutputAppender, JournalOutputEntry,
+    };
     use crate::order::{Command, Order};
     use crate::output_queue::{OutputQueue, OutputQueueError};
-    use crate::types::{
-        CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol,
-    };
+    use crate::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
-    struct InMemoryOutputJournal {
-        entries: Vec<OutputJournalEntry>,
+    struct InMemoryJournalOutputAppender {
+        entries: Vec<JournalOutputEntry>,
     }
 
-    impl InMemoryOutputJournal {
+    impl InMemoryJournalOutputAppender {
         fn new() -> Self {
             Self {
                 entries: Vec::new(),
@@ -198,14 +194,14 @@ mod tests {
         }
     }
 
-    impl OutputJournal for InMemoryOutputJournal {
+    impl JournalOutputAppender for InMemoryJournalOutputAppender {
         fn append(
             &mut self,
             command_id: CommandId,
             journal_seq: JournalSeq,
             events: Vec<EngineEvent>,
-        ) -> Result<(), OutputJournalError> {
-            self.entries.push(OutputJournalEntry {
+        ) -> Result<(), JournalAdapterError> {
+            self.entries.push(JournalOutputEntry {
                 command_id,
                 journal_seq,
                 events,
@@ -214,7 +210,7 @@ mod tests {
             Ok(())
         }
 
-        fn read_all(&self) -> Vec<OutputJournalEntry> {
+        fn read_all(&self) -> Vec<JournalOutputEntry> {
             self.entries.clone()
         }
     }
@@ -223,8 +219,8 @@ mod tests {
         Symbol("BTC-USDT".to_string())
     }
 
-    fn input_entry(seq: u64, command_id: u64, order_id: u64) -> InputJournalEntry {
-        InputJournalEntry {
+    fn input_entry(seq: u64, command_id: u64, order_id: u64) -> JournalInputEntry {
+        JournalInputEntry {
             seq: JournalSeq(seq),
             command_id: CommandId(command_id),
             command: Command::PlaceLimit(Order {
@@ -240,9 +236,12 @@ mod tests {
     #[test]
     fn processing_valid_entry_commits_output_and_advances_last_input_seq() {
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut output = InMemoryOutputJournal::new();
+        let mut output = InMemoryJournalOutputAppender::new();
 
-        assert_eq!(runtime.process_entry(input_entry(1, 10, 100), &mut output), Ok(()));
+        assert_eq!(
+            runtime.process_entry(input_entry(1, 10, 100), &mut output),
+            Ok(())
+        );
 
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
 
@@ -323,19 +322,19 @@ mod tests {
         assert_eq!(runtime.last_input_seq(), None);
     }
 
-    struct FailingOutputJournal;
+    struct FailingJournalOutputAppender;
 
-    impl OutputJournal for FailingOutputJournal {
+    impl JournalOutputAppender for FailingJournalOutputAppender {
         fn append(
             &mut self,
             _command_id: CommandId,
             _journal_seq: JournalSeq,
             _events: Vec<EngineEvent>,
-        ) -> Result<(), OutputJournalError> {
-            Err(OutputJournalError::AppendFailed)
+        ) -> Result<(), JournalAdapterError> {
+            Err(JournalAdapterError::AppendFailed)
         }
 
-        fn read_all(&self) -> Vec<OutputJournalEntry> {
+        fn read_all(&self) -> Vec<JournalOutputEntry> {
             Vec::new()
         }
     }
@@ -343,24 +342,27 @@ mod tests {
     #[test]
     fn output_append_failure_does_not_advance_last_input_seq() {
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut output = FailingOutputJournal;
+        let mut output = FailingJournalOutputAppender;
 
-        assert_eq!(runtime.process_entry(input_entry(1, 10, 100), &mut output), Err(OutputJournalError::AppendFailed));
+        assert_eq!(
+            runtime.process_entry(input_entry(1, 10, 100), &mut output),
+            Err(JournalAdapterError::AppendFailed)
+        );
 
         assert_eq!(runtime.last_input_seq(), None);
-    }    
+    }
 
     #[test]
     fn processing_multiple_successful_entries_advances_last_input_seq_to_latest_entry() {
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut output = InMemoryOutputJournal::new();
+        let mut output = InMemoryJournalOutputAppender::new();
 
         assert_eq!(
-            runtime.process_entry(input_entry(1, 10, 100), &mut output), 
+            runtime.process_entry(input_entry(1, 10, 100), &mut output),
             Ok(())
         );
         assert_eq!(
-            runtime.process_entry(input_entry(2, 11, 101), &mut output), 
+            runtime.process_entry(input_entry(2, 11, 101), &mut output),
             Ok(())
         );
 
@@ -372,12 +374,12 @@ mod tests {
         assert_eq!(entries[1].journal_seq, JournalSeq(2));
     }
 
-    struct FailOnSecondAppendOutputJournal {
-        entries: Vec<OutputJournalEntry>,
+    struct FailOnSecondAppendJournalOutputAppender {
+        entries: Vec<JournalOutputEntry>,
         append_count: usize,
     }
-    
-    impl FailOnSecondAppendOutputJournal {
+
+    impl FailOnSecondAppendJournalOutputAppender {
         fn new() -> Self {
             Self {
                 entries: Vec::new(),
@@ -385,30 +387,30 @@ mod tests {
             }
         }
     }
-    
-    impl OutputJournal for FailOnSecondAppendOutputJournal {
+
+    impl JournalOutputAppender for FailOnSecondAppendJournalOutputAppender {
         fn append(
             &mut self,
             command_id: CommandId,
             journal_seq: JournalSeq,
             events: Vec<EngineEvent>,
-        ) -> Result<(), OutputJournalError> {
+        ) -> Result<(), JournalAdapterError> {
             self.append_count += 1;
-    
+
             if self.append_count == 2 {
-                return Err(OutputJournalError::AppendFailed);
+                return Err(JournalAdapterError::AppendFailed);
             }
-    
-            self.entries.push(OutputJournalEntry {
+
+            self.entries.push(JournalOutputEntry {
                 command_id,
                 journal_seq,
                 events,
             });
-    
+
             Ok(())
         }
-    
-        fn read_all(&self) -> Vec<OutputJournalEntry> {
+
+        fn read_all(&self) -> Vec<JournalOutputEntry> {
             self.entries.clone()
         }
     }
@@ -416,15 +418,15 @@ mod tests {
     #[test]
     fn failed_second_output_append_keeps_last_input_seq_at_first_entry() {
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut output = FailOnSecondAppendOutputJournal::new();
+        let mut output = FailOnSecondAppendJournalOutputAppender::new();
 
         assert_eq!(
-            runtime.process_entry(input_entry(1, 10, 100), &mut output), 
+            runtime.process_entry(input_entry(1, 10, 100), &mut output),
             Ok(()),
         );
         assert_eq!(
-            runtime.process_entry(input_entry(2, 11, 101), &mut output), 
-            Err(OutputJournalError::AppendFailed)
+            runtime.process_entry(input_entry(2, 11, 101), &mut output),
+            Err(JournalAdapterError::AppendFailed)
         );
 
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
@@ -437,9 +439,9 @@ mod tests {
     #[test]
     fn invalid_price_order_writes_rejected_output_and_advances_last_input_seq() {
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut output = InMemoryOutputJournal::new();
+        let mut output = InMemoryJournalOutputAppender::new();
 
-        let entry = InputJournalEntry {
+        let entry = JournalInputEntry {
             seq: JournalSeq(1),
             command_id: CommandId(10),
             command: Command::PlaceLimit(Order {
@@ -467,12 +469,12 @@ mod tests {
         );
     }
 
-        #[test]
+    #[test]
     fn invalid_quantity_order_writes_rejected_output_and_advances_last_input_seq() {
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut output = InMemoryOutputJournal::new();
+        let mut output = InMemoryJournalOutputAppender::new();
 
-        let entry = InputJournalEntry {
+        let entry = JournalInputEntry {
             seq: JournalSeq(1),
             command_id: CommandId(10),
             command: Command::PlaceLimit(Order {
@@ -503,9 +505,9 @@ mod tests {
     #[test]
     fn command_for_different_symbol_writes_rejected_output_and_advances_last_input_seq() {
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut output = InMemoryOutputJournal::new();
+        let mut output = InMemoryJournalOutputAppender::new();
 
-        let entry = InputJournalEntry {
+        let entry = JournalInputEntry {
             seq: JournalSeq(1),
             command_id: CommandId(10),
             command: Command::PlaceLimit(Order {
@@ -536,9 +538,9 @@ mod tests {
     #[test]
     fn cancel_unknown_order_writes_rejected_order_not_found_and_advances_last_input_seq() {
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut output = InMemoryOutputJournal::new();
+        let mut output = InMemoryJournalOutputAppender::new();
 
-        let entry = InputJournalEntry {
+        let entry = JournalInputEntry {
             seq: JournalSeq(1),
             command_id: CommandId(10),
             command: Command::Cancel {
@@ -566,14 +568,14 @@ mod tests {
     #[test]
     fn cancel_existing_order_writes_cancelled_output_and_advances_last_input_seq() {
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut output = InMemoryOutputJournal::new();
+        let mut output = InMemoryJournalOutputAppender::new();
 
         assert_eq!(
             runtime.process_entry(input_entry(1, 10, 100), &mut output),
             Ok(())
         );
 
-        let cancel_entry = InputJournalEntry {
+        let cancel_entry = JournalInputEntry {
             seq: JournalSeq(2),
             command_id: CommandId(11),
             command: Command::Cancel {
@@ -598,11 +600,11 @@ mod tests {
     }
 
     #[test]
-    fn matching_order_writes_trade_event_to_output_journal() {
+    fn matching_order_writes_trade_event_to_journal_output_appender() {
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut output = InMemoryOutputJournal::new();
+        let mut output = InMemoryJournalOutputAppender::new();
 
-        let resting_sell = InputJournalEntry {
+        let resting_sell = JournalInputEntry {
             seq: JournalSeq(1),
             command_id: CommandId(10),
             command: Command::PlaceLimit(Order {
@@ -614,7 +616,7 @@ mod tests {
             }),
         };
 
-        let crossing_buy = InputJournalEntry {
+        let crossing_buy = JournalInputEntry {
             seq: JournalSeq(2),
             command_id: CommandId(11),
             command: Command::PlaceLimit(Order {
@@ -657,9 +659,9 @@ mod tests {
     fn failed_trade_output_append_does_not_consume_trade_id() {
         let mut runtime = SymbolRuntime::new(symbol());
 
-        let mut successful_output = InMemoryOutputJournal::new();
+        let mut successful_output = InMemoryJournalOutputAppender::new();
 
-        let resting_sell = InputJournalEntry {
+        let resting_sell = JournalInputEntry {
             seq: JournalSeq(1),
             command_id: CommandId(10),
             command: Command::PlaceLimit(Order {
@@ -671,9 +673,12 @@ mod tests {
             }),
         };
 
-        assert_eq!(runtime.process_entry(resting_sell, &mut successful_output), Ok(()));
+        assert_eq!(
+            runtime.process_entry(resting_sell, &mut successful_output),
+            Ok(())
+        );
 
-        let crossing_buy = InputJournalEntry {
+        let crossing_buy = JournalInputEntry {
             seq: JournalSeq(2),
             command_id: CommandId(11),
             command: Command::PlaceLimit(Order {
@@ -685,15 +690,18 @@ mod tests {
             }),
         };
 
-        let mut failing_output = FailingOutputJournal;
+        let mut failing_output = FailingJournalOutputAppender;
         assert_eq!(
             runtime.process_entry(crossing_buy.clone(), &mut failing_output),
-            Err(OutputJournalError::AppendFailed)
+            Err(JournalAdapterError::AppendFailed)
         );
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
 
-        let mut retry_output = InMemoryOutputJournal::new();
-        assert_eq!(runtime.process_entry(crossing_buy, &mut retry_output), Ok(()));
+        let mut retry_output = InMemoryJournalOutputAppender::new();
+        assert_eq!(
+            runtime.process_entry(crossing_buy, &mut retry_output),
+            Ok(())
+        );
 
         let entries = retry_output.read_all();
         assert_eq!(entries.len(), 1);
@@ -722,13 +730,13 @@ mod tests {
     fn failed_cancel_output_append_does_not_remove_order() {
         let mut runtime = SymbolRuntime::new(symbol());
 
-        let mut successful_output = InMemoryOutputJournal::new();
+        let mut successful_output = InMemoryJournalOutputAppender::new();
         assert_eq!(
             runtime.process_entry(input_entry(1, 10, 100), &mut successful_output),
             Ok(())
         );
 
-        let cancel_entry = InputJournalEntry {
+        let cancel_entry = JournalInputEntry {
             seq: JournalSeq(2),
             command_id: CommandId(11),
             command: Command::Cancel {
@@ -737,15 +745,18 @@ mod tests {
             },
         };
 
-        let mut failing_output = FailingOutputJournal;
+        let mut failing_output = FailingJournalOutputAppender;
         assert_eq!(
             runtime.process_entry(cancel_entry.clone(), &mut failing_output),
-            Err(OutputJournalError::AppendFailed)
+            Err(JournalAdapterError::AppendFailed)
         );
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
 
-        let mut retry_output = InMemoryOutputJournal::new();
-        assert_eq!(runtime.process_entry(cancel_entry, &mut retry_output), Ok(()));
+        let mut retry_output = InMemoryJournalOutputAppender::new();
+        assert_eq!(
+            runtime.process_entry(cancel_entry, &mut retry_output),
+            Ok(())
+        );
 
         let entries = retry_output.read_all();
         assert_eq!(entries.len(), 1);
@@ -762,9 +773,9 @@ mod tests {
     #[test]
     fn rejected_command_output_append_failure_does_not_advance_last_input_seq() {
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut output = FailingOutputJournal;
+        let mut output = FailingJournalOutputAppender;
 
-        let entry = InputJournalEntry {
+        let entry = JournalInputEntry {
             seq: JournalSeq(1),
             command_id: CommandId(10),
             command: Command::PlaceLimit(Order {
@@ -778,7 +789,7 @@ mod tests {
 
         assert_eq!(
             runtime.process_entry(entry, &mut output),
-            Err(OutputJournalError::AppendFailed)
+            Err(JournalAdapterError::AppendFailed)
         );
 
         assert_eq!(runtime.last_input_seq(), None);
@@ -787,7 +798,7 @@ mod tests {
     #[test]
     fn processing_successful_batch_advances_last_input_seq_to_latest_entry() {
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut output = InMemoryOutputJournal::new();
+        let mut output = InMemoryJournalOutputAppender::new();
 
         let entries = vec![
             input_entry(1, 10, 100),
@@ -808,7 +819,7 @@ mod tests {
     #[test]
     fn batch_stops_at_first_output_append_failure() {
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut output = FailOnSecondAppendOutputJournal::new();
+        let mut output = FailOnSecondAppendJournalOutputAppender::new();
 
         let entries = vec![
             input_entry(1, 10, 100),
@@ -818,7 +829,7 @@ mod tests {
 
         assert_eq!(
             runtime.process_batch(entries, &mut output),
-            Err(OutputJournalError::AppendFailed)
+            Err(JournalAdapterError::AppendFailed)
         );
 
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
@@ -831,7 +842,7 @@ mod tests {
     #[test]
     fn failed_batch_entry_can_be_retried_after_output_append_failure() {
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut output = FailOnSecondAppendOutputJournal::new();
+        let mut output = FailOnSecondAppendJournalOutputAppender::new();
 
         let failed_entry = input_entry(2, 11, 101);
 
@@ -843,13 +854,16 @@ mod tests {
 
         assert_eq!(
             runtime.process_batch(entries, &mut output),
-            Err(OutputJournalError::AppendFailed)
+            Err(JournalAdapterError::AppendFailed)
         );
 
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
 
-        let mut retry_output = InMemoryOutputJournal::new();
-        assert_eq!(runtime.process_entry(failed_entry, &mut retry_output), Ok(()));
+        let mut retry_output = InMemoryJournalOutputAppender::new();
+        assert_eq!(
+            runtime.process_entry(failed_entry, &mut retry_output),
+            Ok(())
+        );
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(2)));
 
         let retry_entries = retry_output.read_all();
@@ -869,7 +883,7 @@ mod tests {
     fn failed_batch_trade_entry_can_be_retried_with_same_trade_id() {
         let mut runtime = SymbolRuntime::new(symbol());
 
-        let resting_sell = InputJournalEntry {
+        let resting_sell = JournalInputEntry {
             seq: JournalSeq(1),
             command_id: CommandId(10),
             command: Command::PlaceLimit(Order {
@@ -881,7 +895,7 @@ mod tests {
             }),
         };
 
-        let crossing_buy = InputJournalEntry {
+        let crossing_buy = JournalInputEntry {
             seq: JournalSeq(2),
             command_id: CommandId(11),
             command: Command::PlaceLimit(Order {
@@ -895,13 +909,13 @@ mod tests {
 
         let later_entry = input_entry(3, 12, 102);
 
-        let mut output = FailOnSecondAppendOutputJournal::new();
+        let mut output = FailOnSecondAppendJournalOutputAppender::new();
         assert_eq!(
             runtime.process_batch(
                 vec![resting_sell, crossing_buy.clone(), later_entry],
                 &mut output
             ),
-            Err(OutputJournalError::AppendFailed)
+            Err(JournalAdapterError::AppendFailed)
         );
 
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
@@ -910,8 +924,11 @@ mod tests {
         assert_eq!(output_entries.len(), 1);
         assert_eq!(output_entries[0].journal_seq, JournalSeq(1));
 
-        let mut retry_output = InMemoryOutputJournal::new();
-        assert_eq!(runtime.process_entry(crossing_buy, &mut retry_output), Ok(()));
+        let mut retry_output = InMemoryJournalOutputAppender::new();
+        assert_eq!(
+            runtime.process_entry(crossing_buy, &mut retry_output),
+            Ok(())
+        );
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(2)));
 
         let retry_entries = retry_output.read_all();

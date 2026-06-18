@@ -1,15 +1,15 @@
-use matching_core::journal::{InputJournal, InputJournalEntry};
+use matching_core::journal_adapter::{JournalInputEntry, JournalInputReader};
 use matching_core::order::{Command, Order};
 use matching_core::replay::ReplayRunner;
 use matching_core::types::{
     Checksum, CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol,
 };
 
-struct TestInputJournal {
-    entries: Vec<InputJournalEntry>,
+struct TestJournalInputReader {
+    entries: Vec<JournalInputEntry>,
 }
 
-impl TestInputJournal {
+impl TestJournalInputReader {
     fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -17,11 +17,11 @@ impl TestInputJournal {
     }
 }
 
-impl InputJournal for TestInputJournal {
+impl JournalInputReader for TestJournalInputReader {
     fn append(&mut self, command_id: CommandId, command: Command) -> JournalSeq {
         let seq = JournalSeq(self.entries.len() as u64 + 1);
 
-        self.entries.push(InputJournalEntry {
+        self.entries.push(JournalInputEntry {
             seq,
             command_id,
             command,
@@ -30,7 +30,7 @@ impl InputJournal for TestInputJournal {
         seq
     }
 
-    fn read_from(&self, from: JournalSeq) -> Vec<InputJournalEntry> {
+    fn read_from(&self, from: JournalSeq) -> Vec<JournalInputEntry> {
         self.entries
             .iter()
             .filter(|entry| entry.seq >= from)
@@ -59,7 +59,7 @@ fn limit_order(order_id: u64, side: Side, price: u64, quantity: u64) -> Command 
 
 #[test]
 fn replay_runner_is_available_from_public_api() {
-    let mut journal = TestInputJournal::new();
+    let mut journal = TestJournalInputReader::new();
 
     journal.append(CommandId(1), limit_order(1, Side::Buy, 100, 5));
 
@@ -70,7 +70,7 @@ fn replay_runner_is_available_from_public_api() {
 
 #[test]
 fn replay_result_is_available_from_public_api() {
-    let mut journal = TestInputJournal::new();
+    let mut journal = TestJournalInputReader::new();
 
     journal.append(CommandId(1), limit_order(1, Side::Buy, 100, 5));
 

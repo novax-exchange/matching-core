@@ -33,7 +33,7 @@ impl OrderBookSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::journal::{InputJournal, InputJournalEntry};
+    use crate::journal_adapter::{JournalInputEntry, JournalInputReader};
     use crate::order::Command;
     use crate::order::Order;
     use crate::order_book::OrderBook;
@@ -128,11 +128,11 @@ mod tests {
         assert_eq!(restored.resting_orders(), snapshot.resting_orders);
     }
 
-    struct InMemoryInputJournal {
-        entries: Vec<InputJournalEntry>,
+    struct InMemoryJournalInputReader {
+        entries: Vec<JournalInputEntry>,
     }
 
-    impl InMemoryInputJournal {
+    impl InMemoryJournalInputReader {
         fn new() -> Self {
             Self {
                 entries: Vec::new(),
@@ -140,11 +140,11 @@ mod tests {
         }
     }
 
-    impl InputJournal for InMemoryInputJournal {
+    impl JournalInputReader for InMemoryJournalInputReader {
         fn append(&mut self, command_id: CommandId, command: Command) -> JournalSeq {
             let seq = JournalSeq(self.entries.len() as u64 + 1);
 
-            self.entries.push(InputJournalEntry {
+            self.entries.push(JournalInputEntry {
                 seq,
                 command_id,
                 command,
@@ -153,7 +153,7 @@ mod tests {
             seq
         }
 
-        fn read_from(&self, from: JournalSeq) -> Vec<InputJournalEntry> {
+        fn read_from(&self, from: JournalSeq) -> Vec<JournalInputEntry> {
             self.entries
                 .iter()
                 .filter(|entry| entry.seq >= from)
@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn snapshot_restore_then_replay_from_next_sequence_matches_full_replay() {
         let symbol = Symbol("BTC-USDT".to_string());
-        let mut journal = InMemoryInputJournal::new();
+        let mut journal = InMemoryJournalInputReader::new();
 
         journal.append(
             CommandId(1),

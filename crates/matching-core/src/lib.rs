@@ -1,7 +1,8 @@
 pub mod bounded_handoff;
 pub mod command_ingress;
+pub mod confirmed_input_consumer;
 pub mod engine;
-pub mod journal;
+pub mod journal_adapter;
 pub mod order;
 pub mod order_book;
 pub mod output_commit_loop;

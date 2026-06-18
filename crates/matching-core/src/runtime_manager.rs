@@ -1,10 +1,10 @@
-use crate::journal::{InputJournalEntry, OutputJournal};
+use crate::journal_adapter::{JournalInputEntry, JournalOutputAppender};
 use crate::symbol_runtime::SymbolRuntime;
 use crate::types::{JournalSeq, Symbol};
 use std::collections::HashMap;
 
 pub struct RuntimeManager {
-    runtimes: HashMap<Symbol, SymbolRuntime>
+    runtimes: HashMap<Symbol, SymbolRuntime>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,20 +22,20 @@ impl RuntimeManager {
 
     pub fn add_symbol(&mut self, symbol: Symbol) {
         self.runtimes
-        .entry(symbol.clone())
-        .or_insert_with(|| SymbolRuntime::new(symbol));
+            .entry(symbol.clone())
+            .or_insert_with(|| SymbolRuntime::new(symbol));
     }
 
     pub fn last_input_seq(&self, symbol: &Symbol) -> Option<Option<JournalSeq>> {
         self.runtimes
-        .get(symbol)
-        .map(|runtime| runtime.last_input_seq())
+            .get(symbol)
+            .map(|runtime| runtime.last_input_seq())
     }
 
     pub fn process_batch(
         &mut self,
-        entries: Vec<InputJournalEntry>,
-        output: &mut dyn OutputJournal,
+        entries: Vec<JournalInputEntry>,
+        output: &mut dyn JournalOutputAppender,
     ) -> Result<usize, RuntimeManagerError> {
         let mut processed = 0;
 
@@ -49,8 +49,8 @@ impl RuntimeManager {
 
     pub fn process_entry(
         &mut self,
-        entry: InputJournalEntry,
-        output: &mut dyn OutputJournal,
+        entry: JournalInputEntry,
+        output: &mut dyn JournalOutputAppender,
     ) -> Result<(), RuntimeManagerError> {
         let symbol = entry.command.symbol().clone();
         let runtime = self
@@ -69,8 +69,10 @@ impl RuntimeManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::journal::{InputJournalEntry, OutputJournal, OutputJournalEntry, OutputJournalError};
     use crate::engine::{EngineEvent, OrderAck};
+    use crate::journal_adapter::{
+        JournalAdapterError, JournalInputEntry, JournalOutputAppender, JournalOutputEntry,
+    };
     use crate::order::{Command, Order};
     use crate::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
@@ -100,41 +102,41 @@ mod tests {
         assert_eq!(manager.last_input_seq(&btc()), None);
     }
 
-    struct InMemoryOutputJournal {
-        entries: Vec<OutputJournalEntry>,
+    struct InMemoryJournalOutputAppender {
+        entries: Vec<JournalOutputEntry>,
     }
-    
-    impl InMemoryOutputJournal {
+
+    impl InMemoryJournalOutputAppender {
         fn new() -> Self {
             Self {
                 entries: Vec::new(),
             }
         }
     }
-    
-    impl OutputJournal for InMemoryOutputJournal {
+
+    impl JournalOutputAppender for InMemoryJournalOutputAppender {
         fn append(
             &mut self,
             command_id: CommandId,
             journal_seq: JournalSeq,
             events: Vec<EngineEvent>,
-        ) -> Result<(), OutputJournalError> {
-            self.entries.push(OutputJournalEntry {
+        ) -> Result<(), JournalAdapterError> {
+            self.entries.push(JournalOutputEntry {
                 command_id,
                 journal_seq,
                 events,
             });
-    
+
             Ok(())
         }
-    
-        fn read_all(&self) -> Vec<OutputJournalEntry> {
+
+        fn read_all(&self) -> Vec<JournalOutputEntry> {
             self.entries.clone()
         }
     }
 
-    fn input_entry(seq: u64, command_id: u64, order_id: u64, symbol: Symbol) -> InputJournalEntry {
-        InputJournalEntry {
+    fn input_entry(seq: u64, command_id: u64, order_id: u64, symbol: Symbol) -> JournalInputEntry {
+        JournalInputEntry {
             seq: JournalSeq(seq),
             command_id: CommandId(command_id),
             command: Command::PlaceLimit(Order {
@@ -153,7 +155,7 @@ mod tests {
         manager.add_symbol(btc());
         manager.add_symbol(eth());
 
-        let mut output = InMemoryOutputJournal::new();
+        let mut output = InMemoryJournalOutputAppender::new();
 
         assert_eq!(
             manager.process_entry(input_entry(1, 10, 100, btc()), &mut output),
@@ -180,31 +182,28 @@ mod tests {
         let mut manager = RuntimeManager::new();
         manager.add_symbol(btc());
 
-        let mut output = InMemoryOutputJournal::new();
+        let mut output = InMemoryJournalOutputAppender::new();
 
-        let result = manager.process_entry(
-            input_entry(1, 10, 100, eth()),
-            &mut output,
-        );
+        let result = manager.process_entry(input_entry(1, 10, 100, eth()), &mut output);
 
         assert_eq!(result, Err(RuntimeManagerError::UnknownSymbol));
         assert_eq!(manager.last_input_seq(&btc()), Some(None));
         assert_eq!(output.read_all(), Vec::new());
     }
 
-    struct FailingOutputJournal;
+    struct FailingJournalOutputAppender;
 
-    impl OutputJournal for FailingOutputJournal {
+    impl JournalOutputAppender for FailingJournalOutputAppender {
         fn append(
             &mut self,
             _command_id: CommandId,
             _journal_seq: JournalSeq,
             _events: Vec<EngineEvent>,
-        ) -> Result<(), OutputJournalError> {
-            Err(OutputJournalError::AppendFailed)
+        ) -> Result<(), JournalAdapterError> {
+            Err(JournalAdapterError::AppendFailed)
         }
 
-        fn read_all(&self) -> Vec<OutputJournalEntry> {
+        fn read_all(&self) -> Vec<JournalOutputEntry> {
             Vec::new()
         }
     }
@@ -214,12 +213,9 @@ mod tests {
         let mut manager = RuntimeManager::new();
         manager.add_symbol(btc());
 
-        let mut output = FailingOutputJournal;
+        let mut output = FailingJournalOutputAppender;
 
-        let result = manager.process_entry(
-            input_entry(1, 10, 100, btc()),
-            &mut output,
-        );
+        let result = manager.process_entry(input_entry(1, 10, 100, btc()), &mut output);
 
         assert_eq!(result, Err(RuntimeManagerError::OutputAppendFailed));
         assert_eq!(manager.last_input_seq(&btc()), Some(None));
@@ -231,7 +227,7 @@ mod tests {
         manager.add_symbol(btc());
         manager.add_symbol(eth());
 
-        let mut output = InMemoryOutputJournal::new();
+        let mut output = InMemoryJournalOutputAppender::new();
 
         let entries = vec![
             input_entry(1, 10, 100, btc()),
@@ -256,7 +252,7 @@ mod tests {
         let mut manager = RuntimeManager::new();
         manager.add_symbol(btc());
 
-        let mut output = InMemoryOutputJournal::new();
+        let mut output = InMemoryJournalOutputAppender::new();
 
         let entries = vec![
             input_entry(1, 10, 100, btc()),
@@ -276,12 +272,12 @@ mod tests {
         assert_eq!(output_entries[0].journal_seq, JournalSeq(1));
     }
 
-    struct FailOnSecondAppendOutputJournal {
-        entries: Vec<OutputJournalEntry>,
+    struct FailOnSecondAppendJournalOutputAppender {
+        entries: Vec<JournalOutputEntry>,
         append_count: usize,
     }
-    
-    impl FailOnSecondAppendOutputJournal {
+
+    impl FailOnSecondAppendJournalOutputAppender {
         fn new() -> Self {
             Self {
                 entries: Vec::new(),
@@ -289,30 +285,30 @@ mod tests {
             }
         }
     }
-    
-    impl OutputJournal for FailOnSecondAppendOutputJournal {
+
+    impl JournalOutputAppender for FailOnSecondAppendJournalOutputAppender {
         fn append(
             &mut self,
             command_id: CommandId,
             journal_seq: JournalSeq,
             events: Vec<EngineEvent>,
-        ) -> Result<(), OutputJournalError> {
+        ) -> Result<(), JournalAdapterError> {
             self.append_count += 1;
-    
+
             if self.append_count == 2 {
-                return Err(OutputJournalError::AppendFailed);
+                return Err(JournalAdapterError::AppendFailed);
             }
-    
-            self.entries.push(OutputJournalEntry {
+
+            self.entries.push(JournalOutputEntry {
                 command_id,
                 journal_seq,
                 events,
             });
-    
+
             Ok(())
         }
-    
-        fn read_all(&self) -> Vec<OutputJournalEntry> {
+
+        fn read_all(&self) -> Vec<JournalOutputEntry> {
             self.entries.clone()
         }
     }
@@ -323,7 +319,7 @@ mod tests {
         manager.add_symbol(btc());
         manager.add_symbol(eth());
 
-        let mut output = FailOnSecondAppendOutputJournal::new();
+        let mut output = FailOnSecondAppendJournalOutputAppender::new();
 
         let entries = vec![
             input_entry(1, 10, 100, btc()),

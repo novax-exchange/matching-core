@@ -1,13 +1,13 @@
-use crate::journal::{OutputJournal, OutputJournalError};
+use crate::journal_adapter::{JournalAdapterError, JournalOutputAppender};
 use crate::output_committer::OutputCommitter;
 use crate::output_queue::OutputQueue;
 
 pub fn run_output_commit_step(
     committer: &mut OutputCommitter,
     queue: &mut OutputQueue,
-    journal: &mut dyn OutputJournal,
+    journal: &mut dyn JournalOutputAppender,
     max_requests: usize,
-) -> Result<usize, OutputJournalError> {
+) -> Result<usize, JournalAdapterError> {
     let requests = queue.drain_batch(max_requests);
     let mut remaining = requests.into_iter();
     let mut committed = 0;

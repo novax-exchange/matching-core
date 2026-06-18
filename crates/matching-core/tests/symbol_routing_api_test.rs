@@ -1,14 +1,12 @@
 use matching_core::bounded_handoff::BoundedHandoff;
-use matching_core::journal::InputJournalEntry;
+use matching_core::journal_adapter::JournalInputEntry;
 use matching_core::order::{Command, Order};
 use matching_core::symbol_routing::{SymbolRouting, SymbolRoutingError};
-use matching_core::types::{
-    CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol,
-};
+use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 use std::collections::HashMap;
 
-fn command_entry(seq: u64, symbol: Symbol) -> InputJournalEntry {
-    InputJournalEntry {
+fn command_entry(seq: u64, symbol: Symbol) -> JournalInputEntry {
+    JournalInputEntry {
         seq: JournalSeq(seq),
         command_id: CommandId(seq),
         command: Command::PlaceLimit(Order {

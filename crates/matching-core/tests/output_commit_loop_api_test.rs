@@ -1,16 +1,18 @@
 use matching_core::engine::{EngineEvent, OrderAck};
-use matching_core::journal::{OutputJournal, OutputJournalEntry, OutputJournalError};
+use matching_core::journal_adapter::{
+    JournalAdapterError, JournalOutputAppender, JournalOutputEntry,
+};
 use matching_core::output_commit_loop::run_output_commit_step;
 use matching_core::output_committer::{OutputCommitRequest, OutputCommitter};
 use matching_core::output_queue::OutputQueue;
 use matching_core::types::{CommandId, JournalSeq, OrderId};
 
-struct FailOnSecondAppendOutputJournal {
-    entries: Vec<OutputJournalEntry>,
+struct FailOnSecondAppendJournalOutputAppender {
+    entries: Vec<JournalOutputEntry>,
     append_count: usize,
 }
 
-impl FailOnSecondAppendOutputJournal {
+impl FailOnSecondAppendJournalOutputAppender {
     fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -19,20 +21,20 @@ impl FailOnSecondAppendOutputJournal {
     }
 }
 
-impl OutputJournal for FailOnSecondAppendOutputJournal {
+impl JournalOutputAppender for FailOnSecondAppendJournalOutputAppender {
     fn append(
         &mut self,
         command_id: CommandId,
         journal_seq: JournalSeq,
         events: Vec<EngineEvent>,
-    ) -> Result<(), OutputJournalError> {
+    ) -> Result<(), JournalAdapterError> {
         self.append_count += 1;
 
         if self.append_count == 2 {
-            return Err(OutputJournalError::AppendFailed);
+            return Err(JournalAdapterError::AppendFailed);
         }
 
-        self.entries.push(OutputJournalEntry {
+        self.entries.push(JournalOutputEntry {
             command_id,
             journal_seq,
             events,
@@ -41,7 +43,7 @@ impl OutputJournal for FailOnSecondAppendOutputJournal {
         Ok(())
     }
 
-    fn read_all(&self) -> Vec<OutputJournalEntry> {
+    fn read_all(&self) -> Vec<JournalOutputEntry> {
         self.entries.clone()
     }
 }
@@ -62,7 +64,7 @@ fn request(seq: u64) -> OutputCommitRequest {
 fn output_commit_loop_requeues_failed_and_uncommitted_requests() {
     let mut queue = OutputQueue::new(4);
     let mut committer = OutputCommitter::new();
-    let mut journal = FailOnSecondAppendOutputJournal::new();
+    let mut journal = FailOnSecondAppendJournalOutputAppender::new();
 
     assert_eq!(queue.enqueue(request(1)), Ok(()));
     assert_eq!(queue.enqueue(request(2)), Ok(()));
@@ -70,7 +72,7 @@ fn output_commit_loop_requeues_failed_and_uncommitted_requests() {
 
     let result = run_output_commit_step(&mut committer, &mut queue, &mut journal, 10);
 
-    assert_eq!(result, Err(OutputJournalError::AppendFailed));
+    assert_eq!(result, Err(JournalAdapterError::AppendFailed));
     assert_eq!(journal.read_all().len(), 1);
 
     let remaining = queue.drain_batch(10);

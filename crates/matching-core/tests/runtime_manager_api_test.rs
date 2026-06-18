@@ -1,18 +1,16 @@
 use matching_core::engine::EngineEvent;
-use matching_core::journal::{
-    InputJournalEntry, OutputJournal, OutputJournalEntry, OutputJournalError,
+use matching_core::journal_adapter::{
+    JournalAdapterError, JournalInputEntry, JournalOutputAppender, JournalOutputEntry,
 };
 use matching_core::order::{Command, Order};
 use matching_core::runtime_manager::{RuntimeManager, RuntimeManagerError};
-use matching_core::types::{
-    CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol,
-};
+use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
-struct TestOutputJournal {
-    entries: Vec<OutputJournalEntry>,
+struct TestJournalOutputAppender {
+    entries: Vec<JournalOutputEntry>,
 }
 
-impl TestOutputJournal {
+impl TestJournalOutputAppender {
     fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -20,14 +18,14 @@ impl TestOutputJournal {
     }
 }
 
-impl OutputJournal for TestOutputJournal {
+impl JournalOutputAppender for TestJournalOutputAppender {
     fn append(
         &mut self,
         command_id: CommandId,
         journal_seq: JournalSeq,
         events: Vec<EngineEvent>,
-    ) -> Result<(), OutputJournalError> {
-        self.entries.push(OutputJournalEntry {
+    ) -> Result<(), JournalAdapterError> {
+        self.entries.push(JournalOutputEntry {
             command_id,
             journal_seq,
             events,
@@ -36,13 +34,13 @@ impl OutputJournal for TestOutputJournal {
         Ok(())
     }
 
-    fn read_all(&self) -> Vec<OutputJournalEntry> {
+    fn read_all(&self) -> Vec<JournalOutputEntry> {
         self.entries.clone()
     }
 }
 
-fn command_entry(seq: u64, symbol: Symbol) -> InputJournalEntry {
-    InputJournalEntry {
+fn command_entry(seq: u64, symbol: Symbol) -> JournalInputEntry {
+    JournalInputEntry {
         seq: JournalSeq(seq),
         command_id: CommandId(seq),
         command: Command::PlaceLimit(Order {
@@ -59,7 +57,7 @@ fn command_entry(seq: u64, symbol: Symbol) -> InputJournalEntry {
 fn runtime_manager_is_available_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
     let mut manager = RuntimeManager::new();
-    let mut output = TestOutputJournal::new();
+    let mut output = TestJournalOutputAppender::new();
 
     manager.add_symbol(btc.clone());
 
@@ -75,7 +73,7 @@ fn runtime_manager_error_is_available_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
     let mut manager = RuntimeManager::new();
-    let mut output = TestOutputJournal::new();
+    let mut output = TestJournalOutputAppender::new();
 
     manager.add_symbol(btc);
 

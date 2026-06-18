@@ -1,5 +1,4 @@
-
-use crate::journal::InputJournalEntry;
+use crate::journal_adapter::JournalInputEntry;
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9,7 +8,7 @@ pub enum BoundedHandoffError {
 
 pub struct BoundedHandoff {
     capacity: usize,
-    entries: VecDeque<InputJournalEntry>,
+    entries: VecDeque<JournalInputEntry>,
 }
 
 impl BoundedHandoff {
@@ -20,10 +19,7 @@ impl BoundedHandoff {
         }
     }
 
-    pub fn enqueue(
-        &mut self, 
-        entry: InputJournalEntry
-    ) -> Result<(), BoundedHandoffError> {
+    pub fn enqueue(&mut self, entry: JournalInputEntry) -> Result<(), BoundedHandoffError> {
         if self.entries.len() >= self.capacity {
             return Err(BoundedHandoffError::QueueFull);
         }
@@ -32,24 +28,18 @@ impl BoundedHandoff {
         Ok(())
     }
 
-    pub fn prepend_entries(
-        &mut self,
-        entries: Vec<InputJournalEntry>,
-    ) {
+    pub fn prepend_entries(&mut self, entries: Vec<JournalInputEntry>) {
         for entry in entries.into_iter().rev() {
             self.entries.push_front(entry);
         }
     }
 
-    pub fn drain_batch(
-        &mut self,
-        max_entries: usize
-    ) -> Vec<InputJournalEntry> {
+    pub fn drain_batch(&mut self, max_entries: usize) -> Vec<JournalInputEntry> {
         let mut drained = Vec::new();
 
         for _ in 0..max_entries {
             match self.entries.pop_front() {
-                Some(entry) =>  drained.push(entry),
+                Some(entry) => drained.push(entry),
                 None => break,
             }
         }
@@ -81,7 +71,7 @@ impl BoundedHandoff {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::journal::InputJournalEntry;
+    use crate::journal_adapter::JournalInputEntry;
     use crate::order::{Command, Order};
     use crate::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
@@ -89,8 +79,8 @@ mod tests {
         Symbol("BTC-USDT".to_string())
     }
 
-    fn input_entry(seq: u64, command_id: u64, order_id: u64) -> InputJournalEntry {
-        InputJournalEntry {
+    fn input_entry(seq: u64, command_id: u64, order_id: u64) -> JournalInputEntry {
+        JournalInputEntry {
             seq: JournalSeq(seq),
             command_id: CommandId(command_id),
             command: Command::PlaceLimit(Order {
@@ -191,10 +181,7 @@ mod tests {
 
         assert_eq!(queue.enqueue(input_entry(3, 12, 102)), Ok(()));
 
-        queue.prepend_entries(vec![
-            input_entry(1, 10, 100),
-            input_entry(2, 11, 101),
-        ]);
+        queue.prepend_entries(vec![input_entry(1, 10, 100), input_entry(2, 11, 101)]);
 
         let entries = queue.drain_batch(10);
 

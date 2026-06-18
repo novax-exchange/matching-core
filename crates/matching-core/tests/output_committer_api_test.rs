@@ -1,13 +1,15 @@
 use matching_core::engine::{EngineEvent, OrderAck};
-use matching_core::journal::{OutputJournal, OutputJournalEntry, OutputJournalError};
+use matching_core::journal_adapter::{
+    JournalAdapterError, JournalOutputAppender, JournalOutputEntry,
+};
 use matching_core::output_committer::{OutputCommitRequest, OutputCommitter};
 use matching_core::types::{CommandId, JournalSeq, OrderId};
 
-struct TestOutputJournal {
-    entries: Vec<OutputJournalEntry>,
+struct TestJournalOutputAppender {
+    entries: Vec<JournalOutputEntry>,
 }
 
-impl TestOutputJournal {
+impl TestJournalOutputAppender {
     fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -15,14 +17,14 @@ impl TestOutputJournal {
     }
 }
 
-impl OutputJournal for TestOutputJournal {
+impl JournalOutputAppender for TestJournalOutputAppender {
     fn append(
         &mut self,
         command_id: CommandId,
         journal_seq: JournalSeq,
         events: Vec<EngineEvent>,
-    ) -> Result<(), OutputJournalError> {
-        self.entries.push(OutputJournalEntry {
+    ) -> Result<(), JournalAdapterError> {
+        self.entries.push(JournalOutputEntry {
             command_id,
             journal_seq,
             events,
@@ -31,7 +33,7 @@ impl OutputJournal for TestOutputJournal {
         Ok(())
     }
 
-    fn read_all(&self) -> Vec<OutputJournalEntry> {
+    fn read_all(&self) -> Vec<JournalOutputEntry> {
         self.entries.clone()
     }
 }
@@ -50,7 +52,7 @@ fn request(seq: u64, command_id: u64, order_id: u64) -> OutputCommitRequest {
 
 #[test]
 fn output_committer_is_available_from_public_api() {
-    let mut journal = TestOutputJournal::new();
+    let mut journal = TestJournalOutputAppender::new();
     let mut committer = OutputCommitter::new();
 
     assert_eq!(

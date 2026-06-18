@@ -1,28 +1,28 @@
 use crate::bounded_handoff::BoundedHandoff;
-use crate::journal::InputJournalEntry;
+use crate::journal_adapter::JournalInputEntry;
 use crate::types::Symbol;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SymbolRoutingError {
     UnknownSymbol,
-    QueueFull
+    QueueFull,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoutedInput {
     pub symbol: Symbol,
-    pub entry: InputJournalEntry,
+    pub entry: JournalInputEntry,
 }
 
 pub struct SymbolRouting {
-    symbols: HashSet<Symbol>
+    symbols: HashSet<Symbol>,
 }
 
 impl SymbolRouting {
     pub fn new() -> Self {
-        Self { 
-            symbols: HashSet::new(), 
+        Self {
+            symbols: HashSet::new(),
         }
     }
 
@@ -32,10 +32,10 @@ impl SymbolRouting {
 
     pub fn route_batch(
         &self,
-        entries: Vec<InputJournalEntry>,
-    ) -> Result<HashMap<Symbol, Vec<InputJournalEntry>>, SymbolRoutingError> {
+        entries: Vec<JournalInputEntry>,
+    ) -> Result<HashMap<Symbol, Vec<JournalInputEntry>>, SymbolRoutingError> {
         let mut routed = HashMap::new();
-        
+
         for entry in entries {
             let routed_input = self.route_entry(entry)?;
 
@@ -48,10 +48,7 @@ impl SymbolRouting {
         Ok(routed)
     }
 
-    pub fn route_entry(
-        &self,
-        entry: InputJournalEntry,
-    ) -> Result<RoutedInput, SymbolRoutingError>{
+    pub fn route_entry(&self, entry: JournalInputEntry) -> Result<RoutedInput, SymbolRoutingError> {
         let symbol = entry.command.symbol().clone();
 
         if !self.symbols.contains(&symbol) {
@@ -63,7 +60,7 @@ impl SymbolRouting {
 
     pub fn route_batch_to_queues(
         &self,
-        entries: Vec<InputJournalEntry>,
+        entries: Vec<JournalInputEntry>,
         queues: &mut HashMap<Symbol, BoundedHandoff>,
     ) -> Result<usize, SymbolRoutingError> {
         let mut routed = 0;
@@ -78,7 +75,7 @@ impl SymbolRouting {
 
     pub fn route_entry_to_queue(
         &self,
-        entry: InputJournalEntry,
+        entry: JournalInputEntry,
         queues: &mut HashMap<Symbol, BoundedHandoff>,
     ) -> Result<(), SymbolRoutingError> {
         let routed = self.route_entry(entry)?;
@@ -90,7 +87,7 @@ impl SymbolRouting {
         queue
             .enqueue(routed.entry)
             .map_err(|_| SymbolRoutingError::QueueFull)?;
-            
+
         Ok(())
     }
 }
@@ -98,7 +95,7 @@ impl SymbolRouting {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::journal::InputJournalEntry;
+    use crate::journal_adapter::JournalInputEntry;
     use crate::order::{Command, Order};
     use crate::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
@@ -110,8 +107,8 @@ mod tests {
         Symbol("ETH-USDT".to_string())
     }
 
-    fn input_entry(seq: u64, command_id: u64, order_id: u64, symbol: Symbol) -> InputJournalEntry {
-        InputJournalEntry {
+    fn input_entry(seq: u64, command_id: u64, order_id: u64, symbol: Symbol) -> JournalInputEntry {
+        JournalInputEntry {
             seq: JournalSeq(seq),
             command_id: CommandId(command_id),
             command: Command::PlaceLimit(Order {
@@ -206,10 +203,7 @@ mod tests {
         queues.insert(eth(), BoundedHandoff::new(2));
 
         assert_eq!(
-            router.route_entry_to_queue(
-                input_entry(1, 10, 100, btc()),
-                &mut queues,
-            ),
+            router.route_entry_to_queue(input_entry(1, 10, 100, btc()), &mut queues,),
             Ok(())
         );
 
@@ -230,18 +224,12 @@ mod tests {
         queues.insert(btc(), BoundedHandoff::new(1));
 
         assert_eq!(
-            router.route_entry_to_queue(
-                input_entry(1, 10, 100, btc()),
-                &mut queues,
-            ),
+            router.route_entry_to_queue(input_entry(1, 10, 100, btc()), &mut queues,),
             Ok(())
         );
 
         assert_eq!(
-            router.route_entry_to_queue(
-                input_entry(2, 11, 101, btc()),
-                &mut queues,
-            ),
+            router.route_entry_to_queue(input_entry(2, 11, 101, btc()), &mut queues,),
             Err(SymbolRoutingError::QueueFull)
         );
 
