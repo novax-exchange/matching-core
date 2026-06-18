@@ -1,5 +1,5 @@
-use crate::journal::InputJournalEntry;
 use crate::bounded_handoff::BoundedHandoff;
+use crate::journal::InputJournalEntry;
 use crate::types::Symbol;
 use std::collections::{HashMap, HashSet};
 
@@ -18,9 +18,6 @@ pub struct RoutedInput {
 pub struct SymbolRouting {
     symbols: HashSet<Symbol>
 }
-
-pub type SymbolRouterError = SymbolRoutingError;
-pub type SymbolRouter = SymbolRouting;
 
 impl SymbolRouting {
     pub fn new() -> Self {

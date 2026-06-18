@@ -7,14 +7,10 @@ pub enum BoundedHandoffError {
     QueueFull,
 }
 
-pub type InputQueueError = BoundedHandoffError;
-
 pub struct BoundedHandoff {
     capacity: usize,
     entries: VecDeque<InputJournalEntry>,
 }
-
-pub type PerSymbolInputQueue = BoundedHandoff;
 
 impl BoundedHandoff {
     pub fn new(capacity: usize) -> Self {

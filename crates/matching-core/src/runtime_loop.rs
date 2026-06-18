@@ -61,11 +61,11 @@ pub fn run_symbol_runtime_step(
 
 pub fn run_symbol_runtime_step_to_output_queue(
     runtime: &mut SymbolRuntime,
-    input_queue: &mut BoundedHandoff,
+    handoff: &mut BoundedHandoff,
     output_queue: &mut OutputQueue,
     max_entries: usize,
 ) -> Result<usize, OutputQueueError> {
-    let entries = input_queue.drain_batch(max_entries);
+    let entries = handoff.drain_batch(max_entries);
     let mut remaining = entries.into_iter();
     let mut processed = 0;
 
@@ -75,7 +75,7 @@ pub fn run_symbol_runtime_step_to_output_queue(
             Err(error) => {
                 let mut to_prepend = vec![entry];
                 to_prepend.extend(remaining);
-                input_queue.prepend_entries(to_prepend);
+                handoff.prepend_entries(to_prepend);
                 return Err(error);
             }
         }
@@ -265,22 +265,22 @@ mod tests {
 
     #[test]
     fn runtime_loop_step_can_enqueue_output_requests_without_advancing_safe_point() {
-        let mut input_queue = BoundedHandoff::new(4);
+        let mut handoff = BoundedHandoff::new(4);
         let mut output_queue = OutputQueue::new(4);
         let mut runtime = SymbolRuntime::new(symbol());
 
-        assert_eq!(input_queue.enqueue(input_entry(1, 10, 100)), Ok(()));
-        assert_eq!(input_queue.enqueue(input_entry(2, 11, 101)), Ok(()));
+        assert_eq!(handoff.enqueue(input_entry(1, 10, 100)), Ok(()));
+        assert_eq!(handoff.enqueue(input_entry(2, 11, 101)), Ok(()));
 
         let processed = run_symbol_runtime_step_to_output_queue(
             &mut runtime,
-            &mut input_queue,
+            &mut handoff,
             &mut output_queue,
             10,
         );
 
         assert_eq!(processed, Ok(2));
-        assert_eq!(input_queue.len(), 0);
+        assert_eq!(handoff.len(), 0);
         assert_eq!(runtime.last_input_seq(), None);
 
         let requests = output_queue.drain_batch(10);
@@ -291,17 +291,17 @@ mod tests {
 
     #[test]
     fn runtime_loop_step_requeues_unprocessed_input_when_output_queue_is_full() {
-        let mut input_queue = BoundedHandoff::new(4);
+        let mut handoff = BoundedHandoff::new(4);
         let mut output_queue = OutputQueue::new(1);
         let mut runtime = SymbolRuntime::new(symbol());
 
-        assert_eq!(input_queue.enqueue(input_entry(1, 10, 100)), Ok(()));
-        assert_eq!(input_queue.enqueue(input_entry(2, 11, 101)), Ok(()));
-        assert_eq!(input_queue.enqueue(input_entry(3, 12, 102)), Ok(()));
+        assert_eq!(handoff.enqueue(input_entry(1, 10, 100)), Ok(()));
+        assert_eq!(handoff.enqueue(input_entry(2, 11, 101)), Ok(()));
+        assert_eq!(handoff.enqueue(input_entry(3, 12, 102)), Ok(()));
 
         let result = run_symbol_runtime_step_to_output_queue(
             &mut runtime,
-            &mut input_queue,
+            &mut handoff,
             &mut output_queue,
             10,
         );
@@ -313,7 +313,7 @@ mod tests {
         assert_eq!(output_requests.len(), 1);
         assert_eq!(output_requests[0].journal_seq, JournalSeq(1));
 
-        let remaining_inputs = input_queue.drain_batch(10);
+        let remaining_inputs = handoff.drain_batch(10);
         assert_eq!(remaining_inputs.len(), 2);
         assert_eq!(remaining_inputs[0].seq, JournalSeq(2));
         assert_eq!(remaining_inputs[1].seq, JournalSeq(3));

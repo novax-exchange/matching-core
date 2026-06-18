@@ -1,7 +1,6 @@
 pub mod bounded_handoff;
 pub mod command_ingress;
 pub mod engine;
-pub mod input_queue;
 pub mod journal;
 pub mod order;
 pub mod order_book;
@@ -12,7 +11,6 @@ pub mod replay;
 pub mod runtime_loop;
 pub mod runtime_manager;
 pub mod snapshot;
-pub mod symbol_router;
 pub mod symbol_routing;
 pub mod symbol_runtime;
 pub mod types;

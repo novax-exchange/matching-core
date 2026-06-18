@@ -85,17 +85,17 @@ fn runtime_loop_step_is_available_from_public_api() {
 
 #[test]
 fn runtime_loop_step_to_output_queue_is_available_from_public_api() {
-    let mut input_queue = BoundedHandoff::new(4);
+    let mut handoff = BoundedHandoff::new(4);
     let mut output_queue = OutputQueue::new(4);
     let mut runtime = SymbolRuntime::new(symbol());
 
-    assert_eq!(input_queue.enqueue(command_entry(1)), Ok(()));
-    assert_eq!(input_queue.enqueue(command_entry(2)), Ok(()));
+    assert_eq!(handoff.enqueue(command_entry(1)), Ok(()));
+    assert_eq!(handoff.enqueue(command_entry(2)), Ok(()));
 
     assert_eq!(
         run_symbol_runtime_step_to_output_queue(
             &mut runtime,
-            &mut input_queue,
+            &mut handoff,
             &mut output_queue,
             10,
         ),
@@ -103,7 +103,7 @@ fn runtime_loop_step_to_output_queue_is_available_from_public_api() {
     );
 
     assert_eq!(runtime.last_input_seq(), None);
-    assert_eq!(input_queue.len(), 0);
+    assert_eq!(handoff.len(), 0);
 
     let requests = output_queue.drain_batch(10);
     assert_eq!(requests.len(), 2);
