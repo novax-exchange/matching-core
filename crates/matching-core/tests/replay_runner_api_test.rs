@@ -80,7 +80,7 @@ fn snapshot_after(journal: &TestJournalInputReader, count: usize) -> SymbolRunti
         let request = runtime.process_entry_to_output_request(entry);
         runtime
             .mark_output_committed(request.journal_seq)
-            .expect("test fixture should commit a contiguous prefix");
+            .expect("test fixture should commit an ordered prefix");
     }
 
     runtime.snapshot().expect("snapshot requires a safe point")

@@ -1,13 +1,14 @@
 use matching_core::bounded_handoff::BoundedHandoff;
 use matching_core::journal_adapter::{
-    JournalAdapterError, JournalInputEntry, JournalOutputAppender, JournalOutputCommitMetadata,
-    JournalOutputEntry,
+    JournalAdapterError, JournalInputEntry, JournalInputReader, JournalOutputAppender,
+    JournalOutputCommitMetadata, JournalOutputEntry,
 };
 use matching_core::matching_engine::EngineEvent;
 use matching_core::order::{Command, Order};
 use matching_core::output_commit_boundary::{
     OutputBatchQueryStatus, OutputCommitBlockAction, OutputCommitOutcome, OutputJournalClient,
 };
+use matching_core::replay_runner::{ReplayResult, ReplayRunner};
 use matching_core::runtime_loop::{RuntimeLoop, RuntimeLoopError, RuntimeLoopTickLimits};
 use matching_core::runtime_manager::RuntimeManager;
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
@@ -177,6 +178,103 @@ fn command_entry(seq: u64, symbol: Symbol) -> JournalInputEntry {
             quantity: Quantity(1),
         }),
     }
+}
+
+fn limit_entry(
+    seq: u64,
+    command_id: u64,
+    order_id: u64,
+    symbol: Symbol,
+    side: Side,
+    price: u64,
+    quantity: u64,
+) -> JournalInputEntry {
+    JournalInputEntry {
+        seq: JournalSeq(seq),
+        command_id: CommandId(command_id),
+        command: Command::PlaceLimit(Order {
+            order_id: OrderId(order_id),
+            symbol,
+            side,
+            price: Price(price),
+            quantity: Quantity(quantity),
+        }),
+    }
+}
+
+fn cancel_entry(seq: u64, command_id: u64, order_id: u64, symbol: Symbol) -> JournalInputEntry {
+    JournalInputEntry {
+        seq: JournalSeq(seq),
+        command_id: CommandId(command_id),
+        command: Command::Cancel {
+            order_id: OrderId(order_id),
+            symbol,
+        },
+    }
+}
+
+#[derive(Clone)]
+struct RuntimeLoopReplayJournal {
+    entries: Vec<JournalInputEntry>,
+}
+
+impl RuntimeLoopReplayJournal {
+    fn for_symbol(entries: &[JournalInputEntry], symbol: &Symbol) -> Self {
+        Self {
+            entries: entries
+                .iter()
+                .filter(|entry| entry.command.symbol() == symbol)
+                .cloned()
+                .collect(),
+        }
+    }
+}
+
+impl JournalInputReader for RuntimeLoopReplayJournal {
+    fn append(&mut self, command_id: CommandId, command: Command) -> JournalSeq {
+        let seq = JournalSeq(self.entries.len() as u64 + 1);
+
+        self.entries.push(JournalInputEntry {
+            seq,
+            command_id,
+            command,
+        });
+
+        seq
+    }
+
+    fn read_from(&self, from: JournalSeq) -> Vec<JournalInputEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.seq >= from)
+            .cloned()
+            .collect()
+    }
+
+    fn latest_seq(&self) -> Option<JournalSeq> {
+        self.entries.last().map(|entry| entry.seq)
+    }
+}
+
+fn normalized_output_for_symbol(
+    output: &dyn JournalOutputAppender,
+    symbol: &Symbol,
+) -> Vec<JournalOutputEntry> {
+    output
+        .read_all()
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .output_commit_metadata
+                .as_ref()
+                .map(|metadata| &metadata.symbol == symbol)
+                .unwrap_or(false)
+        })
+        .map(|mut entry| {
+            entry.output_commit_metadata = None;
+            entry
+        })
+        .collect()
 }
 
 #[test]
@@ -412,6 +510,55 @@ fn runtime_loop_can_be_created_with_registered_symbols_and_handoffs_together() {
     assert_eq!(report_symbols, vec![btc.clone(), eth.clone()]);
     assert_eq!(runtime_loop.last_input_seq(&btc), Some(Some(JournalSeq(1))));
     assert_eq!(runtime_loop.last_input_seq(&eth), Some(Some(JournalSeq(1))));
+}
+
+#[test]
+fn runtime_loop_live_path_matches_replay_output_checksum_and_safe_point_per_symbol() {
+    let btc = Symbol("BTC-USDT".to_string());
+    let eth = Symbol("ETH-USDT".to_string());
+    let entries = vec![
+        limit_entry(1, 10, 100, btc.clone(), Side::Sell, 100, 1),
+        limit_entry(2, 20, 200, eth.clone(), Side::Buy, 50, 1),
+        limit_entry(3, 11, 101, btc.clone(), Side::Buy, 100, 1),
+        cancel_entry(4, 21, 200, eth.clone()),
+    ];
+    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![eth.clone(), btc.clone()], 8, 8);
+    let mut journal_client = OutputJournalClient::new();
+    let mut output = AcceptingJournalOutputAppender::new();
+
+    assert_eq!(
+        runtime_loop.enqueue_inputs(entries.clone()),
+        Ok(entries.len())
+    );
+
+    let report = runtime_loop
+        .run_tick(
+            &mut journal_client,
+            &mut output,
+            RuntimeLoopTickLimits {
+                max_input_entries_per_symbol: 8,
+                max_output_requests_per_symbol: 8,
+            },
+        )
+        .expect("runtime loop should process all queued inputs");
+
+    assert!(!report.has_work_remaining());
+
+    for symbol in [btc, eth] {
+        let replay_journal = RuntimeLoopReplayJournal::for_symbol(&entries, &symbol);
+        let replay_result = ReplayRunner::new(symbol.clone()).replay_result(&replay_journal);
+        let live_result = ReplayResult {
+            checksum: runtime_loop
+                .checksum(&symbol)
+                .expect("runtime loop should expose registered symbol checksum"),
+            last_replayed_seq: runtime_loop
+                .last_input_seq(&symbol)
+                .expect("runtime loop should expose registered symbol safe point"),
+            output_entries: normalized_output_for_symbol(&output, &symbol),
+        };
+
+        assert!(live_result.compare_with(&replay_result).is_match());
+    }
 }
 
 #[test]

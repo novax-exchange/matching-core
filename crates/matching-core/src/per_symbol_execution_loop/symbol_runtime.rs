@@ -21,8 +21,8 @@ pub struct SymbolRuntime {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SafePointError {
-    NonContiguousCommit {
-        expected: JournalSeq,
+    NonMonotonicCommit {
+        last_committed: Option<JournalSeq>,
         actual: JournalSeq,
     },
 }
@@ -97,14 +97,13 @@ impl SymbolRuntime {
     }
 
     pub fn mark_output_committed(&mut self, journal_seq: JournalSeq) -> Result<(), SafePointError> {
-        let expected = match self.last_input_seq {
-            Some(last_input_seq) => JournalSeq(last_input_seq.0 + 1),
-            None => JournalSeq(1),
-        };
-
-        if journal_seq != expected {
-            return Err(SafePointError::NonContiguousCommit {
-                expected,
+        if self
+            .last_input_seq
+            .map(|last_input_seq| journal_seq <= last_input_seq)
+            .unwrap_or(false)
+        {
+            return Err(SafePointError::NonMonotonicCommit {
+                last_committed: self.last_input_seq,
                 actual: journal_seq,
             });
         }
@@ -565,27 +564,35 @@ mod tests {
     }
 
     #[test]
-    fn mark_output_committed_rejects_non_contiguous_safe_point() {
+    fn mark_output_committed_allows_global_sequence_gaps_for_one_symbol() {
         let mut runtime = SymbolRuntime::new(symbol());
 
+        assert_eq!(runtime.mark_output_committed(JournalSeq(2)), Ok(()));
+        assert_eq!(runtime.last_input_seq(), Some(JournalSeq(2)));
+        assert_eq!(runtime.mark_output_committed(JournalSeq(5)), Ok(()));
+        assert_eq!(runtime.last_input_seq(), Some(JournalSeq(5)));
+    }
+
+    #[test]
+    fn mark_output_committed_rejects_non_monotonic_safe_point() {
+        let mut runtime = SymbolRuntime::new(symbol());
+
+        assert_eq!(runtime.mark_output_committed(JournalSeq(3)), Ok(()));
         assert_eq!(
             runtime.mark_output_committed(JournalSeq(2)),
-            Err(SafePointError::NonContiguousCommit {
-                expected: JournalSeq(1),
+            Err(SafePointError::NonMonotonicCommit {
+                last_committed: Some(JournalSeq(3)),
                 actual: JournalSeq(2),
             })
         );
-        assert_eq!(runtime.last_input_seq(), None);
-
-        assert_eq!(runtime.mark_output_committed(JournalSeq(1)), Ok(()));
         assert_eq!(
             runtime.mark_output_committed(JournalSeq(3)),
-            Err(SafePointError::NonContiguousCommit {
-                expected: JournalSeq(2),
+            Err(SafePointError::NonMonotonicCommit {
+                last_committed: Some(JournalSeq(3)),
                 actual: JournalSeq(3),
             })
         );
-        assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
+        assert_eq!(runtime.last_input_seq(), Some(JournalSeq(3)));
     }
 
     #[test]

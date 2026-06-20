@@ -12,7 +12,7 @@ use crate::per_symbol_execution_loop::{
     PerSymbolExecutionLoopOutputCommitStepError, PerSymbolExecutionLoopOutputCommitStepReport,
     SymbolRuntime,
 };
-use crate::types::{JournalSeq, Symbol};
+use crate::types::{Checksum, JournalSeq, Symbol};
 use std::collections::HashMap;
 
 const DEFAULT_PENDING_OUTPUT_CAPACITY: usize = 1024;
@@ -195,6 +195,10 @@ impl RuntimeManager {
         self.runtimes
             .get(symbol)
             .map(|runtime| runtime.last_input_seq())
+    }
+
+    pub fn checksum(&self, symbol: &Symbol) -> Option<Checksum> {
+        self.runtimes.get(symbol).map(SymbolRuntime::checksum)
     }
 
     pub fn pending_output_len(&self, symbol: &Symbol) -> Option<usize> {

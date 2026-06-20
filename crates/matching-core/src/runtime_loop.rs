@@ -7,7 +7,7 @@ use crate::output_commit_boundary::{
 use crate::runtime_manager::{
     RuntimeManager, RuntimeManagerError, RuntimeManagerRetryAwareStepReport, SymbolRuntimeStatus,
 };
-use crate::types::{JournalSeq, Symbol};
+use crate::types::{Checksum, JournalSeq, Symbol};
 use std::collections::HashMap;
 
 pub struct RuntimeLoop {
@@ -132,6 +132,10 @@ impl RuntimeLoop {
 
     pub fn last_input_seq(&self, symbol: &Symbol) -> Option<Option<JournalSeq>> {
         self.manager.last_input_seq(symbol)
+    }
+
+    pub fn checksum(&self, symbol: &Symbol) -> Option<Checksum> {
+        self.manager.checksum(symbol)
     }
 
     pub fn symbol_status(&self, symbol: &Symbol) -> Option<SymbolRuntimeStatus> {

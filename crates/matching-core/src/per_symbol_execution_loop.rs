@@ -407,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    fn safe_point_controller_rejects_non_contiguous_output_confirmations() {
+    fn safe_point_controller_allows_per_symbol_global_sequence_gaps() {
         let mut runtime = SymbolRuntime::new(symbol());
         let commit_result = OutputBatchCommitResult {
             committed_count: 2,
@@ -417,11 +417,27 @@ mod tests {
 
         assert_eq!(
             advance_runtime_safe_point_from_output_commit(&mut runtime, &commit_result),
-            Err(SafePointError::NonContiguousCommit {
-                expected: JournalSeq(2),
-                actual: JournalSeq(3),
+            Ok(2)
+        );
+        assert_eq!(runtime.last_input_seq(), Some(JournalSeq(3)));
+    }
+
+    #[test]
+    fn safe_point_controller_rejects_non_monotonic_output_confirmations() {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let commit_result = OutputBatchCommitResult {
+            committed_count: 2,
+            last_committed_seq: Some(JournalSeq(2)),
+            committed_seqs: vec![JournalSeq(3), JournalSeq(2)],
+        };
+
+        assert_eq!(
+            advance_runtime_safe_point_from_output_commit(&mut runtime, &commit_result),
+            Err(SafePointError::NonMonotonicCommit {
+                last_committed: Some(JournalSeq(3)),
+                actual: JournalSeq(2),
             })
         );
-        assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
+        assert_eq!(runtime.last_input_seq(), Some(JournalSeq(3)));
     }
 }
