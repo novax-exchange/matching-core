@@ -2,6 +2,7 @@ mod command_ingress;
 
 pub use command_ingress::{CommandIngress, IngressError};
 
+use crate::order::Order;
 use crate::types::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +17,7 @@ pub struct Trade {
 pub struct MatchResult {
     pub trades: Vec<Trade>,
     pub resting_order_id: Option<OrderId>,
+    pub resting_order: Option<Order>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +40,34 @@ pub struct TradeEvent {
     pub taker_order_id: OrderId,
     pub price: Price,
     pub quantity: Quantity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderAddedEvent {
+    pub market_seq: MarketSeq,
+    pub command_id: CommandId,
+    pub journal_seq: JournalSeq,
+    pub order_id: OrderId,
+    pub side: Side,
+    pub price: Price,
+    pub quantity: Quantity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderCancelledEvent {
+    pub market_seq: MarketSeq,
+    pub command_id: CommandId,
+    pub journal_seq: JournalSeq,
+    pub order_id: OrderId,
+    pub side: Side,
+    pub price: Price,
+    pub quantity: Quantity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MarketEvent {
+    OrderAdded(OrderAddedEvent),
+    OrderCancelled(OrderCancelledEvent),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +94,7 @@ pub enum OrderAck {
 pub enum EngineEvent {
     OrderAck(OrderAck),
     Trade(TradeEvent),
+    Market(MarketEvent),
 }
 
 #[cfg(test)]
@@ -161,6 +192,32 @@ mod tests {
     }
 
     #[test]
+    fn market_event_can_represent_order_added() {
+        let event = MarketEvent::OrderAdded(OrderAddedEvent {
+            market_seq: MarketSeq(1),
+            command_id: CommandId(10),
+            journal_seq: JournalSeq(100),
+            order_id: OrderId(1),
+            side: Side::Buy,
+            price: Price(100),
+            quantity: Quantity(3),
+        });
+
+        assert_eq!(
+            event,
+            MarketEvent::OrderAdded(OrderAddedEvent {
+                market_seq: MarketSeq(1),
+                command_id: CommandId(10),
+                journal_seq: JournalSeq(100),
+                order_id: OrderId(1),
+                side: Side::Buy,
+                price: Price(100),
+                quantity: Quantity(3),
+            })
+        );
+    }
+
+    #[test]
     fn engine_event_can_wrap_order_ack() {
         let ack = OrderAck::Accepted {
             command_id: CommandId(1),
@@ -189,5 +246,22 @@ mod tests {
         let event = EngineEvent::Trade(trade.clone());
 
         assert_eq!(event, EngineEvent::Trade(trade));
+    }
+
+    #[test]
+    fn engine_event_can_wrap_market_event() {
+        let market_event = MarketEvent::OrderCancelled(OrderCancelledEvent {
+            market_seq: MarketSeq(1),
+            command_id: CommandId(10),
+            journal_seq: JournalSeq(100),
+            order_id: OrderId(1),
+            side: Side::Sell,
+            price: Price(100),
+            quantity: Quantity(3),
+        });
+
+        let event = EngineEvent::Market(market_event.clone());
+
+        assert_eq!(event, EngineEvent::Market(market_event));
     }
 }

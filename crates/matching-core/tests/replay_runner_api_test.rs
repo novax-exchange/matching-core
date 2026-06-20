@@ -227,11 +227,12 @@ fn replay_result_from_snapshot_continues_trade_and_market_sequences_across_recov
         .find_map(|event| match event {
             EngineEvent::Trade(trade) => Some(trade),
             EngineEvent::OrderAck(_) => None,
+            EngineEvent::Market(_) => None,
         })
         .expect("tail buy should trade against the restored book");
 
     assert_eq!(tail_trade.trade_id, TradeId(2));
-    assert_eq!(tail_trade.market_seq, MarketSeq(2));
+    assert_eq!(tail_trade.market_seq, MarketSeq(4));
 }
 
 #[test]

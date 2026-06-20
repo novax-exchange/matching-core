@@ -135,6 +135,7 @@ impl OrderBook {
         let mut result = MatchResult {
             trades: Vec::new(),
             resting_order_id: None,
+            resting_order: None,
         };
 
         match order.side {
@@ -173,8 +174,10 @@ impl OrderBook {
 
                 if !order.is_filled() {
                     let order_id = order.order_id;
+                    let resting_order = order.clone();
                     self.insert(order);
                     result.resting_order_id = Some(order_id);
+                    result.resting_order = Some(resting_order);
                 }
             }
             Side::Sell => {
@@ -212,8 +215,10 @@ impl OrderBook {
 
                 if !order.is_filled() {
                     let order_id = order.order_id;
+                    let resting_order = order.clone();
                     self.insert(order);
                     result.resting_order_id = Some(order_id);
+                    result.resting_order = Some(resting_order);
                 }
             }
         }

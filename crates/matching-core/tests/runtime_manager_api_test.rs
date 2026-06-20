@@ -3,7 +3,7 @@ use matching_core::journal_adapter::{
     JournalAdapterError, JournalInputEntry, JournalOutputAppender, JournalOutputCommitMetadata,
     JournalOutputEntry,
 };
-use matching_core::matching_engine::{EngineEvent, OrderAck};
+use matching_core::matching_engine::{EngineEvent, MarketEvent, OrderAck, OrderAddedEvent};
 use matching_core::order::{Command, Order};
 use matching_core::output_commit_boundary::{
     build_output_batch_identity, OutputBatchIdentity, OutputBatchQueryStatus,
@@ -15,7 +15,9 @@ use matching_core::runtime_manager::{
     OutputCommitBlockageKind, OutputCommitBlockageStatus, RuntimeManager, RuntimeManagerError,
     SymbolRuntimeStatus,
 };
-use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
+use matching_core::types::{
+    CommandId, JournalSeq, MarketSeq, OrderId, Price, Quantity, Side, Symbol,
+};
 
 struct TestJournalOutputAppender {
     entries: Vec<JournalOutputEntry>,
@@ -266,11 +268,22 @@ fn output_request(seq: u64, order_id: u64) -> OutputCommitRequest {
     OutputCommitRequest {
         command_id: CommandId(seq),
         journal_seq: JournalSeq(seq),
-        events: vec![EngineEvent::OrderAck(OrderAck::Accepted {
-            command_id: CommandId(seq),
-            order_id: OrderId(order_id),
-            journal_seq: JournalSeq(seq),
-        })],
+        events: vec![
+            EngineEvent::OrderAck(OrderAck::Accepted {
+                command_id: CommandId(seq),
+                order_id: OrderId(order_id),
+                journal_seq: JournalSeq(seq),
+            }),
+            EngineEvent::Market(MarketEvent::OrderAdded(OrderAddedEvent {
+                market_seq: MarketSeq(seq),
+                command_id: CommandId(seq),
+                journal_seq: JournalSeq(seq),
+                order_id: OrderId(order_id),
+                side: Side::Buy,
+                price: Price(100),
+                quantity: Quantity(1),
+            })),
+        ],
     }
 }
 

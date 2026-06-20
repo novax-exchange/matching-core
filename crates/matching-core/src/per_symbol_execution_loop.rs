@@ -163,12 +163,12 @@ mod tests {
     use crate::journal_adapter::{
         JournalAdapterError, JournalInputEntry, JournalOutputAppender, JournalOutputEntry,
     };
-    use crate::matching_engine::{EngineEvent, OrderAck};
+    use crate::matching_engine::{EngineEvent, MarketEvent, OrderAck, OrderAddedEvent};
     use crate::order::{Command, Order};
     use crate::output_commit_boundary::OutputBatchCommitResult;
     use crate::output_commit_boundary::{PendingOutputBuffer, PendingOutputBufferError};
     use crate::per_symbol_execution_loop::{SafePointError, SymbolRuntime};
-    use crate::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
+    use crate::types::{CommandId, JournalSeq, MarketSeq, OrderId, Price, Quantity, Side, Symbol};
 
     struct InMemoryJournalOutputAppender {
         entries: Vec<JournalOutputEntry>,
@@ -241,11 +241,22 @@ mod tests {
         assert_eq!(output_entries.len(), 2);
         assert_eq!(
             output_entries[0].events,
-            vec![EngineEvent::OrderAck(OrderAck::Accepted {
-                command_id: CommandId(10),
-                order_id: OrderId(100),
-                journal_seq: JournalSeq(1),
-            })]
+            vec![
+                EngineEvent::OrderAck(OrderAck::Accepted {
+                    command_id: CommandId(10),
+                    order_id: OrderId(100),
+                    journal_seq: JournalSeq(1),
+                }),
+                EngineEvent::Market(MarketEvent::OrderAdded(OrderAddedEvent {
+                    market_seq: MarketSeq(1),
+                    command_id: CommandId(10),
+                    journal_seq: JournalSeq(1),
+                    order_id: OrderId(100),
+                    side: Side::Buy,
+                    price: Price(100),
+                    quantity: Quantity(5),
+                })),
+            ]
         );
     }
 

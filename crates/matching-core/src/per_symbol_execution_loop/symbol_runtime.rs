@@ -1,6 +1,9 @@
 use crate::journal_adapter::{JournalAdapterError, JournalInputEntry, JournalOutputAppender};
 use crate::matching_engine::{CommandIngress, IngressError};
-use crate::matching_engine::{EngineEvent, OrderAck, RejectReason, TradeEvent};
+use crate::matching_engine::{
+    EngineEvent, MarketEvent, OrderAck, OrderAddedEvent, OrderCancelledEvent, RejectReason,
+    TradeEvent,
+};
 use crate::order::Command;
 use crate::order_book::OrderBook;
 use crate::output_commit_boundary::OutputCommitRequest;
@@ -262,6 +265,23 @@ impl SymbolRuntime {
                     }));
                 }
 
+                if let Some(resting_order) = result.resting_order {
+                    let market_seq = MarketSeq(self.next_market_seq);
+                    self.next_market_seq += 1;
+
+                    events.push(EngineEvent::Market(MarketEvent::OrderAdded(
+                        OrderAddedEvent {
+                            market_seq,
+                            command_id: entry.command_id,
+                            journal_seq: entry.seq,
+                            order_id: resting_order.order_id,
+                            side: resting_order.side,
+                            price: resting_order.price,
+                            quantity: resting_order.quantity,
+                        },
+                    )));
+                }
+
                 OutputCommitRequest {
                     command_id: entry.command_id,
                     journal_seq: entry.seq,
@@ -270,11 +290,27 @@ impl SymbolRuntime {
             }
             Command::Cancel { order_id, .. } => {
                 let events = match self.order_book.cancel(order_id) {
-                    Ok(_) => vec![EngineEvent::OrderAck(OrderAck::Cancelled {
-                        command_id: entry.command_id,
-                        order_id,
-                        journal_seq: entry.seq,
-                    })],
+                    Ok(cancelled_order) => {
+                        let market_seq = MarketSeq(self.next_market_seq);
+                        self.next_market_seq += 1;
+
+                        vec![
+                            EngineEvent::OrderAck(OrderAck::Cancelled {
+                                command_id: entry.command_id,
+                                order_id,
+                                journal_seq: entry.seq,
+                            }),
+                            EngineEvent::Market(MarketEvent::OrderCancelled(OrderCancelledEvent {
+                                market_seq,
+                                command_id: entry.command_id,
+                                journal_seq: entry.seq,
+                                order_id: cancelled_order.order_id,
+                                side: cancelled_order.side,
+                                price: cancelled_order.price,
+                                quantity: cancelled_order.quantity,
+                            })),
+                        ]
+                    }
                     Err(_) => vec![EngineEvent::OrderAck(OrderAck::Rejected {
                         command_id: entry.command_id,
                         order_id: Some(order_id),
@@ -299,7 +335,9 @@ mod tests {
     use crate::journal_adapter::{
         JournalAdapterError, JournalInputEntry, JournalOutputAppender, JournalOutputEntry,
     };
-    use crate::matching_engine::{EngineEvent, OrderAck, TradeEvent};
+    use crate::matching_engine::{
+        EngineEvent, MarketEvent, OrderAck, OrderAddedEvent, OrderCancelledEvent, TradeEvent,
+    };
     use crate::order::{Command, Order};
     use crate::output_commit_boundary::{
         run_output_batch_commit_step_report, OutputJournalClient, PendingOutputBuffer,
@@ -391,6 +429,84 @@ mod tests {
         }
     }
 
+    fn accepted_event(command_id: u64, order_id: u64, journal_seq: u64) -> EngineEvent {
+        EngineEvent::OrderAck(OrderAck::Accepted {
+            command_id: CommandId(command_id),
+            order_id: OrderId(order_id),
+            journal_seq: JournalSeq(journal_seq),
+        })
+    }
+
+    fn cancelled_ack_event(command_id: u64, order_id: u64, journal_seq: u64) -> EngineEvent {
+        EngineEvent::OrderAck(OrderAck::Cancelled {
+            command_id: CommandId(command_id),
+            order_id: OrderId(order_id),
+            journal_seq: JournalSeq(journal_seq),
+        })
+    }
+
+    fn added_event(
+        market_seq: u64,
+        command_id: u64,
+        journal_seq: u64,
+        order_id: u64,
+        side: Side,
+        price: u64,
+        quantity: u64,
+    ) -> EngineEvent {
+        EngineEvent::Market(MarketEvent::OrderAdded(OrderAddedEvent {
+            market_seq: MarketSeq(market_seq),
+            command_id: CommandId(command_id),
+            journal_seq: JournalSeq(journal_seq),
+            order_id: OrderId(order_id),
+            side,
+            price: Price(price),
+            quantity: Quantity(quantity),
+        }))
+    }
+
+    fn cancelled_market_event(
+        market_seq: u64,
+        command_id: u64,
+        journal_seq: u64,
+        order_id: u64,
+        side: Side,
+        price: u64,
+        quantity: u64,
+    ) -> EngineEvent {
+        EngineEvent::Market(MarketEvent::OrderCancelled(OrderCancelledEvent {
+            market_seq: MarketSeq(market_seq),
+            command_id: CommandId(command_id),
+            journal_seq: JournalSeq(journal_seq),
+            order_id: OrderId(order_id),
+            side,
+            price: Price(price),
+            quantity: Quantity(quantity),
+        }))
+    }
+
+    fn trade_event(
+        trade_id: u64,
+        market_seq: u64,
+        command_id: u64,
+        journal_seq: u64,
+        maker_order_id: u64,
+        taker_order_id: u64,
+        price: u64,
+        quantity: u64,
+    ) -> EngineEvent {
+        EngineEvent::Trade(TradeEvent {
+            trade_id: TradeId(trade_id),
+            market_seq: MarketSeq(market_seq),
+            command_id: CommandId(command_id),
+            journal_seq: JournalSeq(journal_seq),
+            maker_order_id: OrderId(maker_order_id),
+            taker_order_id: OrderId(taker_order_id),
+            price: Price(price),
+            quantity: Quantity(quantity),
+        })
+    }
+
     fn process_entries_through_async_output_commit_on_fresh_runtime(
         entries: Vec<JournalInputEntry>,
     ) -> (Vec<JournalOutputEntry>, Option<JournalSeq>) {
@@ -447,11 +563,10 @@ mod tests {
         assert_eq!(entries[0].journal_seq, JournalSeq(1));
         assert_eq!(
             entries[0].events,
-            vec![EngineEvent::OrderAck(OrderAck::Accepted {
-                command_id: CommandId(10),
-                order_id: OrderId(100),
-                journal_seq: JournalSeq(1),
-            })]
+            vec![
+                accepted_event(10, 100, 1),
+                added_event(1, 10, 1, 100, Side::Buy, 100, 5),
+            ]
         );
     }
 
@@ -479,53 +594,37 @@ mod tests {
                 JournalOutputEntry {
                     command_id: CommandId(10),
                     journal_seq: JournalSeq(1),
-                    events: vec![EngineEvent::OrderAck(OrderAck::Accepted {
-                        command_id: CommandId(10),
-                        order_id: OrderId(100),
-                        journal_seq: JournalSeq(1),
-                    })],
+                    events: vec![
+                        accepted_event(10, 100, 1),
+                        added_event(1, 10, 1, 100, Side::Sell, 100, 3),
+                    ],
                     output_commit_metadata: None,
                 },
                 JournalOutputEntry {
                     command_id: CommandId(11),
                     journal_seq: JournalSeq(2),
                     events: vec![
-                        EngineEvent::OrderAck(OrderAck::Accepted {
-                            command_id: CommandId(11),
-                            order_id: OrderId(101),
-                            journal_seq: JournalSeq(2),
-                        }),
-                        EngineEvent::Trade(TradeEvent {
-                            trade_id: TradeId(1),
-                            market_seq: MarketSeq(1),
-                            command_id: CommandId(11),
-                            journal_seq: JournalSeq(2),
-                            maker_order_id: OrderId(100),
-                            taker_order_id: OrderId(101),
-                            price: Price(100),
-                            quantity: Quantity(3),
-                        }),
+                        accepted_event(11, 101, 2),
+                        trade_event(1, 2, 11, 2, 100, 101, 100, 3),
                     ],
                     output_commit_metadata: None,
                 },
                 JournalOutputEntry {
                     command_id: CommandId(12),
                     journal_seq: JournalSeq(3),
-                    events: vec![EngineEvent::OrderAck(OrderAck::Accepted {
-                        command_id: CommandId(12),
-                        order_id: OrderId(102),
-                        journal_seq: JournalSeq(3),
-                    })],
+                    events: vec![
+                        accepted_event(12, 102, 3),
+                        added_event(3, 12, 3, 102, Side::Buy, 99, 5),
+                    ],
                     output_commit_metadata: None,
                 },
                 JournalOutputEntry {
                     command_id: CommandId(13),
                     journal_seq: JournalSeq(4),
-                    events: vec![EngineEvent::OrderAck(OrderAck::Cancelled {
-                        command_id: CommandId(13),
-                        order_id: OrderId(102),
-                        journal_seq: JournalSeq(4),
-                    })],
+                    events: vec![
+                        cancelled_ack_event(13, 102, 4),
+                        cancelled_market_event(4, 13, 4, 102, Side::Buy, 99, 5),
+                    ],
                     output_commit_metadata: None,
                 },
             ]
@@ -542,11 +641,10 @@ mod tests {
         assert_eq!(request.journal_seq, JournalSeq(1));
         assert_eq!(
             request.events,
-            vec![EngineEvent::OrderAck(OrderAck::Accepted {
-                command_id: CommandId(10),
-                order_id: OrderId(100),
-                journal_seq: JournalSeq(1),
-            })]
+            vec![
+                accepted_event(10, 100, 1),
+                added_event(1, 10, 1, 100, Side::Buy, 100, 5),
+            ]
         );
         assert_eq!(runtime.last_input_seq(), None);
     }
@@ -624,11 +722,10 @@ mod tests {
         assert_eq!(requests[0].journal_seq, JournalSeq(1));
         assert_eq!(
             requests[0].events,
-            vec![EngineEvent::OrderAck(OrderAck::Accepted {
-                command_id: CommandId(10),
-                order_id: OrderId(100),
-                journal_seq: JournalSeq(1),
-            })]
+            vec![
+                accepted_event(10, 100, 1),
+                added_event(1, 10, 1, 100, Side::Buy, 100, 5),
+            ]
         );
         assert_eq!(runtime.last_input_seq(), None);
     }
@@ -667,21 +764,8 @@ mod tests {
         assert_eq!(
             requests[0].events,
             vec![
-                EngineEvent::OrderAck(OrderAck::Accepted {
-                    command_id: CommandId(11),
-                    order_id: OrderId(101),
-                    journal_seq: JournalSeq(2),
-                }),
-                EngineEvent::Trade(TradeEvent {
-                    trade_id: TradeId(1),
-                    market_seq: MarketSeq(1),
-                    command_id: CommandId(11),
-                    journal_seq: JournalSeq(2),
-                    maker_order_id: OrderId(100),
-                    taker_order_id: OrderId(101),
-                    price: Price(100),
-                    quantity: Quantity(3),
-                }),
+                accepted_event(11, 101, 2),
+                trade_event(1, 2, 11, 2, 100, 101, 100, 3),
             ]
         );
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
@@ -957,11 +1041,78 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(
             entries[1].events,
-            vec![EngineEvent::OrderAck(OrderAck::Cancelled {
-                command_id: CommandId(11),
-                order_id: OrderId(100),
-                journal_seq: JournalSeq(2),
-            })]
+            vec![
+                cancelled_ack_event(11, 100, 2),
+                cancelled_market_event(2, 11, 2, 100, Side::Buy, 100, 5),
+            ]
+        );
+    }
+
+    #[test]
+    fn accepted_resting_order_emits_market_order_added_event() {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let mut output = InMemoryJournalOutputAppender::new();
+
+        assert_eq!(
+            runtime.process_entry(limit_entry(1, 10, 100, Side::Buy, 100, 5), &mut output),
+            Ok(())
+        );
+
+        let entries = output.read_all();
+        assert_eq!(
+            entries[0].events,
+            vec![
+                EngineEvent::OrderAck(OrderAck::Accepted {
+                    command_id: CommandId(10),
+                    order_id: OrderId(100),
+                    journal_seq: JournalSeq(1),
+                }),
+                EngineEvent::Market(MarketEvent::OrderAdded(OrderAddedEvent {
+                    market_seq: MarketSeq(1),
+                    command_id: CommandId(10),
+                    journal_seq: JournalSeq(1),
+                    order_id: OrderId(100),
+                    side: Side::Buy,
+                    price: Price(100),
+                    quantity: Quantity(5),
+                })),
+            ]
+        );
+    }
+
+    #[test]
+    fn cancelled_order_emits_market_order_cancelled_event() {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let mut output = InMemoryJournalOutputAppender::new();
+
+        assert_eq!(
+            runtime.process_entry(limit_entry(1, 10, 100, Side::Buy, 100, 5), &mut output),
+            Ok(())
+        );
+        assert_eq!(
+            runtime.process_entry(cancel_entry(2, 11, 100), &mut output),
+            Ok(())
+        );
+
+        let entries = output.read_all();
+        assert_eq!(
+            entries[1].events,
+            vec![
+                EngineEvent::OrderAck(OrderAck::Cancelled {
+                    command_id: CommandId(11),
+                    order_id: OrderId(100),
+                    journal_seq: JournalSeq(2),
+                }),
+                EngineEvent::Market(MarketEvent::OrderCancelled(OrderCancelledEvent {
+                    market_seq: MarketSeq(2),
+                    command_id: CommandId(11),
+                    journal_seq: JournalSeq(2),
+                    order_id: OrderId(100),
+                    side: Side::Buy,
+                    price: Price(100),
+                    quantity: Quantity(5),
+                })),
+            ]
         );
     }
 
@@ -1003,21 +1154,8 @@ mod tests {
         assert_eq!(
             entries[1].events,
             vec![
-                EngineEvent::OrderAck(OrderAck::Accepted {
-                    command_id: CommandId(11),
-                    order_id: OrderId(101),
-                    journal_seq: JournalSeq(2),
-                }),
-                EngineEvent::Trade(TradeEvent {
-                    trade_id: TradeId(1),
-                    market_seq: MarketSeq(1),
-                    command_id: CommandId(11),
-                    journal_seq: JournalSeq(2),
-                    maker_order_id: OrderId(100),
-                    taker_order_id: OrderId(101),
-                    price: Price(100),
-                    quantity: Quantity(3),
-                }),
+                accepted_event(11, 101, 2),
+                trade_event(1, 2, 11, 2, 100, 101, 100, 3),
             ]
         );
     }
@@ -1052,11 +1190,10 @@ mod tests {
         );
         assert_eq!(
             entries[2].events,
-            vec![EngineEvent::OrderAck(OrderAck::Cancelled {
-                command_id: CommandId(12),
-                order_id: OrderId(100),
-                journal_seq: JournalSeq(3),
-            })]
+            vec![
+                cancelled_ack_event(12, 100, 3),
+                cancelled_market_event(2, 12, 3, 100, Side::Sell, 100, 3),
+            ]
         );
     }
 
@@ -1118,11 +1255,10 @@ mod tests {
         );
         assert_eq!(
             entries[2].events,
-            vec![EngineEvent::OrderAck(OrderAck::Cancelled {
-                command_id: CommandId(12),
-                order_id: OrderId(100),
-                journal_seq: JournalSeq(3),
-            })]
+            vec![
+                cancelled_ack_event(12, 100, 3),
+                cancelled_market_event(2, 12, 3, 100, Side::Sell, 100, 3),
+            ]
         );
     }
 
@@ -1179,21 +1315,8 @@ mod tests {
         assert_eq!(
             entries[0].events,
             vec![
-                EngineEvent::OrderAck(OrderAck::Accepted {
-                    command_id: CommandId(11),
-                    order_id: OrderId(101),
-                    journal_seq: JournalSeq(2),
-                }),
-                EngineEvent::Trade(TradeEvent {
-                    trade_id: TradeId(1),
-                    market_seq: MarketSeq(1),
-                    command_id: CommandId(11),
-                    journal_seq: JournalSeq(2),
-                    maker_order_id: OrderId(100),
-                    taker_order_id: OrderId(101),
-                    price: Price(100),
-                    quantity: Quantity(3),
-                }),
+                accepted_event(11, 101, 2),
+                trade_event(1, 2, 11, 2, 100, 101, 100, 3),
             ]
         );
     }
@@ -1234,11 +1357,10 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(
             entries[0].events,
-            vec![EngineEvent::OrderAck(OrderAck::Cancelled {
-                command_id: CommandId(11),
-                order_id: OrderId(100),
-                journal_seq: JournalSeq(2),
-            })]
+            vec![
+                cancelled_ack_event(11, 100, 2),
+                cancelled_market_event(2, 11, 2, 100, Side::Buy, 100, 5),
+            ]
         );
     }
 
@@ -1343,11 +1465,10 @@ mod tests {
         assert_eq!(retry_entries[0].journal_seq, JournalSeq(2));
         assert_eq!(
             retry_entries[0].events,
-            vec![EngineEvent::OrderAck(OrderAck::Accepted {
-                command_id: CommandId(11),
-                order_id: OrderId(101),
-                journal_seq: JournalSeq(2),
-            })]
+            vec![
+                accepted_event(11, 101, 2),
+                added_event(2, 11, 2, 101, Side::Buy, 100, 5),
+            ]
         );
     }
 
@@ -1408,21 +1529,8 @@ mod tests {
         assert_eq!(
             retry_entries[0].events,
             vec![
-                EngineEvent::OrderAck(OrderAck::Accepted {
-                    command_id: CommandId(11),
-                    order_id: OrderId(101),
-                    journal_seq: JournalSeq(2),
-                }),
-                EngineEvent::Trade(TradeEvent {
-                    trade_id: TradeId(1),
-                    market_seq: MarketSeq(1),
-                    command_id: CommandId(11),
-                    journal_seq: JournalSeq(2),
-                    maker_order_id: OrderId(100),
-                    taker_order_id: OrderId(101),
-                    price: Price(100),
-                    quantity: Quantity(3),
-                }),
+                accepted_event(11, 101, 2),
+                trade_event(1, 2, 11, 2, 100, 101, 100, 3),
             ]
         );
     }
@@ -1465,21 +1573,8 @@ mod tests {
         assert_eq!(
             entries[1].events,
             vec![
-                EngineEvent::OrderAck(OrderAck::Accepted {
-                    command_id: CommandId(13),
-                    order_id: OrderId(103),
-                    journal_seq: JournalSeq(4),
-                }),
-                EngineEvent::Trade(TradeEvent {
-                    trade_id: TradeId(2),
-                    market_seq: MarketSeq(2),
-                    command_id: CommandId(13),
-                    journal_seq: JournalSeq(4),
-                    maker_order_id: OrderId(102),
-                    taker_order_id: OrderId(103),
-                    price: Price(100),
-                    quantity: Quantity(1),
-                }),
+                accepted_event(13, 103, 4),
+                trade_event(2, 4, 13, 4, 102, 103, 100, 1),
             ]
         );
     }

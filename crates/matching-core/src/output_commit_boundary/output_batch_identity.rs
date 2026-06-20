@@ -6,8 +6,8 @@
 
 use super::output_journal_client::OutputCommitRequest;
 use crate::journal_adapter::JournalOutputEntry;
-use crate::matching_engine::{EngineEvent, OrderAck, RejectReason};
-use crate::types::{JournalSeq, Symbol};
+use crate::matching_engine::{EngineEvent, MarketEvent, OrderAck, RejectReason};
+use crate::types::{JournalSeq, Side, Symbol};
 
 pub const MATCHING_OUTPUT_VERSION: u32 = 1;
 
@@ -93,17 +93,56 @@ pub fn digest_journal_output_entries(entries: &[JournalOutputEntry]) -> OutputDi
 fn digest_engine_event(hasher: &mut StableDigest, event: &EngineEvent) {
     match event {
         EngineEvent::OrderAck(ack) => digest_order_ack(hasher, ack),
-        EngineEvent::Trade(trade) => {
-            hasher.write_tag("trade");
-            hasher.write_u64(trade.trade_id.0);
-            hasher.write_u64(trade.market_seq.0);
-            hasher.write_u64(trade.command_id.0);
-            hasher.write_u64(trade.journal_seq.0);
-            hasher.write_u64(trade.maker_order_id.0);
-            hasher.write_u64(trade.taker_order_id.0);
-            hasher.write_u64(trade.price.0);
-            hasher.write_u64(trade.quantity.0);
+        EngineEvent::Trade(trade) => digest_trade_event(hasher, "trade", trade),
+        EngineEvent::Market(market_event) => digest_market_event(hasher, market_event),
+    }
+}
+
+fn digest_market_event(hasher: &mut StableDigest, event: &MarketEvent) {
+    match event {
+        MarketEvent::OrderAdded(added) => {
+            hasher.write_tag("market.order_added");
+            hasher.write_u64(added.market_seq.0);
+            hasher.write_u64(added.command_id.0);
+            hasher.write_u64(added.journal_seq.0);
+            hasher.write_u64(added.order_id.0);
+            hasher.write_u64(side_code(added.side));
+            hasher.write_u64(added.price.0);
+            hasher.write_u64(added.quantity.0);
         }
+        MarketEvent::OrderCancelled(cancelled) => {
+            hasher.write_tag("market.order_cancelled");
+            hasher.write_u64(cancelled.market_seq.0);
+            hasher.write_u64(cancelled.command_id.0);
+            hasher.write_u64(cancelled.journal_seq.0);
+            hasher.write_u64(cancelled.order_id.0);
+            hasher.write_u64(side_code(cancelled.side));
+            hasher.write_u64(cancelled.price.0);
+            hasher.write_u64(cancelled.quantity.0);
+        }
+    }
+}
+
+fn digest_trade_event(
+    hasher: &mut StableDigest,
+    tag: &str,
+    trade: &crate::matching_engine::TradeEvent,
+) {
+    hasher.write_tag(tag);
+    hasher.write_u64(trade.trade_id.0);
+    hasher.write_u64(trade.market_seq.0);
+    hasher.write_u64(trade.command_id.0);
+    hasher.write_u64(trade.journal_seq.0);
+    hasher.write_u64(trade.maker_order_id.0);
+    hasher.write_u64(trade.taker_order_id.0);
+    hasher.write_u64(trade.price.0);
+    hasher.write_u64(trade.quantity.0);
+}
+
+fn side_code(side: Side) -> u64 {
+    match side {
+        Side::Buy => 1,
+        Side::Sell => 2,
     }
 }
 
