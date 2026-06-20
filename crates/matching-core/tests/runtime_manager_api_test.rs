@@ -1,7 +1,7 @@
-use matching_core::engine::EngineEvent;
 use matching_core::journal_adapter::{
     JournalAdapterError, JournalInputEntry, JournalOutputAppender, JournalOutputEntry,
 };
+use matching_core::matching_engine::EngineEvent;
 use matching_core::order::{Command, Order};
 use matching_core::runtime_manager::{RuntimeManager, RuntimeManagerError};
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};

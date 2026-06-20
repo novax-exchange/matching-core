@@ -1,35 +1,41 @@
+mod symbol_runtime;
+
+pub use symbol_runtime::{SafePointError, SymbolRuntime};
+
 use crate::{
     bounded_handoff::BoundedHandoff,
     journal_adapter::{JournalAdapterError, JournalOutputAppender},
-    output_queue::{OutputQueue, OutputQueueError},
-    symbol_runtime::SymbolRuntime,
+    output_commit_boundary::{
+        OutputBatchCommitResult, PendingOutputBuffer, PendingOutputBufferError,
+    },
 };
 use std::thread::{self, JoinHandle};
 
-pub type SymbolRuntimeWorkerResult<O> = (
+pub type PerSymbolExecutionLoopWorkerResult<O> = (
     SymbolRuntime,
     BoundedHandoff,
     O,
     Result<usize, JournalAdapterError>,
 );
 
-pub fn spawn_symbol_runtime_once<O>(
+pub fn spawn_per_symbol_execution_loop_once<O>(
     mut runtime: SymbolRuntime,
     mut queue: BoundedHandoff,
     mut output: O,
     max_entries: usize,
-) -> JoinHandle<SymbolRuntimeWorkerResult<O>>
+) -> JoinHandle<PerSymbolExecutionLoopWorkerResult<O>>
 where
     O: JournalOutputAppender + Send + 'static,
 {
     thread::spawn(move || {
-        let result = run_symbol_runtime_step(&mut runtime, &mut queue, &mut output, max_entries);
+        let result =
+            run_per_symbol_execution_loop_step(&mut runtime, &mut queue, &mut output, max_entries);
 
         (runtime, queue, output, result)
     })
 }
 
-pub fn run_symbol_runtime_step(
+pub fn run_per_symbol_execution_loop_step(
     runtime: &mut SymbolRuntime,
     queue: &mut BoundedHandoff,
     output: &mut dyn JournalOutputAppender,
@@ -54,18 +60,19 @@ pub fn run_symbol_runtime_step(
     Ok(processed)
 }
 
-pub fn run_symbol_runtime_step_to_output_queue(
+pub fn run_per_symbol_execution_loop_step_to_pending_output_buffer(
     runtime: &mut SymbolRuntime,
     handoff: &mut BoundedHandoff,
-    output_queue: &mut OutputQueue,
+    pending_output_buffer: &mut PendingOutputBuffer,
     max_entries: usize,
-) -> Result<usize, OutputQueueError> {
+) -> Result<usize, PendingOutputBufferError> {
     let entries = handoff.drain_batch(max_entries);
     let mut remaining = entries.into_iter();
     let mut processed = 0;
 
     while let Some(entry) = remaining.next() {
-        match runtime.process_entry_into_output_queue(entry.clone(), output_queue) {
+        match runtime.process_entry_into_pending_output_buffer(entry.clone(), pending_output_buffer)
+        {
             Ok(()) => processed += 1,
             Err(error) => {
                 let mut to_prepend = vec![entry];
@@ -79,17 +86,32 @@ pub fn run_symbol_runtime_step_to_output_queue(
     Ok(processed)
 }
 
+pub fn advance_runtime_safe_point_from_output_commit(
+    runtime: &mut SymbolRuntime,
+    commit_result: &OutputBatchCommitResult,
+) -> Result<usize, SafePointError> {
+    let mut advanced = 0;
+
+    for journal_seq in &commit_result.committed_seqs {
+        runtime.mark_output_committed(*journal_seq)?;
+        advanced += 1;
+    }
+
+    Ok(advanced)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::bounded_handoff::BoundedHandoff;
-    use crate::engine::{EngineEvent, OrderAck};
     use crate::journal_adapter::{
         JournalAdapterError, JournalInputEntry, JournalOutputAppender, JournalOutputEntry,
     };
+    use crate::matching_engine::{EngineEvent, OrderAck};
     use crate::order::{Command, Order};
-    use crate::output_queue::{OutputQueue, OutputQueueError};
-    use crate::symbol_runtime::SymbolRuntime;
+    use crate::output_commit_boundary::OutputBatchCommitResult;
+    use crate::output_commit_boundary::{PendingOutputBuffer, PendingOutputBufferError};
+    use crate::per_symbol_execution_loop::{SafePointError, SymbolRuntime};
     use crate::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
     struct InMemoryJournalOutputAppender {
@@ -143,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_loop_step_drains_queue_and_processes_entries() {
+    fn per_symbol_execution_loop_step_drains_queue_and_processes_entries() {
         let mut queue = BoundedHandoff::new(4);
         let mut runtime = SymbolRuntime::new(symbol());
         let mut output = InMemoryJournalOutputAppender::new();
@@ -151,7 +173,8 @@ mod tests {
         assert_eq!(queue.enqueue(input_entry(1, 10, 100)), Ok(()));
         assert_eq!(queue.enqueue(input_entry(2, 11, 101)), Ok(()));
 
-        let processed = run_symbol_runtime_step(&mut runtime, &mut queue, &mut output, 10);
+        let processed =
+            run_per_symbol_execution_loop_step(&mut runtime, &mut queue, &mut output, 10);
 
         assert_eq!(processed, Ok(2));
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(2)));
@@ -211,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_loop_step_keeps_unprocessed_entries_when_batch_fails() {
+    fn per_symbol_execution_loop_step_keeps_unprocessed_entries_when_batch_fails() {
         let mut queue = BoundedHandoff::new(4);
         let mut runtime = SymbolRuntime::new(symbol());
         let mut output = FailOnSecondAppendJournalOutputAppender::new();
@@ -220,7 +243,7 @@ mod tests {
         assert_eq!(queue.enqueue(input_entry(2, 11, 101)), Ok(()));
         assert_eq!(queue.enqueue(input_entry(3, 12, 102)), Ok(()));
 
-        let result = run_symbol_runtime_step(&mut runtime, &mut queue, &mut output, 10);
+        let result = run_per_symbol_execution_loop_step(&mut runtime, &mut queue, &mut output, 10);
 
         assert_eq!(result, Err(JournalAdapterError::AppendFailed));
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
@@ -232,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn symbol_runtime_worker_thread_processes_one_batch_and_returns_state() {
+    fn per_symbol_execution_loop_worker_thread_processes_one_batch_and_returns_state() {
         let mut queue = BoundedHandoff::new(4);
         let runtime = SymbolRuntime::new(symbol());
         let output = InMemoryJournalOutputAppender::new();
@@ -240,7 +263,7 @@ mod tests {
         assert_eq!(queue.enqueue(input_entry(1, 10, 100)), Ok(()));
         assert_eq!(queue.enqueue(input_entry(2, 11, 101)), Ok(()));
 
-        let handle = spawn_symbol_runtime_once(runtime, queue, output, 10);
+        let handle = spawn_per_symbol_execution_loop_once(runtime, queue, output, 10);
 
         let (runtime, queue, output, result) = handle
             .join()
@@ -253,18 +276,18 @@ mod tests {
     }
 
     #[test]
-    fn runtime_loop_step_can_enqueue_output_requests_without_advancing_safe_point() {
+    fn per_symbol_execution_loop_step_can_enqueue_output_requests_without_advancing_safe_point() {
         let mut handoff = BoundedHandoff::new(4);
-        let mut output_queue = OutputQueue::new(4);
+        let mut pending_output_buffer = PendingOutputBuffer::new(4);
         let mut runtime = SymbolRuntime::new(symbol());
 
         assert_eq!(handoff.enqueue(input_entry(1, 10, 100)), Ok(()));
         assert_eq!(handoff.enqueue(input_entry(2, 11, 101)), Ok(()));
 
-        let processed = run_symbol_runtime_step_to_output_queue(
+        let processed = run_per_symbol_execution_loop_step_to_pending_output_buffer(
             &mut runtime,
             &mut handoff,
-            &mut output_queue,
+            &mut pending_output_buffer,
             10,
         );
 
@@ -272,33 +295,34 @@ mod tests {
         assert_eq!(handoff.len(), 0);
         assert_eq!(runtime.last_input_seq(), None);
 
-        let requests = output_queue.drain_batch(10);
+        let requests = pending_output_buffer.drain_batch(10);
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].journal_seq, JournalSeq(1));
         assert_eq!(requests[1].journal_seq, JournalSeq(2));
     }
 
     #[test]
-    fn runtime_loop_step_requeues_unprocessed_input_when_output_queue_is_full() {
+    fn per_symbol_execution_loop_step_requeues_unprocessed_input_when_pending_output_buffer_is_full(
+    ) {
         let mut handoff = BoundedHandoff::new(4);
-        let mut output_queue = OutputQueue::new(1);
+        let mut pending_output_buffer = PendingOutputBuffer::new(1);
         let mut runtime = SymbolRuntime::new(symbol());
 
         assert_eq!(handoff.enqueue(input_entry(1, 10, 100)), Ok(()));
         assert_eq!(handoff.enqueue(input_entry(2, 11, 101)), Ok(()));
         assert_eq!(handoff.enqueue(input_entry(3, 12, 102)), Ok(()));
 
-        let result = run_symbol_runtime_step_to_output_queue(
+        let result = run_per_symbol_execution_loop_step_to_pending_output_buffer(
             &mut runtime,
             &mut handoff,
-            &mut output_queue,
+            &mut pending_output_buffer,
             10,
         );
 
-        assert_eq!(result, Err(OutputQueueError::QueueFull));
+        assert_eq!(result, Err(PendingOutputBufferError::BufferFull));
         assert_eq!(runtime.last_input_seq(), None);
 
-        let output_requests = output_queue.drain_batch(10);
+        let output_requests = pending_output_buffer.drain_batch(10);
         assert_eq!(output_requests.len(), 1);
         assert_eq!(output_requests[0].journal_seq, JournalSeq(1));
 
@@ -306,5 +330,40 @@ mod tests {
         assert_eq!(remaining_inputs.len(), 2);
         assert_eq!(remaining_inputs[0].seq, JournalSeq(2));
         assert_eq!(remaining_inputs[1].seq, JournalSeq(3));
+    }
+
+    #[test]
+    fn safe_point_controller_advances_runtime_from_confirmed_output_sequences() {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let commit_result = OutputBatchCommitResult {
+            committed_count: 2,
+            last_committed_seq: Some(JournalSeq(2)),
+            committed_seqs: vec![JournalSeq(1), JournalSeq(2)],
+        };
+
+        assert_eq!(
+            advance_runtime_safe_point_from_output_commit(&mut runtime, &commit_result),
+            Ok(2)
+        );
+        assert_eq!(runtime.last_input_seq(), Some(JournalSeq(2)));
+    }
+
+    #[test]
+    fn safe_point_controller_rejects_non_contiguous_output_confirmations() {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let commit_result = OutputBatchCommitResult {
+            committed_count: 2,
+            last_committed_seq: Some(JournalSeq(3)),
+            committed_seqs: vec![JournalSeq(1), JournalSeq(3)],
+        };
+
+        assert_eq!(
+            advance_runtime_safe_point_from_output_commit(&mut runtime, &commit_result),
+            Err(SafePointError::NonContiguousCommit {
+                expected: JournalSeq(2),
+                actual: JournalSeq(3),
+            })
+        );
+        assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
     }
 }

@@ -1,6 +1,6 @@
 use matching_core::journal_adapter::{JournalInputEntry, JournalInputReader};
 use matching_core::order::{Command, Order};
-use matching_core::replay::ReplayRunner;
+use matching_core::replay_runner::ReplayRunner;
 use matching_core::types::{
     Checksum, CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol,
 };

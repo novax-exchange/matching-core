@@ -1,5 +1,11 @@
-use crate::engine::EngineEvent;
+//! Output Commit Boundary: Output Journal Client / append executor.
+//!
+//! Current scope: append deterministic output requests through the Journal
+//! output adapter. TODO: replace the boolean-style append result with explicit
+//! commit outcomes: Accepted, DuplicateAccepted, Unknown, Unavailable, Rejected.
+
 use crate::journal_adapter::{JournalAdapterError, JournalOutputAppender};
+use crate::matching_engine::EngineEvent;
 use crate::types::{CommandId, JournalSeq};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9,14 +15,14 @@ pub struct OutputCommitRequest {
     pub events: Vec<EngineEvent>,
 }
 
-pub struct OutputCommitter;
+pub struct OutputJournalClient;
 
-impl OutputCommitter {
+impl OutputJournalClient {
     pub fn new() -> Self {
         Self
     }
 
-    pub fn commit_one(
+    pub fn append_one(
         &mut self,
         request: OutputCommitRequest,
         journal: &mut dyn JournalOutputAppender,
@@ -24,7 +30,7 @@ impl OutputCommitter {
         journal.append(request.command_id, request.journal_seq, request.events)
     }
 
-    pub fn commit_batch(
+    pub fn append_batch(
         &mut self,
         requests: Vec<OutputCommitRequest>,
         journal: &mut dyn JournalOutputAppender,
@@ -32,7 +38,7 @@ impl OutputCommitter {
         let mut committed = 0;
 
         for request in requests {
-            self.commit_one(request, journal)?;
+            self.append_one(request, journal)?;
             committed += 1;
         }
 
@@ -43,8 +49,8 @@ impl OutputCommitter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{EngineEvent, OrderAck};
     use crate::journal_adapter::{JournalAdapterError, JournalOutputAppender, JournalOutputEntry};
+    use crate::matching_engine::{EngineEvent, OrderAck};
     use crate::types::{CommandId, JournalSeq, OrderId};
 
     struct InMemoryJournalOutputAppender {
@@ -93,13 +99,13 @@ mod tests {
     }
 
     #[test]
-    fn committer_appends_output_requests_in_order() {
+    fn output_journal_client_appends_output_requests_in_order() {
         let mut journal = InMemoryJournalOutputAppender::new();
-        let mut committer = OutputCommitter::new();
+        let mut journal_client = OutputJournalClient::new();
 
         let requests = vec![request(1, 10, 100), request(2, 11, 101)];
 
-        assert_eq!(committer.commit_batch(requests, &mut journal), Ok(2));
+        assert_eq!(journal_client.append_batch(requests, &mut journal), Ok(2));
 
         let entries = journal.read_all();
         assert_eq!(entries.len(), 2);
@@ -149,9 +155,9 @@ mod tests {
     }
 
     #[test]
-    fn committer_stops_at_first_append_failure() {
+    fn output_journal_client_stops_at_first_append_failure() {
         let mut journal = FailOnSecondAppendJournalOutputAppender::new();
-        let mut committer = OutputCommitter::new();
+        let mut journal_client = OutputJournalClient::new();
 
         let requests = vec![
             request(1, 10, 100),
@@ -160,7 +166,7 @@ mod tests {
         ];
 
         assert_eq!(
-            committer.commit_batch(requests, &mut journal),
+            journal_client.append_batch(requests, &mut journal),
             Err(JournalAdapterError::AppendFailed)
         );
 

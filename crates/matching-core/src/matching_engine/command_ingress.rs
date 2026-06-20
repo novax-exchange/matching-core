@@ -36,7 +36,7 @@ impl CommandIngress {
 
 #[cfg(test)]
 mod tests {
-    use crate::command_ingress::{CommandIngress, IngressError};
+    use crate::matching_engine::{CommandIngress, IngressError};
     use crate::order::{Command, Order};
     use crate::types::{OrderId, Price, Quantity, Side, Symbol};
 

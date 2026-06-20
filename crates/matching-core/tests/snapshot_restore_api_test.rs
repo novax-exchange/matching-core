@@ -1,8 +1,8 @@
 use matching_core::journal_adapter::{JournalInputEntry, JournalInputReader};
 use matching_core::order::{Command, Order};
 use matching_core::order_book::OrderBook;
-use matching_core::replay::ReplayRunner;
-use matching_core::snapshot::OrderBookSnapshot;
+use matching_core::replay_runner::ReplayRunner;
+use matching_core::snapshot_restore::OrderBookSnapshot;
 use matching_core::types::*;
 
 #[test]

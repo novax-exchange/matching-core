@@ -37,7 +37,7 @@ mod tests {
     use crate::order::Command;
     use crate::order::Order;
     use crate::order_book::OrderBook;
-    use crate::replay::ReplayRunner;
+    use crate::replay_runner::ReplayRunner;
     use crate::types::CommandId;
 
     #[test]

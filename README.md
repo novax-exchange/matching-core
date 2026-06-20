@@ -2,6 +2,20 @@
 
 NovaX Matching Core is a Rust learning project that rebuilds the core of a centralized exchange matching subsystem step by step. The repository is now the project source of truth for implementation progress and roadmap.
 
+## Learning Positioning
+
+This project is primarily for studying matching-core technical challenges and architecture patterns. The main learning thread is deterministic matching, single-writer runtime ownership, journal-driven recovery, safe-point advancement, internal concurrency, backpressure, replay, snapshots, checksums, and later scaling patterns such as sharding and standby replay.
+
+The first system property is determinism: the same confirmed input sequence and effective control-state sequence must produce the same output events, order book state, checksums, and safe points across live execution, replay, recovery, and compatible upgrades. Performance work comes after this proof boundary is explicit.
+
+Rust is the implementation language used to make those ideas concrete. Learning Rust is useful, but it is not the project's main goal.
+
+Service Runtime, RPC, gRPC, HTTP APIs, deployment, and operational frameworks are important later topics. They should be introduced only when they help explain how the matching core is hosted or observed. They should not pull the current learning path away from the matching engine architecture.
+
+The learning process should be scenario-driven. Each new phase should start from a realistic matching-engine pressure or failure scenario, identify what the current minimal implementation hides, define the invariants that must survive, add a focused test or experiment that exposes the issue, and then evolve the implementation by the smallest useful step. The project should maintain a growing backlog of discovered difficulties instead of pretending all hard problems are known up front.
+
+Each phase should also extract the relevant architecture-document shape into code: responsibility, state ownership, contracts, boundary rules, flows, failure modes, validation evidence, and review triggers. Minimal code is acceptable only when it still preserves the selected production architecture direction.
+
 The target architecture follows a Matching Service reference model:
 
 - `Matching Service` is the runtime container: confirmed input consumption, symbol routing, bounded handoff, per-symbol execution loops, output commit, snapshot coordination, recovery, and service-facing runtime behavior.
@@ -27,9 +41,9 @@ Use that reference directory for the application architecture, component documen
 
 | Item | Status |
 | --- | --- |
-| Completed phases | Phase 0-20 |
-| Current milestone | Service-facing query boundary |
-| Current phase | Phase 21: Admin/query API |
+| Completed phases | Phase 0-21 |
+| Current milestone | Determinism proof layers |
+| Current phase | Phase 22: Deterministic Output Identity and Duplicate Policy |
 | Latest verification | `cargo test -p matching-core` |
 
 Implemented capabilities:
@@ -48,10 +62,12 @@ Implemented capabilities:
 - Multi-symbol `RuntimeManager` with per-symbol state isolation.
 - `SymbolRouting` with registered-symbol routing and queue enqueue support.
 - `BoundedHandoff` with bounded capacity, FIFO drain, watermarks, and retry prepend.
-- Runtime loop step and one-shot worker thread.
-- Output queue isolation.
-- Output committer and output commit loop.
+- Per-symbol execution loop step and one-shot worker thread.
+- Pending output buffer isolation.
+- Output commit boundary with output journal client and batch coordinator.
 - Confirmed input consumer with bounded batch reads, gap detection, and backpressure-safe enqueue.
+- SymbolRuntime output determinism proof for identical input sequences.
+- Identified evidence, governance control, and messaging reliability boundaries for later phases.
 - Project roadmap document in this repository.
 
 ## Documentation

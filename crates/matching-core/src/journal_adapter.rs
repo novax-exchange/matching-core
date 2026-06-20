@@ -1,4 +1,4 @@
-use crate::engine::EngineEvent;
+use crate::matching_engine::EngineEvent;
 use crate::order::Command;
 use crate::types::{CommandId, JournalSeq};
 
@@ -41,7 +41,7 @@ pub trait JournalOutputAppender {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::OrderAck;
+    use crate::matching_engine::OrderAck;
     use crate::order::{Command, Order};
     use crate::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 

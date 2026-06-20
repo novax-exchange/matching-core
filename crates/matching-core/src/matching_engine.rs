@@ -1,3 +1,7 @@
+mod command_ingress;
+
+pub use command_ingress::{CommandIngress, IngressError};
+
 use crate::types::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

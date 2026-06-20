@@ -1,8 +1,8 @@
-use matching_core::engine::{EngineEvent, OrderAck};
 use matching_core::journal_adapter::{
     JournalAdapterError, JournalOutputAppender, JournalOutputEntry,
 };
 use matching_core::journal_adapter::{JournalInputEntry, JournalInputReader};
+use matching_core::matching_engine::{EngineEvent, OrderAck};
 use matching_core::order::{Command, Order};
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 

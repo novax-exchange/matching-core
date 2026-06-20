@@ -1,17 +1,23 @@
-use crate::output_committer::OutputCommitRequest;
+//! Output Commit Boundary: pending output batch buffer.
+//!
+//! Current scope: bounded in-memory queue for output requests waiting for
+//! durable append. It is transfer state only; recovery must come from Journal
+//! input/output records, not from this queue.
+
+use super::output_journal_client::OutputCommitRequest;
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OutputQueueError {
-    QueueFull,
+pub enum PendingOutputBufferError {
+    BufferFull,
 }
 
-pub struct OutputQueue {
+pub struct PendingOutputBuffer {
     capacity: usize,
     requests: VecDeque<OutputCommitRequest>,
 }
 
-impl OutputQueue {
+impl PendingOutputBuffer {
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity,
@@ -19,9 +25,12 @@ impl OutputQueue {
         }
     }
 
-    pub fn enqueue(&mut self, request: OutputCommitRequest) -> Result<(), OutputQueueError> {
+    pub fn enqueue(
+        &mut self,
+        request: OutputCommitRequest,
+    ) -> Result<(), PendingOutputBufferError> {
         if self.requests.len() >= self.capacity {
-            return Err(OutputQueueError::QueueFull);
+            return Err(PendingOutputBufferError::BufferFull);
         }
 
         self.requests.push_back(request);

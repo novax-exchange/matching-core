@@ -1,10 +1,10 @@
-use crate::command_ingress::{CommandIngress, IngressError};
-use crate::engine::{EngineEvent, OrderAck, RejectReason, TradeEvent};
 use crate::journal_adapter::{JournalAdapterError, JournalInputEntry, JournalOutputAppender};
+use crate::matching_engine::{CommandIngress, IngressError};
+use crate::matching_engine::{EngineEvent, OrderAck, RejectReason, TradeEvent};
 use crate::order::Command;
 use crate::order_book::OrderBook;
-use crate::output_committer::OutputCommitRequest;
-use crate::output_queue::{OutputQueue, OutputQueueError};
+use crate::output_commit_boundary::OutputCommitRequest;
+use crate::output_commit_boundary::{PendingOutputBuffer, PendingOutputBufferError};
 use crate::types::{JournalSeq, Symbol, TradeId};
 
 pub struct SymbolRuntime {
@@ -12,6 +12,14 @@ pub struct SymbolRuntime {
     order_book: OrderBook,
     last_input_seq: Option<JournalSeq>,
     next_trade_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SafePointError {
+    NonContiguousCommit {
+        expected: JournalSeq,
+        actual: JournalSeq,
+    },
 }
 
 fn reject_reason_from_ingress_error(error: IngressError) -> RejectReason {
@@ -36,8 +44,21 @@ impl SymbolRuntime {
         self.last_input_seq
     }
 
-    pub fn mark_output_committed(&mut self, journal_seq: JournalSeq) {
+    pub fn mark_output_committed(&mut self, journal_seq: JournalSeq) -> Result<(), SafePointError> {
+        let expected = match self.last_input_seq {
+            Some(last_input_seq) => JournalSeq(last_input_seq.0 + 1),
+            None => JournalSeq(1),
+        };
+
+        if journal_seq != expected {
+            return Err(SafePointError::NonContiguousCommit {
+                expected,
+                actual: journal_seq,
+            });
+        }
+
         self.last_input_seq = Some(journal_seq);
+        Ok(())
     }
 
     pub fn process_batch(
@@ -74,16 +95,16 @@ impl SymbolRuntime {
         Ok(())
     }
 
-    pub fn process_entry_into_output_queue(
+    pub fn process_entry_into_pending_output_buffer(
         &mut self,
         entry: JournalInputEntry,
-        output_queue: &mut OutputQueue,
-    ) -> Result<(), OutputQueueError> {
+        pending_output_buffer: &mut PendingOutputBuffer,
+    ) -> Result<(), PendingOutputBufferError> {
         let order_book_before = self.order_book.clone();
         let next_trade_id_before = self.next_trade_id;
         let request = self.process_entry_to_output_request(entry);
 
-        if let Err(error) = output_queue.enqueue(request) {
+        if let Err(error) = pending_output_buffer.enqueue(request) {
             self.order_book = order_book_before;
             self.next_trade_id = next_trade_id_before;
             return Err(error);
@@ -174,12 +195,12 @@ impl SymbolRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{EngineEvent, OrderAck, TradeEvent};
     use crate::journal_adapter::{
         JournalAdapterError, JournalInputEntry, JournalOutputAppender, JournalOutputEntry,
     };
+    use crate::matching_engine::{EngineEvent, OrderAck, TradeEvent};
     use crate::order::{Command, Order};
-    use crate::output_queue::{OutputQueue, OutputQueueError};
+    use crate::output_commit_boundary::{PendingOutputBuffer, PendingOutputBufferError};
     use crate::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
     struct InMemoryJournalOutputAppender {
@@ -233,6 +254,53 @@ mod tests {
         }
     }
 
+    fn limit_entry(
+        seq: u64,
+        command_id: u64,
+        order_id: u64,
+        side: Side,
+        price: u64,
+        quantity: u64,
+    ) -> JournalInputEntry {
+        JournalInputEntry {
+            seq: JournalSeq(seq),
+            command_id: CommandId(command_id),
+            command: Command::PlaceLimit(Order {
+                order_id: OrderId(order_id),
+                symbol: symbol(),
+                side,
+                price: Price(price),
+                quantity: Quantity(quantity),
+            }),
+        }
+    }
+
+    fn cancel_entry(seq: u64, command_id: u64, order_id: u64) -> JournalInputEntry {
+        JournalInputEntry {
+            seq: JournalSeq(seq),
+            command_id: CommandId(command_id),
+            command: Command::Cancel {
+                order_id: OrderId(order_id),
+                symbol: symbol(),
+            },
+        }
+    }
+
+    fn process_entries_on_fresh_runtime(
+        entries: Vec<JournalInputEntry>,
+    ) -> (Vec<JournalOutputEntry>, Option<JournalSeq>) {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let mut output = InMemoryJournalOutputAppender::new();
+        let expected_processed = entries.len();
+
+        assert_eq!(
+            runtime.process_batch(entries, &mut output),
+            Ok(expected_processed)
+        );
+
+        (output.read_all(), runtime.last_input_seq())
+    }
+
     #[test]
     fn processing_valid_entry_commits_output_and_advances_last_input_seq() {
         let mut runtime = SymbolRuntime::new(symbol());
@@ -256,6 +324,76 @@ mod tests {
                 order_id: OrderId(100),
                 journal_seq: JournalSeq(1),
             })]
+        );
+    }
+
+    #[test]
+    fn same_input_sequence_on_two_fresh_runtimes_produces_identical_output_entries_and_safe_point()
+    {
+        let entries = vec![
+            limit_entry(1, 10, 100, Side::Sell, 100, 3),
+            limit_entry(2, 11, 101, Side::Buy, 100, 3),
+            limit_entry(3, 12, 102, Side::Buy, 99, 5),
+            cancel_entry(4, 13, 102),
+        ];
+
+        let (first_output, first_safe_point) = process_entries_on_fresh_runtime(entries.clone());
+        let (second_output, second_safe_point) = process_entries_on_fresh_runtime(entries);
+
+        assert_eq!(first_output, second_output);
+        assert_eq!(first_safe_point, second_safe_point);
+        assert_eq!(first_safe_point, Some(JournalSeq(4)));
+        assert_eq!(
+            first_output,
+            vec![
+                JournalOutputEntry {
+                    command_id: CommandId(10),
+                    journal_seq: JournalSeq(1),
+                    events: vec![EngineEvent::OrderAck(OrderAck::Accepted {
+                        command_id: CommandId(10),
+                        order_id: OrderId(100),
+                        journal_seq: JournalSeq(1),
+                    })],
+                },
+                JournalOutputEntry {
+                    command_id: CommandId(11),
+                    journal_seq: JournalSeq(2),
+                    events: vec![
+                        EngineEvent::OrderAck(OrderAck::Accepted {
+                            command_id: CommandId(11),
+                            order_id: OrderId(101),
+                            journal_seq: JournalSeq(2),
+                        }),
+                        EngineEvent::Trade(TradeEvent {
+                            trade_id: TradeId(1),
+                            command_id: CommandId(11),
+                            journal_seq: JournalSeq(2),
+                            maker_order_id: OrderId(100),
+                            taker_order_id: OrderId(101),
+                            price: Price(100),
+                            quantity: Quantity(3),
+                        }),
+                    ],
+                },
+                JournalOutputEntry {
+                    command_id: CommandId(12),
+                    journal_seq: JournalSeq(3),
+                    events: vec![EngineEvent::OrderAck(OrderAck::Accepted {
+                        command_id: CommandId(12),
+                        order_id: OrderId(102),
+                        journal_seq: JournalSeq(3),
+                    })],
+                },
+                JournalOutputEntry {
+                    command_id: CommandId(13),
+                    journal_seq: JournalSeq(4),
+                    events: vec![EngineEvent::OrderAck(OrderAck::Cancelled {
+                        command_id: CommandId(13),
+                        order_id: OrderId(102),
+                        journal_seq: JournalSeq(4),
+                    })],
+                },
+            ]
         );
     }
 
@@ -285,30 +423,60 @@ mod tests {
         let request = runtime.process_entry_to_output_request(input_entry(1, 10, 100));
         assert_eq!(runtime.last_input_seq(), None);
 
-        runtime.mark_output_committed(request.journal_seq);
+        assert_eq!(runtime.mark_output_committed(request.journal_seq), Ok(()));
 
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
     }
 
     #[test]
-    fn output_queue_full_rolls_back_runtime_state_before_retry() {
+    fn mark_output_committed_rejects_non_contiguous_safe_point() {
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut full_queue = OutputQueue::new(0);
 
         assert_eq!(
-            runtime.process_entry_into_output_queue(input_entry(1, 10, 100), &mut full_queue),
-            Err(OutputQueueError::QueueFull)
+            runtime.mark_output_committed(JournalSeq(2)),
+            Err(SafePointError::NonContiguousCommit {
+                expected: JournalSeq(1),
+                actual: JournalSeq(2),
+            })
         );
         assert_eq!(runtime.last_input_seq(), None);
 
-        let mut retry_queue = OutputQueue::new(1);
+        assert_eq!(runtime.mark_output_committed(JournalSeq(1)), Ok(()));
+        assert_eq!(
+            runtime.mark_output_committed(JournalSeq(3)),
+            Err(SafePointError::NonContiguousCommit {
+                expected: JournalSeq(2),
+                actual: JournalSeq(3),
+            })
+        );
+        assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
+    }
+
+    #[test]
+    fn pending_output_buffer_full_rolls_back_runtime_state_before_retry() {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let mut full_buffer = PendingOutputBuffer::new(0);
 
         assert_eq!(
-            runtime.process_entry_into_output_queue(input_entry(1, 10, 100), &mut retry_queue),
+            runtime.process_entry_into_pending_output_buffer(
+                input_entry(1, 10, 100),
+                &mut full_buffer
+            ),
+            Err(PendingOutputBufferError::BufferFull)
+        );
+        assert_eq!(runtime.last_input_seq(), None);
+
+        let mut retry_buffer = PendingOutputBuffer::new(1);
+
+        assert_eq!(
+            runtime.process_entry_into_pending_output_buffer(
+                input_entry(1, 10, 100),
+                &mut retry_buffer
+            ),
             Ok(())
         );
 
-        let requests = retry_queue.drain_batch(10);
+        let requests = retry_buffer.drain_batch(10);
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].journal_seq, JournalSeq(1));
         assert_eq!(
@@ -320,6 +488,59 @@ mod tests {
             })]
         );
         assert_eq!(runtime.last_input_seq(), None);
+    }
+
+    #[test]
+    fn pending_output_buffer_full_for_crossing_trade_rolls_back_trade_id_before_retry() {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let mut output = InMemoryJournalOutputAppender::new();
+
+        assert_eq!(
+            runtime.process_entry(limit_entry(1, 10, 100, Side::Sell, 100, 3), &mut output),
+            Ok(())
+        );
+        assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
+
+        let crossing_buy = limit_entry(2, 11, 101, Side::Buy, 100, 3);
+        let mut full_buffer = PendingOutputBuffer::new(0);
+
+        assert_eq!(
+            runtime
+                .process_entry_into_pending_output_buffer(crossing_buy.clone(), &mut full_buffer),
+            Err(PendingOutputBufferError::BufferFull)
+        );
+        assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
+
+        let mut retry_buffer = PendingOutputBuffer::new(1);
+
+        assert_eq!(
+            runtime.process_entry_into_pending_output_buffer(crossing_buy, &mut retry_buffer),
+            Ok(())
+        );
+
+        let requests = retry_buffer.drain_batch(10);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].journal_seq, JournalSeq(2));
+        assert_eq!(
+            requests[0].events,
+            vec![
+                EngineEvent::OrderAck(OrderAck::Accepted {
+                    command_id: CommandId(11),
+                    order_id: OrderId(101),
+                    journal_seq: JournalSeq(2),
+                }),
+                EngineEvent::Trade(TradeEvent {
+                    trade_id: TradeId(1),
+                    command_id: CommandId(11),
+                    journal_seq: JournalSeq(2),
+                    maker_order_id: OrderId(100),
+                    taker_order_id: OrderId(101),
+                    price: Price(100),
+                    quantity: Quantity(3),
+                }),
+            ]
+        );
+        assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
     }
 
     struct FailingJournalOutputAppender;

@@ -1,8 +1,8 @@
-use matching_core::engine::{EngineEvent, OrderAck};
 use matching_core::journal_adapter::{
     JournalAdapterError, JournalOutputAppender, JournalOutputEntry,
 };
-use matching_core::output_committer::{OutputCommitRequest, OutputCommitter};
+use matching_core::matching_engine::{EngineEvent, OrderAck};
+use matching_core::output_commit_boundary::{OutputCommitRequest, OutputJournalClient};
 use matching_core::types::{CommandId, JournalSeq, OrderId};
 
 struct TestJournalOutputAppender {
@@ -51,12 +51,12 @@ fn request(seq: u64, command_id: u64, order_id: u64) -> OutputCommitRequest {
 }
 
 #[test]
-fn output_committer_is_available_from_public_api() {
+fn output_journal_client_is_available_from_public_api() {
     let mut journal = TestJournalOutputAppender::new();
-    let mut committer = OutputCommitter::new();
+    let mut journal_client = OutputJournalClient::new();
 
     assert_eq!(
-        committer.commit_batch(vec![request(1, 10, 100), request(2, 11, 101)], &mut journal),
+        journal_client.append_batch(vec![request(1, 10, 100), request(2, 11, 101)], &mut journal),
         Ok(2)
     );
 

@@ -1,5 +1,14 @@
+//! Order Book component.
+//!
+//! Architecture mapping:
+//! - `OrderBook` maps to the Order Book component.
+//! - `PriceLevel` maps to bid / ask price-level modules inside that component.
+//! - `order_index` maps to the Order Index module inside that component.
+//! - Handle validation, lookup, and index maintenance are component behavior,
+//!   not separate architecture modules in the current design.
+
 use crate::{
-    engine::{MatchResult, Trade},
+    matching_engine::{MatchResult, Trade},
     order::Order,
     types::{Checksum, OrderId, Price, Side, Symbol},
 };

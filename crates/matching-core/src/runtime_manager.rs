@@ -1,5 +1,5 @@
 use crate::journal_adapter::{JournalInputEntry, JournalOutputAppender};
-use crate::symbol_runtime::SymbolRuntime;
+use crate::per_symbol_execution_loop::SymbolRuntime;
 use crate::types::{JournalSeq, Symbol};
 use std::collections::HashMap;
 
@@ -69,10 +69,10 @@ impl RuntimeManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{EngineEvent, OrderAck};
     use crate::journal_adapter::{
         JournalAdapterError, JournalInputEntry, JournalOutputAppender, JournalOutputEntry,
     };
+    use crate::matching_engine::{EngineEvent, OrderAck};
     use crate::order::{Command, Order};
     use crate::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
