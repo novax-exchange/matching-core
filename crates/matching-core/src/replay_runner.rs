@@ -17,11 +17,19 @@ pub struct ReplayResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayOutputMismatchWindow {
+    pub start_index: usize,
+    pub actual_entries: Vec<JournalOutputEntry>,
+    pub expected_entries: Vec<JournalOutputEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplayComparisonResult {
     pub output_entries_match: bool,
     pub checksum_match: bool,
     pub last_replayed_seq_match: bool,
     pub first_output_mismatch_index: Option<usize>,
+    pub output_mismatch_window: Option<ReplayOutputMismatchWindow>,
     pub actual_output_digest: OutputDigest,
     pub expected_output_digest: OutputDigest,
     pub actual_checksum: Checksum,
@@ -42,12 +50,16 @@ impl ReplayResult {
     pub fn compare_with(&self, expected: &ReplayResult) -> ReplayComparisonResult {
         let first_output_mismatch_index =
             first_output_mismatch_index(&self.output_entries, &expected.output_entries);
+        let output_mismatch_window = first_output_mismatch_index.map(|index| {
+            output_mismatch_window(&self.output_entries, &expected.output_entries, index)
+        });
 
         ReplayComparisonResult {
             output_entries_match: self.output_entries == expected.output_entries,
             checksum_match: self.checksum == expected.checksum,
             last_replayed_seq_match: self.last_replayed_seq == expected.last_replayed_seq,
             first_output_mismatch_index,
+            output_mismatch_window,
             actual_output_digest: digest_journal_output_entries(&self.output_entries),
             expected_output_digest: digest_journal_output_entries(&expected.output_entries),
             actual_checksum: self.checksum,
@@ -61,6 +73,8 @@ impl ReplayResult {
         }
     }
 }
+
+const OUTPUT_MISMATCH_WINDOW_RADIUS: usize = 2;
 
 fn first_output_mismatch_index(
     actual: &[JournalOutputEntry],
@@ -78,6 +92,30 @@ fn first_output_mismatch_index(
         Some(shared_len)
     } else {
         None
+    }
+}
+
+fn output_mismatch_window(
+    actual: &[JournalOutputEntry],
+    expected: &[JournalOutputEntry],
+    mismatch_index: usize,
+) -> ReplayOutputMismatchWindow {
+    let start_index = mismatch_index.saturating_sub(OUTPUT_MISMATCH_WINDOW_RADIUS);
+    let end_index = actual
+        .len()
+        .max(expected.len())
+        .min(mismatch_index + OUTPUT_MISMATCH_WINDOW_RADIUS + 1);
+
+    ReplayOutputMismatchWindow {
+        start_index,
+        actual_entries: actual
+            .get(start_index..end_index.min(actual.len()))
+            .unwrap_or(&[])
+            .to_vec(),
+        expected_entries: expected
+            .get(start_index..end_index.min(expected.len()))
+            .unwrap_or(&[])
+            .to_vec(),
     }
 }
 
@@ -449,6 +487,7 @@ mod tests {
                 checksum_match: true,
                 last_replayed_seq_match: true,
                 first_output_mismatch_index: None,
+                output_mismatch_window: None,
                 actual_output_digest: comparison.actual_output_digest,
                 expected_output_digest: comparison.expected_output_digest,
                 actual_checksum: live_result.checksum,
@@ -519,6 +558,7 @@ mod tests {
                 checksum_match: false,
                 last_replayed_seq_match: false,
                 first_output_mismatch_index: None,
+                output_mismatch_window: None,
                 actual_output_digest: comparison.actual_output_digest,
                 expected_output_digest: comparison.expected_output_digest,
                 actual_checksum: Checksum(2),

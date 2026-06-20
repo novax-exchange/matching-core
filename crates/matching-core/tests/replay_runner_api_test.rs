@@ -1,4 +1,4 @@
-use matching_core::journal_adapter::{JournalInputEntry, JournalInputReader};
+use matching_core::journal_adapter::{JournalInputEntry, JournalInputReader, JournalOutputEntry};
 use matching_core::matching_engine::{EngineEvent, OrderAck, RejectReason};
 use matching_core::order::{Command, Order};
 use matching_core::per_symbol_execution_loop::SymbolRuntime;
@@ -60,6 +60,19 @@ fn limit_order(order_id: u64, side: Side, price: u64, quantity: u64) -> Command 
     })
 }
 
+fn accepted_output_entry(command_id: u64, order_id: u64, journal_seq: u64) -> JournalOutputEntry {
+    JournalOutputEntry {
+        command_id: CommandId(command_id),
+        journal_seq: JournalSeq(journal_seq),
+        events: vec![EngineEvent::OrderAck(OrderAck::Accepted {
+            command_id: CommandId(command_id),
+            order_id: OrderId(order_id),
+            journal_seq: JournalSeq(journal_seq),
+        })],
+        output_commit_metadata: None,
+    }
+}
+
 fn snapshot_after(journal: &TestJournalInputReader, count: usize) -> SymbolRuntimeSnapshot {
     let mut runtime = SymbolRuntime::new(symbol());
 
@@ -106,6 +119,7 @@ fn replay_result_is_available_from_public_api() {
             checksum_match: true,
             last_replayed_seq_match: true,
             first_output_mismatch_index: None,
+            output_mismatch_window: None,
             actual_output_digest: comparison.actual_output_digest,
             expected_output_digest: comparison.expected_output_digest,
             actual_checksum: result.checksum,
@@ -222,35 +236,15 @@ fn replay_result_from_snapshot_continues_trade_and_market_sequences_across_recov
 
 #[test]
 fn replay_result_comparison_reports_output_digests() {
-    let expected_entry = matching_core::journal_adapter::JournalOutputEntry {
-        command_id: CommandId(1),
-        journal_seq: JournalSeq(1),
-        events: vec![EngineEvent::OrderAck(OrderAck::Accepted {
-            command_id: CommandId(1),
-            order_id: OrderId(100),
-            journal_seq: JournalSeq(1),
-        })],
-        output_commit_metadata: None,
-    };
-    let actual_entry = matching_core::journal_adapter::JournalOutputEntry {
-        command_id: CommandId(2),
-        journal_seq: JournalSeq(1),
-        events: vec![EngineEvent::OrderAck(OrderAck::Accepted {
-            command_id: CommandId(2),
-            order_id: OrderId(101),
-            journal_seq: JournalSeq(1),
-        })],
-        output_commit_metadata: None,
-    };
     let expected = matching_core::replay_runner::ReplayResult {
         checksum: Checksum(1),
         last_replayed_seq: Some(JournalSeq(1)),
-        output_entries: vec![expected_entry],
+        output_entries: vec![accepted_output_entry(1, 100, 1)],
     };
     let actual = matching_core::replay_runner::ReplayResult {
         checksum: Checksum(1),
         last_replayed_seq: Some(JournalSeq(1)),
-        output_entries: vec![actual_entry],
+        output_entries: vec![accepted_output_entry(2, 101, 1)],
     };
 
     let same_comparison = expected.compare_with(&expected);
@@ -264,4 +258,38 @@ fn replay_result_comparison_reports_output_digests() {
         mismatch_comparison.actual_output_digest,
         mismatch_comparison.expected_output_digest
     );
+}
+
+#[test]
+fn replay_result_comparison_reports_output_mismatch_window() {
+    let expected_entries = vec![
+        accepted_output_entry(1, 101, 1),
+        accepted_output_entry(2, 102, 2),
+        accepted_output_entry(3, 103, 3),
+        accepted_output_entry(4, 104, 4),
+        accepted_output_entry(5, 105, 5),
+        accepted_output_entry(6, 106, 6),
+    ];
+    let mut actual_entries = expected_entries.clone();
+    actual_entries[3] = accepted_output_entry(40, 140, 4);
+
+    let expected = matching_core::replay_runner::ReplayResult {
+        checksum: Checksum(1),
+        last_replayed_seq: Some(JournalSeq(6)),
+        output_entries: expected_entries.clone(),
+    };
+    let actual = matching_core::replay_runner::ReplayResult {
+        checksum: Checksum(1),
+        last_replayed_seq: Some(JournalSeq(6)),
+        output_entries: actual_entries.clone(),
+    };
+
+    let comparison = actual.compare_with(&expected);
+    let window = comparison
+        .output_mismatch_window
+        .expect("mismatch should include surrounding output evidence");
+
+    assert_eq!(window.start_index, 1);
+    assert_eq!(window.actual_entries, actual_entries[1..6].to_vec());
+    assert_eq!(window.expected_entries, expected_entries[1..6].to_vec());
 }
