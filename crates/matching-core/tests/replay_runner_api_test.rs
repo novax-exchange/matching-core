@@ -106,6 +106,8 @@ fn replay_result_is_available_from_public_api() {
             checksum_match: true,
             last_replayed_seq_match: true,
             first_output_mismatch_index: None,
+            actual_output_digest: comparison.actual_output_digest,
+            expected_output_digest: comparison.expected_output_digest,
             actual_checksum: result.checksum,
             expected_checksum: result.checksum,
             actual_last_replayed_seq: result.last_replayed_seq,
@@ -216,4 +218,50 @@ fn replay_result_from_snapshot_continues_trade_and_market_sequences_across_recov
 
     assert_eq!(tail_trade.trade_id, TradeId(2));
     assert_eq!(tail_trade.market_seq, MarketSeq(2));
+}
+
+#[test]
+fn replay_result_comparison_reports_output_digests() {
+    let expected_entry = matching_core::journal_adapter::JournalOutputEntry {
+        command_id: CommandId(1),
+        journal_seq: JournalSeq(1),
+        events: vec![EngineEvent::OrderAck(OrderAck::Accepted {
+            command_id: CommandId(1),
+            order_id: OrderId(100),
+            journal_seq: JournalSeq(1),
+        })],
+        output_commit_metadata: None,
+    };
+    let actual_entry = matching_core::journal_adapter::JournalOutputEntry {
+        command_id: CommandId(2),
+        journal_seq: JournalSeq(1),
+        events: vec![EngineEvent::OrderAck(OrderAck::Accepted {
+            command_id: CommandId(2),
+            order_id: OrderId(101),
+            journal_seq: JournalSeq(1),
+        })],
+        output_commit_metadata: None,
+    };
+    let expected = matching_core::replay_runner::ReplayResult {
+        checksum: Checksum(1),
+        last_replayed_seq: Some(JournalSeq(1)),
+        output_entries: vec![expected_entry],
+    };
+    let actual = matching_core::replay_runner::ReplayResult {
+        checksum: Checksum(1),
+        last_replayed_seq: Some(JournalSeq(1)),
+        output_entries: vec![actual_entry],
+    };
+
+    let same_comparison = expected.compare_with(&expected);
+    let mismatch_comparison = actual.compare_with(&expected);
+
+    assert_eq!(
+        same_comparison.actual_output_digest,
+        same_comparison.expected_output_digest
+    );
+    assert_ne!(
+        mismatch_comparison.actual_output_digest,
+        mismatch_comparison.expected_output_digest
+    );
 }

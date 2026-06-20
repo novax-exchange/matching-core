@@ -1,6 +1,7 @@
 use crate::journal_adapter::{JournalInputReader, JournalOutputEntry};
 use crate::order::Command;
 use crate::order_book::OrderBook;
+use crate::output_commit_boundary::{digest_journal_output_entries, OutputDigest};
 use crate::per_symbol_execution_loop::SymbolRuntime;
 use crate::snapshot_restore::SymbolRuntimeSnapshot;
 use crate::types::{Checksum, JournalSeq, Symbol};
@@ -21,6 +22,8 @@ pub struct ReplayComparisonResult {
     pub checksum_match: bool,
     pub last_replayed_seq_match: bool,
     pub first_output_mismatch_index: Option<usize>,
+    pub actual_output_digest: OutputDigest,
+    pub expected_output_digest: OutputDigest,
     pub actual_checksum: Checksum,
     pub expected_checksum: Checksum,
     pub actual_last_replayed_seq: Option<JournalSeq>,
@@ -45,6 +48,8 @@ impl ReplayResult {
             checksum_match: self.checksum == expected.checksum,
             last_replayed_seq_match: self.last_replayed_seq == expected.last_replayed_seq,
             first_output_mismatch_index,
+            actual_output_digest: digest_journal_output_entries(&self.output_entries),
+            expected_output_digest: digest_journal_output_entries(&expected.output_entries),
             actual_checksum: self.checksum,
             expected_checksum: expected.checksum,
             actual_last_replayed_seq: self.last_replayed_seq,
@@ -444,6 +449,8 @@ mod tests {
                 checksum_match: true,
                 last_replayed_seq_match: true,
                 first_output_mismatch_index: None,
+                actual_output_digest: comparison.actual_output_digest,
+                expected_output_digest: comparison.expected_output_digest,
                 actual_checksum: live_result.checksum,
                 expected_checksum: live_result.checksum,
                 actual_last_replayed_seq: live_result.last_replayed_seq,
@@ -512,6 +519,8 @@ mod tests {
                 checksum_match: false,
                 last_replayed_seq_match: false,
                 first_output_mismatch_index: None,
+                actual_output_digest: comparison.actual_output_digest,
+                expected_output_digest: comparison.expected_output_digest,
                 actual_checksum: Checksum(2),
                 expected_checksum: Checksum(1),
                 actual_last_replayed_seq: Some(JournalSeq(2)),

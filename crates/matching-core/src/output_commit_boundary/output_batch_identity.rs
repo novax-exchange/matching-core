@@ -5,6 +5,7 @@
 //! adapter; it gives the commit path a stable value to expose and test first.
 
 use super::output_journal_client::OutputCommitRequest;
+use crate::journal_adapter::JournalOutputEntry;
 use crate::matching_engine::{EngineEvent, OrderAck, RejectReason};
 use crate::types::{JournalSeq, Symbol};
 
@@ -65,6 +66,23 @@ fn digest_output_requests(requests: &[OutputCommitRequest]) -> OutputDigest {
         hasher.write_usize(request.events.len());
 
         for event in &request.events {
+            digest_engine_event(&mut hasher, event);
+        }
+    }
+
+    OutputDigest(hasher.finish())
+}
+
+pub fn digest_journal_output_entries(entries: &[JournalOutputEntry]) -> OutputDigest {
+    let mut hasher = StableDigest::new();
+
+    for entry in entries {
+        hasher.write_tag("journal_output_entry");
+        hasher.write_u64(entry.command_id.0);
+        hasher.write_u64(entry.journal_seq.0);
+        hasher.write_usize(entry.events.len());
+
+        for event in &entry.events {
             digest_engine_event(&mut hasher, event);
         }
     }

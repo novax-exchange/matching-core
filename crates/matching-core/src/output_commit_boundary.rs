@@ -18,8 +18,8 @@ pub use output_batch_coordinator::{
     OutputCommitBlockDecision, OutputCommitRetryTracker,
 };
 pub use output_batch_identity::{
-    build_output_batch_identity, OutputBatchId, OutputBatchIdentity, OutputDigest,
-    MATCHING_OUTPUT_VERSION,
+    build_output_batch_identity, digest_journal_output_entries, OutputBatchId, OutputBatchIdentity,
+    OutputDigest, MATCHING_OUTPUT_VERSION,
 };
 pub use output_commit_metadata_index::{
     OutputCommitMetadataIndex, OutputCommitMetadataIndexError, OutputCommitMetadataLookup,
