@@ -2,7 +2,9 @@ use matching_core::journal_adapter::{JournalInputEntry, JournalInputReader};
 use matching_core::order::{Command, Order};
 use matching_core::order_book::OrderBook;
 use matching_core::replay_runner::ReplayRunner;
-use matching_core::snapshot_restore::OrderBookSnapshot;
+use matching_core::snapshot_restore::{
+    OrderBookSnapshot, SnapshotSerializationError, SymbolRuntimeSnapshot,
+};
 use matching_core::types::*;
 
 #[test]
@@ -25,6 +27,64 @@ fn snapshot_can_be_created_and_restored_from_public_api() {
     assert_eq!(restored.symbol(), &symbol);
     assert_eq!(restored.checksum(), book.checksum());
     assert_eq!(restored.resting_orders(), snapshot.resting_orders);
+}
+
+fn symbol_runtime_snapshot() -> SymbolRuntimeSnapshot {
+    let symbol = Symbol("BTC-USDT".to_string());
+
+    SymbolRuntimeSnapshot {
+        order_book_snapshot: OrderBookSnapshot {
+            symbol: symbol.clone(),
+            last_input_seq: JournalSeq(10),
+            checksum: Checksum(123),
+            resting_orders: vec![Order {
+                order_id: OrderId(1),
+                symbol,
+                side: Side::Buy,
+                price: Price(100),
+                quantity: Quantity(5),
+            }],
+        },
+        next_trade_seq: 7,
+        next_market_seq: 9,
+        seen_command_ids: vec![CommandId(1), CommandId(2)],
+        seen_order_ids: vec![OrderId(1), OrderId(2)],
+    }
+}
+
+#[test]
+fn symbol_runtime_snapshot_can_round_trip_through_canonical_bytes_from_public_api() {
+    let snapshot = symbol_runtime_snapshot();
+
+    let encoded = snapshot.to_canonical_bytes();
+    let decoded = SymbolRuntimeSnapshot::from_canonical_bytes(&encoded)
+        .expect("canonical bytes should decode");
+
+    assert_eq!(decoded, snapshot);
+}
+
+#[test]
+fn symbol_runtime_snapshot_canonical_bytes_sort_recoverable_identity_sets() {
+    let mut first = symbol_runtime_snapshot();
+    let mut second = symbol_runtime_snapshot();
+
+    first.seen_command_ids = vec![CommandId(1), CommandId(2)];
+    first.seen_order_ids = vec![OrderId(1), OrderId(2)];
+    second.seen_command_ids = vec![CommandId(2), CommandId(1)];
+    second.seen_order_ids = vec![OrderId(2), OrderId(1)];
+
+    assert_eq!(first.to_canonical_bytes(), second.to_canonical_bytes());
+}
+
+#[test]
+fn symbol_runtime_snapshot_rejects_invalid_canonical_bytes_magic_from_public_api() {
+    let mut encoded = symbol_runtime_snapshot().to_canonical_bytes();
+    encoded[0] = b'X';
+
+    assert_eq!(
+        SymbolRuntimeSnapshot::from_canonical_bytes(&encoded),
+        Err(SnapshotSerializationError::InvalidMagic)
+    );
 }
 
 struct TestJournalInputReader {

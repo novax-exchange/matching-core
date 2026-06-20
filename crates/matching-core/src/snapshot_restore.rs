@@ -2,6 +2,10 @@ use crate::order::Order;
 use crate::order_book::OrderBook;
 use crate::types::*;
 
+const SNAPSHOT_MAGIC: &[u8; 8] = b"NVXSNP01";
+pub const SYMBOL_RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolRuntimeSnapshot {
     pub order_book_snapshot: OrderBookSnapshot,
     pub next_trade_seq: u64,
@@ -10,11 +14,87 @@ pub struct SymbolRuntimeSnapshot {
     pub seen_order_ids: Vec<OrderId>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderBookSnapshot {
     pub symbol: Symbol,
     pub last_input_seq: JournalSeq,
     pub checksum: Checksum,
     pub resting_orders: Vec<Order>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnapshotSerializationError {
+    InvalidMagic,
+    UnsupportedVersion(u32),
+    UnexpectedEof,
+    InvalidUtf8,
+    InvalidSide(u8),
+    TrailingBytes(usize),
+}
+
+impl SymbolRuntimeSnapshot {
+    pub fn to_canonical_bytes(&self) -> Vec<u8> {
+        let mut writer = SnapshotWriter::new();
+        let mut seen_command_ids = self.seen_command_ids.clone();
+        let mut seen_order_ids = self.seen_order_ids.clone();
+
+        seen_command_ids.sort_by_key(|command_id| command_id.0);
+        seen_order_ids.sort_by_key(|order_id| order_id.0);
+
+        writer.write_bytes(SNAPSHOT_MAGIC);
+        writer.write_u32(SYMBOL_RUNTIME_SNAPSHOT_FORMAT_VERSION);
+        writer.write_string(&self.order_book_snapshot.symbol.0);
+        writer.write_u64(self.order_book_snapshot.last_input_seq.0);
+        writer.write_u64(self.order_book_snapshot.checksum.0);
+        writer.write_orders(&self.order_book_snapshot.resting_orders);
+        writer.write_u64(self.next_trade_seq);
+        writer.write_u64(self.next_market_seq);
+        writer.write_command_ids(&seen_command_ids);
+        writer.write_order_ids(&seen_order_ids);
+
+        writer.into_bytes()
+    }
+
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, SnapshotSerializationError> {
+        let mut reader = SnapshotReader::new(bytes);
+
+        if reader.read_bytes(SNAPSHOT_MAGIC.len())? != SNAPSHOT_MAGIC {
+            return Err(SnapshotSerializationError::InvalidMagic);
+        }
+
+        let version = reader.read_u32()?;
+        if version != SYMBOL_RUNTIME_SNAPSHOT_FORMAT_VERSION {
+            return Err(SnapshotSerializationError::UnsupportedVersion(version));
+        }
+
+        let symbol = Symbol(reader.read_string()?);
+        let last_input_seq = JournalSeq(reader.read_u64()?);
+        let checksum = Checksum(reader.read_u64()?);
+        let resting_orders = reader.read_orders()?;
+        let next_trade_seq = reader.read_u64()?;
+        let next_market_seq = reader.read_u64()?;
+        let seen_command_ids = reader.read_command_ids()?;
+        let seen_order_ids = reader.read_order_ids()?;
+
+        if reader.remaining_len() != 0 {
+            return Err(SnapshotSerializationError::TrailingBytes(
+                reader.remaining_len(),
+            ));
+        }
+
+        Ok(Self {
+            order_book_snapshot: OrderBookSnapshot {
+                symbol,
+                last_input_seq,
+                checksum,
+                resting_orders,
+            },
+            next_trade_seq,
+            next_market_seq,
+            seen_command_ids,
+            seen_order_ids,
+        })
+    }
 }
 
 impl OrderBookSnapshot {
@@ -35,6 +115,178 @@ impl OrderBookSnapshot {
         }
 
         book
+    }
+}
+
+struct SnapshotWriter {
+    bytes: Vec<u8>,
+}
+
+impl SnapshotWriter {
+    fn new() -> Self {
+        Self { bytes: Vec::new() }
+    }
+
+    fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    fn write_bytes(&mut self, value: &[u8]) {
+        self.bytes.extend_from_slice(value);
+    }
+
+    fn write_u8(&mut self, value: u8) {
+        self.bytes.push(value);
+    }
+
+    fn write_u32(&mut self, value: u32) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_string(&mut self, value: &str) {
+        self.write_u32(u32::try_from(value.len()).expect("snapshot string must fit in u32"));
+        self.write_bytes(value.as_bytes());
+    }
+
+    fn write_orders(&mut self, orders: &[Order]) {
+        self.write_u32(u32::try_from(orders.len()).expect("snapshot orders must fit in u32"));
+
+        for order in orders {
+            self.write_u64(order.order_id.0);
+            self.write_string(&order.symbol.0);
+            self.write_side(order.side);
+            self.write_u64(order.price.0);
+            self.write_u64(order.quantity.0);
+        }
+    }
+
+    fn write_command_ids(&mut self, command_ids: &[CommandId]) {
+        self.write_u32(
+            u32::try_from(command_ids.len()).expect("snapshot command ids must fit in u32"),
+        );
+
+        for command_id in command_ids {
+            self.write_u64(command_id.0);
+        }
+    }
+
+    fn write_order_ids(&mut self, order_ids: &[OrderId]) {
+        self.write_u32(u32::try_from(order_ids.len()).expect("snapshot order ids must fit in u32"));
+
+        for order_id in order_ids {
+            self.write_u64(order_id.0);
+        }
+    }
+
+    fn write_side(&mut self, side: Side) {
+        match side {
+            Side::Buy => self.write_u8(1),
+            Side::Sell => self.write_u8(2),
+        }
+    }
+}
+
+struct SnapshotReader<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> SnapshotReader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn remaining_len(&self) -> usize {
+        self.bytes.len() - self.offset
+    }
+
+    fn read_bytes(&mut self, len: usize) -> Result<&'a [u8], SnapshotSerializationError> {
+        let end = self
+            .offset
+            .checked_add(len)
+            .ok_or(SnapshotSerializationError::UnexpectedEof)?;
+
+        if end > self.bytes.len() {
+            return Err(SnapshotSerializationError::UnexpectedEof);
+        }
+
+        let result = &self.bytes[self.offset..end];
+        self.offset = end;
+        Ok(result)
+    }
+
+    fn read_u8(&mut self) -> Result<u8, SnapshotSerializationError> {
+        Ok(self.read_bytes(1)?[0])
+    }
+
+    fn read_u32(&mut self) -> Result<u32, SnapshotSerializationError> {
+        let mut bytes = [0_u8; 4];
+        bytes.copy_from_slice(self.read_bytes(4)?);
+        Ok(u32::from_le_bytes(bytes))
+    }
+
+    fn read_u64(&mut self) -> Result<u64, SnapshotSerializationError> {
+        let mut bytes = [0_u8; 8];
+        bytes.copy_from_slice(self.read_bytes(8)?);
+        Ok(u64::from_le_bytes(bytes))
+    }
+
+    fn read_string(&mut self) -> Result<String, SnapshotSerializationError> {
+        let len = self.read_u32()? as usize;
+        let bytes = self.read_bytes(len)?;
+
+        String::from_utf8(bytes.to_vec()).map_err(|_| SnapshotSerializationError::InvalidUtf8)
+    }
+
+    fn read_orders(&mut self) -> Result<Vec<Order>, SnapshotSerializationError> {
+        let count = self.read_u32()? as usize;
+        let mut orders = Vec::with_capacity(count);
+
+        for _ in 0..count {
+            orders.push(Order {
+                order_id: OrderId(self.read_u64()?),
+                symbol: Symbol(self.read_string()?),
+                side: self.read_side()?,
+                price: Price(self.read_u64()?),
+                quantity: Quantity(self.read_u64()?),
+            });
+        }
+
+        Ok(orders)
+    }
+
+    fn read_command_ids(&mut self) -> Result<Vec<CommandId>, SnapshotSerializationError> {
+        let count = self.read_u32()? as usize;
+        let mut command_ids = Vec::with_capacity(count);
+
+        for _ in 0..count {
+            command_ids.push(CommandId(self.read_u64()?));
+        }
+
+        Ok(command_ids)
+    }
+
+    fn read_order_ids(&mut self) -> Result<Vec<OrderId>, SnapshotSerializationError> {
+        let count = self.read_u32()? as usize;
+        let mut order_ids = Vec::with_capacity(count);
+
+        for _ in 0..count {
+            order_ids.push(OrderId(self.read_u64()?));
+        }
+
+        Ok(order_ids)
+    }
+
+    fn read_side(&mut self) -> Result<Side, SnapshotSerializationError> {
+        match self.read_u8()? {
+            1 => Ok(Side::Buy),
+            2 => Ok(Side::Sell),
+            value => Err(SnapshotSerializationError::InvalidSide(value)),
+        }
     }
 }
 
