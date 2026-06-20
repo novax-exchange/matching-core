@@ -1,9 +1,11 @@
 use matching_core::journal_adapter::{JournalInputEntry, JournalInputReader};
+use matching_core::matching_engine::{EngineEvent, OrderAck, RejectReason};
 use matching_core::order::{Command, Order};
+use matching_core::per_symbol_execution_loop::SymbolRuntime;
 use matching_core::replay_runner::{ReplayComparisonResult, ReplayRunner};
 use matching_core::snapshot_restore::{OrderBookSnapshot, SymbolRuntimeSnapshot};
 use matching_core::types::{
-    Checksum, CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol,
+    Checksum, CommandId, JournalSeq, MarketSeq, OrderId, Price, Quantity, Side, Symbol, TradeId,
 };
 
 struct TestJournalInputReader {
@@ -56,6 +58,19 @@ fn limit_order(order_id: u64, side: Side, price: u64, quantity: u64) -> Command 
         price: Price(price),
         quantity: Quantity(quantity),
     })
+}
+
+fn snapshot_after(journal: &TestJournalInputReader, count: usize) -> SymbolRuntimeSnapshot {
+    let mut runtime = SymbolRuntime::new(symbol());
+
+    for entry in journal.read_from(JournalSeq(1)).into_iter().take(count) {
+        let request = runtime.process_entry_to_output_request(entry);
+        runtime
+            .mark_output_committed(request.journal_seq)
+            .expect("test fixture should commit a contiguous prefix");
+    }
+
+    runtime.snapshot().expect("snapshot requires a safe point")
 }
 
 #[test]
@@ -133,4 +148,72 @@ fn replay_result_from_snapshot_is_available_from_public_api() {
     assert_eq!(result.last_replayed_seq, Some(JournalSeq(2)));
     assert_eq!(result.output_entries.len(), 1);
     assert_eq!(result.output_entries[0].journal_seq, JournalSeq(2));
+}
+
+#[test]
+fn replay_result_from_snapshot_preserves_seen_order_ids_across_recovery() {
+    let mut journal = TestJournalInputReader::new();
+
+    journal.append(CommandId(10), limit_order(100, Side::Sell, 100, 1));
+    journal.append(CommandId(11), limit_order(101, Side::Buy, 100, 1));
+    journal.append(CommandId(12), limit_order(100, Side::Buy, 99, 1));
+
+    let full_result = ReplayRunner::new(symbol()).replay_result(&journal);
+    let expected_tail_result = matching_core::replay_runner::ReplayResult {
+        checksum: full_result.checksum,
+        last_replayed_seq: full_result.last_replayed_seq,
+        output_entries: full_result.output_entries[2..].to_vec(),
+    };
+
+    let restored_tail_result = ReplayRunner::new(symbol())
+        .replay_result_from_snapshot(snapshot_after(&journal, 2), &journal);
+
+    assert!(restored_tail_result
+        .compare_with(&expected_tail_result)
+        .is_match());
+    assert_eq!(
+        restored_tail_result.output_entries[0].events,
+        vec![EngineEvent::OrderAck(OrderAck::Rejected {
+            command_id: CommandId(12),
+            order_id: Some(OrderId(100)),
+            journal_seq: JournalSeq(3),
+            reason: RejectReason::DuplicateOrderId,
+        })]
+    );
+}
+
+#[test]
+fn replay_result_from_snapshot_continues_trade_and_market_sequences_across_recovery() {
+    let mut journal = TestJournalInputReader::new();
+
+    journal.append(CommandId(10), limit_order(100, Side::Sell, 100, 1));
+    journal.append(CommandId(11), limit_order(101, Side::Buy, 100, 1));
+    journal.append(CommandId(12), limit_order(102, Side::Sell, 101, 1));
+    journal.append(CommandId(13), limit_order(103, Side::Buy, 101, 1));
+
+    let full_result = ReplayRunner::new(symbol()).replay_result(&journal);
+    let expected_tail_result = matching_core::replay_runner::ReplayResult {
+        checksum: full_result.checksum,
+        last_replayed_seq: full_result.last_replayed_seq,
+        output_entries: full_result.output_entries[2..].to_vec(),
+    };
+
+    let restored_tail_result = ReplayRunner::new(symbol())
+        .replay_result_from_snapshot(snapshot_after(&journal, 2), &journal);
+
+    assert!(restored_tail_result
+        .compare_with(&expected_tail_result)
+        .is_match());
+
+    let tail_trade = restored_tail_result.output_entries[1]
+        .events
+        .iter()
+        .find_map(|event| match event {
+            EngineEvent::Trade(trade) => Some(trade),
+            EngineEvent::OrderAck(_) => None,
+        })
+        .expect("tail buy should trade against the restored book");
+
+    assert_eq!(tail_trade.trade_id, TradeId(2));
+    assert_eq!(tail_trade.market_seq, MarketSeq(2));
 }
