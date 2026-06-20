@@ -10,6 +10,7 @@ pub mod order_book;
 pub mod output_commit_boundary;
 pub mod per_symbol_execution_loop;
 pub mod replay_runner;
+pub mod runtime_loop;
 pub mod runtime_manager;
 pub mod snapshot_restore;
 pub mod symbol_routing;
