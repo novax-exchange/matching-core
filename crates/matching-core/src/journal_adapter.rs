@@ -1,6 +1,7 @@
 use crate::matching_engine::EngineEvent;
 use crate::order::Command;
-use crate::types::{CommandId, JournalSeq};
+use crate::output_commit_boundary::OutputBatchIdentity;
+use crate::types::{CommandId, JournalSeq, Symbol};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalInputEntry {
@@ -14,11 +15,39 @@ pub struct JournalOutputEntry {
     pub command_id: CommandId,
     pub journal_seq: JournalSeq,
     pub events: Vec<EngineEvent>,
+    pub output_commit_metadata: Option<JournalOutputCommitMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalOutputCommitMetadata {
+    pub batch_id: String,
+    pub symbol: Symbol,
+    pub input_seq_start: JournalSeq,
+    pub input_seq_end: JournalSeq,
+    pub entry_count: usize,
+    pub matching_version: u32,
+    pub output_digest: u64,
+}
+
+impl JournalOutputCommitMetadata {
+    pub fn from_output_batch_identity(identity: &OutputBatchIdentity) -> Self {
+        Self {
+            batch_id: identity.batch_id.0.clone(),
+            symbol: identity.symbol.clone(),
+            input_seq_start: identity.input_seq_start,
+            input_seq_end: identity.input_seq_end,
+            entry_count: identity.entry_count,
+            matching_version: identity.matching_version,
+            output_digest: identity.output_digest.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JournalAdapterError {
     AppendFailed,
+    CommitOutcomeUnknown,
+    AppendRejected,
 }
 
 pub trait JournalInputReader {
@@ -34,6 +63,16 @@ pub trait JournalOutputAppender {
         journal_seq: JournalSeq,
         events: Vec<EngineEvent>,
     ) -> Result<(), JournalAdapterError>;
+
+    fn append_with_output_commit_metadata(
+        &mut self,
+        command_id: CommandId,
+        journal_seq: JournalSeq,
+        events: Vec<EngineEvent>,
+        _metadata: JournalOutputCommitMetadata,
+    ) -> Result<(), JournalAdapterError> {
+        self.append(command_id, journal_seq, events)
+    }
 
     fn read_all(&self) -> Vec<JournalOutputEntry>;
 }
@@ -203,6 +242,7 @@ mod tests {
                 command_id,
                 journal_seq,
                 events,
+                output_commit_metadata: None,
             });
 
             Ok(())

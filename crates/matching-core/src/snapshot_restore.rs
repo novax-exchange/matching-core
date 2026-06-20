@@ -2,6 +2,14 @@ use crate::order::Order;
 use crate::order_book::OrderBook;
 use crate::types::*;
 
+pub struct SymbolRuntimeSnapshot {
+    pub order_book_snapshot: OrderBookSnapshot,
+    pub next_trade_seq: u64,
+    pub next_market_seq: u64,
+    pub seen_command_ids: Vec<CommandId>,
+    pub seen_order_ids: Vec<OrderId>,
+}
+
 pub struct OrderBookSnapshot {
     pub symbol: Symbol,
     pub last_input_seq: JournalSeq,

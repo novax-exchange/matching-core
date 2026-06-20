@@ -22,6 +22,9 @@ pub struct CommandId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TradeId(pub u64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MarketSeq(pub u64);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Checksum(pub u64);
 
@@ -72,6 +75,7 @@ mod tests {
         assert_eq!(JournalSeq(10), JournalSeq(10));
         assert!(JournalSeq(10) < JournalSeq(11));
         assert!(TradeId(1) < TradeId(2));
+        assert!(MarketSeq(1) < MarketSeq(2));
     }
 
     #[test]

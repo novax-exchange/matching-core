@@ -81,6 +81,7 @@ impl JournalOutputAppender for TestJournalOutputAppender {
             command_id,
             journal_seq,
             events,
+            output_commit_metadata: None,
         });
 
         Ok(())

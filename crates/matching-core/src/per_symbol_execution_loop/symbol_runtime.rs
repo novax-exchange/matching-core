@@ -5,13 +5,18 @@ use crate::order::Command;
 use crate::order_book::OrderBook;
 use crate::output_commit_boundary::OutputCommitRequest;
 use crate::output_commit_boundary::{PendingOutputBuffer, PendingOutputBufferError};
-use crate::types::{JournalSeq, Symbol, TradeId};
+use crate::snapshot_restore::{OrderBookSnapshot, SymbolRuntimeSnapshot};
+use crate::types::{Checksum, CommandId, JournalSeq, MarketSeq, OrderId, Symbol, TradeId};
+use std::collections::HashSet;
 
 pub struct SymbolRuntime {
     ingress: CommandIngress,
     order_book: OrderBook,
     last_input_seq: Option<JournalSeq>,
-    next_trade_id: u64,
+    next_trade_seq: u64,
+    next_market_seq: u64,
+    seen_command_ids: HashSet<CommandId>,
+    seen_order_ids: HashSet<OrderId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,12 +41,59 @@ impl SymbolRuntime {
             ingress: CommandIngress::new(symbol.clone()),
             order_book: OrderBook::new(symbol.clone()),
             last_input_seq: None,
-            next_trade_id: 1,
+            next_trade_seq: 1,
+            next_market_seq: 1,
+            seen_command_ids: HashSet::new(),
+            seen_order_ids: HashSet::new(),
         }
     }
 
     pub fn last_input_seq(&self) -> Option<JournalSeq> {
         self.last_input_seq
+    }
+
+    pub fn symbol(&self) -> &Symbol {
+        self.order_book.symbol()
+    }
+
+    pub fn checksum(&self) -> Checksum {
+        self.order_book.checksum()
+    }
+
+    pub fn snapshot(&self) -> Option<SymbolRuntimeSnapshot> {
+        let last_input_seq = self.last_input_seq?;
+        let mut seen_command_ids: Vec<CommandId> = self.seen_command_ids.iter().copied().collect();
+        let mut seen_order_ids: Vec<OrderId> = self.seen_order_ids.iter().copied().collect();
+
+        seen_command_ids.sort_by_key(|command_id| command_id.0);
+        seen_order_ids.sort_by_key(|order_id| order_id.0);
+
+        Some(SymbolRuntimeSnapshot {
+            order_book_snapshot: OrderBookSnapshot::from_order_book(
+                &self.order_book,
+                last_input_seq,
+            ),
+            next_trade_seq: self.next_trade_seq,
+            next_market_seq: self.next_market_seq,
+            seen_command_ids,
+            seen_order_ids,
+        })
+    }
+
+    pub fn restore_from_snapshot(snapshot: SymbolRuntimeSnapshot) -> Self {
+        let symbol = snapshot.order_book_snapshot.symbol.clone();
+        let last_input_seq = snapshot.order_book_snapshot.last_input_seq;
+        let order_book = snapshot.order_book_snapshot.restore_order_book();
+
+        Self {
+            ingress: CommandIngress::new(symbol),
+            order_book,
+            last_input_seq: Some(last_input_seq),
+            next_trade_seq: snapshot.next_trade_seq,
+            next_market_seq: snapshot.next_market_seq,
+            seen_command_ids: snapshot.seen_command_ids.into_iter().collect(),
+            seen_order_ids: snapshot.seen_order_ids.into_iter().collect(),
+        }
     }
 
     pub fn mark_output_committed(&mut self, journal_seq: JournalSeq) -> Result<(), SafePointError> {
@@ -82,12 +134,18 @@ impl SymbolRuntime {
         output: &mut dyn JournalOutputAppender,
     ) -> Result<(), JournalAdapterError> {
         let order_book_before = self.order_book.clone();
-        let next_trade_id_before = self.next_trade_id;
+        let next_trade_seq_before = self.next_trade_seq;
+        let next_market_seq_before = self.next_market_seq;
+        let seen_command_ids_before = self.seen_command_ids.clone();
+        let seen_order_ids_before = self.seen_order_ids.clone();
         let request = self.process_entry_to_output_request(entry);
 
         if let Err(error) = output.append(request.command_id, request.journal_seq, request.events) {
             self.order_book = order_book_before;
-            self.next_trade_id = next_trade_id_before;
+            self.next_trade_seq = next_trade_seq_before;
+            self.next_market_seq = next_market_seq_before;
+            self.seen_command_ids = seen_command_ids_before;
+            self.seen_order_ids = seen_order_ids_before;
             return Err(error);
         }
 
@@ -101,12 +159,18 @@ impl SymbolRuntime {
         pending_output_buffer: &mut PendingOutputBuffer,
     ) -> Result<(), PendingOutputBufferError> {
         let order_book_before = self.order_book.clone();
-        let next_trade_id_before = self.next_trade_id;
+        let next_trade_seq_before = self.next_trade_seq;
+        let next_market_seq_before = self.next_market_seq;
+        let seen_command_ids_before = self.seen_command_ids.clone();
+        let seen_order_ids_before = self.seen_order_ids.clone();
         let request = self.process_entry_to_output_request(entry);
 
         if let Err(error) = pending_output_buffer.enqueue(request) {
             self.order_book = order_book_before;
-            self.next_trade_id = next_trade_id_before;
+            self.next_trade_seq = next_trade_seq_before;
+            self.next_market_seq = next_market_seq_before;
+            self.seen_command_ids = seen_command_ids_before;
+            self.seen_order_ids = seen_order_ids_before;
             return Err(error);
         }
 
@@ -117,6 +181,26 @@ impl SymbolRuntime {
         &mut self,
         entry: JournalInputEntry,
     ) -> OutputCommitRequest {
+        let duplicate_order_id = match &entry.command {
+            Command::PlaceLimit(order) => Some(order.order_id),
+            Command::Cancel { order_id, .. } => Some(*order_id),
+        };
+
+        if self.seen_command_ids.contains(&entry.command_id) {
+            return OutputCommitRequest {
+                command_id: entry.command_id,
+                journal_seq: entry.seq,
+                events: vec![EngineEvent::OrderAck(OrderAck::Rejected {
+                    command_id: entry.command_id,
+                    order_id: duplicate_order_id,
+                    journal_seq: entry.seq,
+                    reason: RejectReason::DuplicateCommandId,
+                })],
+            };
+        }
+
+        self.seen_command_ids.insert(entry.command_id);
+
         let command = match self.ingress.validate(entry.command) {
             Ok(command) => command,
             Err(error) => {
@@ -138,6 +222,21 @@ impl SymbolRuntime {
             Command::PlaceLimit(order) => {
                 let order_id = order.order_id;
 
+                if self.seen_order_ids.contains(&order_id) {
+                    return OutputCommitRequest {
+                        command_id: entry.command_id,
+                        journal_seq: entry.seq,
+                        events: vec![EngineEvent::OrderAck(OrderAck::Rejected {
+                            command_id: entry.command_id,
+                            order_id: Some(order_id),
+                            journal_seq: entry.seq,
+                            reason: RejectReason::DuplicateOrderId,
+                        })],
+                    };
+                }
+
+                self.seen_order_ids.insert(order_id);
+
                 let result = self.order_book.place_limit(order);
 
                 let mut events = vec![EngineEvent::OrderAck(OrderAck::Accepted {
@@ -147,11 +246,14 @@ impl SymbolRuntime {
                 })];
 
                 for trade in result.trades {
-                    let trade_id = TradeId(self.next_trade_id);
-                    self.next_trade_id += 1;
+                    let trade_id = TradeId(self.next_trade_seq);
+                    let market_seq = MarketSeq(self.next_market_seq);
+                    self.next_trade_seq += 1;
+                    self.next_market_seq += 1;
 
                     events.push(EngineEvent::Trade(TradeEvent {
                         trade_id,
+                        market_seq,
                         command_id: entry.command_id,
                         journal_seq: entry.seq,
                         maker_order_id: trade.maker_order_id,
@@ -200,8 +302,11 @@ mod tests {
     };
     use crate::matching_engine::{EngineEvent, OrderAck, TradeEvent};
     use crate::order::{Command, Order};
-    use crate::output_commit_boundary::{PendingOutputBuffer, PendingOutputBufferError};
-    use crate::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
+    use crate::output_commit_boundary::{
+        run_output_batch_commit_step_report, OutputJournalClient, PendingOutputBuffer,
+        PendingOutputBufferError,
+    };
+    use crate::types::{CommandId, JournalSeq, MarketSeq, OrderId, Price, Quantity, Side, Symbol};
 
     struct InMemoryJournalOutputAppender {
         entries: Vec<JournalOutputEntry>,
@@ -226,6 +331,7 @@ mod tests {
                 command_id,
                 journal_seq,
                 events,
+                output_commit_metadata: None,
             });
 
             Ok(())
@@ -286,17 +392,40 @@ mod tests {
         }
     }
 
-    fn process_entries_on_fresh_runtime(
+    fn process_entries_through_async_output_commit_on_fresh_runtime(
         entries: Vec<JournalInputEntry>,
     ) -> (Vec<JournalOutputEntry>, Option<JournalSeq>) {
         let mut runtime = SymbolRuntime::new(symbol());
-        let mut output = InMemoryJournalOutputAppender::new();
+        let mut pending_output_buffer = PendingOutputBuffer::new(entries.len());
         let expected_processed = entries.len();
 
-        assert_eq!(
-            runtime.process_batch(entries, &mut output),
-            Ok(expected_processed)
+        for entry in entries {
+            assert_eq!(
+                runtime.process_entry_into_pending_output_buffer(entry, &mut pending_output_buffer),
+                Ok(())
+            );
+        }
+        assert_eq!(runtime.last_input_seq(), None);
+
+        let mut journal_client = OutputJournalClient::new();
+        let mut output = InMemoryJournalOutputAppender::new();
+        let report = run_output_batch_commit_step_report(
+            &mut journal_client,
+            &mut pending_output_buffer,
+            &mut output,
+            expected_processed,
         );
+
+        assert_eq!(report.blocking_seq, None);
+        assert_eq!(report.blocking_outcome, None);
+        assert_eq!(report.commit_result.committed_count, expected_processed);
+        assert_eq!(
+            runtime.mark_output_committed(report.commit_result.committed_seqs[0]),
+            Ok(())
+        );
+        for journal_seq in report.commit_result.committed_seqs.iter().skip(1) {
+            assert_eq!(runtime.mark_output_committed(*journal_seq), Ok(()));
+        }
 
         (output.read_all(), runtime.last_input_seq())
     }
@@ -328,8 +457,8 @@ mod tests {
     }
 
     #[test]
-    fn same_input_sequence_on_two_fresh_runtimes_produces_identical_output_entries_and_safe_point()
-    {
+    fn same_input_sequence_on_two_fresh_runtimes_produces_identical_output_entries_and_safe_point_through_async_output_commit(
+    ) {
         let entries = vec![
             limit_entry(1, 10, 100, Side::Sell, 100, 3),
             limit_entry(2, 11, 101, Side::Buy, 100, 3),
@@ -337,8 +466,10 @@ mod tests {
             cancel_entry(4, 13, 102),
         ];
 
-        let (first_output, first_safe_point) = process_entries_on_fresh_runtime(entries.clone());
-        let (second_output, second_safe_point) = process_entries_on_fresh_runtime(entries);
+        let (first_output, first_safe_point) =
+            process_entries_through_async_output_commit_on_fresh_runtime(entries.clone());
+        let (second_output, second_safe_point) =
+            process_entries_through_async_output_commit_on_fresh_runtime(entries);
 
         assert_eq!(first_output, second_output);
         assert_eq!(first_safe_point, second_safe_point);
@@ -354,6 +485,7 @@ mod tests {
                         order_id: OrderId(100),
                         journal_seq: JournalSeq(1),
                     })],
+                    output_commit_metadata: None,
                 },
                 JournalOutputEntry {
                     command_id: CommandId(11),
@@ -366,6 +498,7 @@ mod tests {
                         }),
                         EngineEvent::Trade(TradeEvent {
                             trade_id: TradeId(1),
+                            market_seq: MarketSeq(1),
                             command_id: CommandId(11),
                             journal_seq: JournalSeq(2),
                             maker_order_id: OrderId(100),
@@ -374,6 +507,7 @@ mod tests {
                             quantity: Quantity(3),
                         }),
                     ],
+                    output_commit_metadata: None,
                 },
                 JournalOutputEntry {
                     command_id: CommandId(12),
@@ -383,6 +517,7 @@ mod tests {
                         order_id: OrderId(102),
                         journal_seq: JournalSeq(3),
                     })],
+                    output_commit_metadata: None,
                 },
                 JournalOutputEntry {
                     command_id: CommandId(13),
@@ -392,6 +527,7 @@ mod tests {
                         order_id: OrderId(102),
                         journal_seq: JournalSeq(4),
                     })],
+                    output_commit_metadata: None,
                 },
             ]
         );
@@ -531,6 +667,7 @@ mod tests {
                 }),
                 EngineEvent::Trade(TradeEvent {
                     trade_id: TradeId(1),
+                    market_seq: MarketSeq(1),
                     command_id: CommandId(11),
                     journal_seq: JournalSeq(2),
                     maker_order_id: OrderId(100),
@@ -626,6 +763,7 @@ mod tests {
                 command_id,
                 journal_seq,
                 events,
+                output_commit_metadata: None,
             });
 
             Ok(())
@@ -865,6 +1003,7 @@ mod tests {
                 }),
                 EngineEvent::Trade(TradeEvent {
                     trade_id: TradeId(1),
+                    market_seq: MarketSeq(1),
                     command_id: CommandId(11),
                     journal_seq: JournalSeq(2),
                     maker_order_id: OrderId(100),
@@ -873,6 +1012,110 @@ mod tests {
                     quantity: Quantity(3),
                 }),
             ]
+        );
+    }
+
+    #[test]
+    fn duplicate_order_id_is_rejected_before_matching_or_mutating_order_book() {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let mut output = InMemoryJournalOutputAppender::new();
+
+        let resting_sell = limit_entry(1, 10, 100, Side::Sell, 100, 3);
+        let duplicate_crossing_buy = limit_entry(2, 11, 100, Side::Buy, 100, 3);
+        let cancel_original = cancel_entry(3, 12, 100);
+
+        assert_eq!(runtime.process_entry(resting_sell, &mut output), Ok(()));
+        assert_eq!(
+            runtime.process_entry(duplicate_crossing_buy, &mut output),
+            Ok(())
+        );
+        assert_eq!(runtime.process_entry(cancel_original, &mut output), Ok(()));
+        assert_eq!(runtime.last_input_seq(), Some(JournalSeq(3)));
+
+        let entries = output.read_all();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(
+            entries[1].events,
+            vec![EngineEvent::OrderAck(OrderAck::Rejected {
+                command_id: CommandId(11),
+                order_id: Some(OrderId(100)),
+                journal_seq: JournalSeq(2),
+                reason: RejectReason::DuplicateOrderId,
+            })]
+        );
+        assert_eq!(
+            entries[2].events,
+            vec![EngineEvent::OrderAck(OrderAck::Cancelled {
+                command_id: CommandId(12),
+                order_id: OrderId(100),
+                journal_seq: JournalSeq(3),
+            })]
+        );
+    }
+
+    #[test]
+    fn duplicate_order_id_is_rejected_after_original_order_was_filled() {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let mut output = InMemoryJournalOutputAppender::new();
+
+        let resting_sell = limit_entry(1, 10, 100, Side::Sell, 100, 3);
+        let crossing_buy = limit_entry(2, 11, 101, Side::Buy, 100, 3);
+        let duplicate_after_fill = limit_entry(3, 12, 100, Side::Buy, 99, 1);
+
+        assert_eq!(runtime.process_entry(resting_sell, &mut output), Ok(()));
+        assert_eq!(runtime.process_entry(crossing_buy, &mut output), Ok(()));
+        assert_eq!(
+            runtime.process_entry(duplicate_after_fill, &mut output),
+            Ok(())
+        );
+
+        let entries = output.read_all();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(
+            entries[2].events,
+            vec![EngineEvent::OrderAck(OrderAck::Rejected {
+                command_id: CommandId(12),
+                order_id: Some(OrderId(100)),
+                journal_seq: JournalSeq(3),
+                reason: RejectReason::DuplicateOrderId,
+            })]
+        );
+    }
+
+    #[test]
+    fn duplicate_command_id_is_rejected_before_matching_or_mutating_order_book() {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let mut output = InMemoryJournalOutputAppender::new();
+
+        let resting_sell = limit_entry(1, 10, 100, Side::Sell, 100, 3);
+        let duplicate_command_crossing_buy = limit_entry(2, 10, 101, Side::Buy, 100, 3);
+        let cancel_original = cancel_entry(3, 12, 100);
+
+        assert_eq!(runtime.process_entry(resting_sell, &mut output), Ok(()));
+        assert_eq!(
+            runtime.process_entry(duplicate_command_crossing_buy, &mut output),
+            Ok(())
+        );
+        assert_eq!(runtime.process_entry(cancel_original, &mut output), Ok(()));
+
+        let entries = output.read_all();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(
+            entries[1].events,
+            vec![EngineEvent::OrderAck(OrderAck::Rejected {
+                command_id: CommandId(10),
+                order_id: Some(OrderId(101)),
+                journal_seq: JournalSeq(2),
+                reason: RejectReason::DuplicateCommandId,
+            })]
+        );
+        assert_eq!(
+            entries[2].events,
+            vec![EngineEvent::OrderAck(OrderAck::Cancelled {
+                command_id: CommandId(12),
+                order_id: OrderId(100),
+                journal_seq: JournalSeq(3),
+            })]
         );
     }
 
@@ -936,6 +1179,7 @@ mod tests {
                 }),
                 EngineEvent::Trade(TradeEvent {
                     trade_id: TradeId(1),
+                    market_seq: MarketSeq(1),
                     command_id: CommandId(11),
                     journal_seq: JournalSeq(2),
                     maker_order_id: OrderId(100),
@@ -1164,6 +1408,7 @@ mod tests {
                 }),
                 EngineEvent::Trade(TradeEvent {
                     trade_id: TradeId(1),
+                    market_seq: MarketSeq(1),
                     command_id: CommandId(11),
                     journal_seq: JournalSeq(2),
                     maker_order_id: OrderId(100),
@@ -1172,6 +1417,133 @@ mod tests {
                     quantity: Quantity(3),
                 }),
             ]
+        );
+    }
+
+    #[test]
+    fn restored_runtime_continues_trade_and_market_sequence_from_snapshot() {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let mut output = InMemoryJournalOutputAppender::new();
+
+        assert_eq!(
+            runtime.process_entry(limit_entry(1, 10, 100, Side::Sell, 100, 1), &mut output),
+            Ok(())
+        );
+        assert_eq!(
+            runtime.process_entry(limit_entry(2, 11, 101, Side::Buy, 100, 1), &mut output),
+            Ok(())
+        );
+
+        let snapshot = runtime.snapshot().expect("snapshot requires a safe point");
+        let mut restored = SymbolRuntime::restore_from_snapshot(snapshot);
+        let mut restored_output = InMemoryJournalOutputAppender::new();
+
+        assert_eq!(
+            restored.process_entry(
+                limit_entry(3, 12, 102, Side::Sell, 100, 1),
+                &mut restored_output
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            restored.process_entry(
+                limit_entry(4, 13, 103, Side::Buy, 100, 1),
+                &mut restored_output
+            ),
+            Ok(())
+        );
+
+        let entries = restored_output.read_all();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[1].events,
+            vec![
+                EngineEvent::OrderAck(OrderAck::Accepted {
+                    command_id: CommandId(13),
+                    order_id: OrderId(103),
+                    journal_seq: JournalSeq(4),
+                }),
+                EngineEvent::Trade(TradeEvent {
+                    trade_id: TradeId(2),
+                    market_seq: MarketSeq(2),
+                    command_id: CommandId(13),
+                    journal_seq: JournalSeq(4),
+                    maker_order_id: OrderId(102),
+                    taker_order_id: OrderId(103),
+                    price: Price(100),
+                    quantity: Quantity(1),
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn restored_runtime_rejects_order_id_seen_before_snapshot() {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let mut output = InMemoryJournalOutputAppender::new();
+
+        assert_eq!(
+            runtime.process_entry(limit_entry(1, 10, 100, Side::Sell, 100, 1), &mut output),
+            Ok(())
+        );
+
+        let snapshot = runtime.snapshot().expect("snapshot requires a safe point");
+        let mut restored = SymbolRuntime::restore_from_snapshot(snapshot);
+        let mut restored_output = InMemoryJournalOutputAppender::new();
+
+        assert_eq!(
+            restored.process_entry(
+                limit_entry(2, 11, 100, Side::Buy, 100, 1),
+                &mut restored_output
+            ),
+            Ok(())
+        );
+
+        let entries = restored_output.read_all();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].events,
+            vec![EngineEvent::OrderAck(OrderAck::Rejected {
+                command_id: CommandId(11),
+                order_id: Some(OrderId(100)),
+                journal_seq: JournalSeq(2),
+                reason: RejectReason::DuplicateOrderId,
+            })]
+        );
+    }
+
+    #[test]
+    fn restored_runtime_rejects_command_id_seen_before_snapshot() {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let mut output = InMemoryJournalOutputAppender::new();
+
+        assert_eq!(
+            runtime.process_entry(limit_entry(1, 10, 100, Side::Sell, 100, 1), &mut output),
+            Ok(())
+        );
+
+        let snapshot = runtime.snapshot().expect("snapshot requires a safe point");
+        let mut restored = SymbolRuntime::restore_from_snapshot(snapshot);
+        let mut restored_output = InMemoryJournalOutputAppender::new();
+
+        assert_eq!(
+            restored.process_entry(
+                limit_entry(2, 10, 101, Side::Buy, 100, 1),
+                &mut restored_output
+            ),
+            Ok(())
+        );
+
+        let entries = restored_output.read_all();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].events,
+            vec![EngineEvent::OrderAck(OrderAck::Rejected {
+                command_id: CommandId(10),
+                order_id: Some(OrderId(101)),
+                journal_seq: JournalSeq(2),
+                reason: RejectReason::DuplicateCommandId,
+            })]
         );
     }
 }

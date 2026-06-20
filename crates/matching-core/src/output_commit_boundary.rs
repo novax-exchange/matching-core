@@ -6,9 +6,25 @@
 //! architecture components.
 
 pub mod output_batch_coordinator;
+pub mod output_batch_identity;
+pub mod output_commit_metadata_index;
 pub mod output_journal_client;
 pub mod pending_output_buffer;
 
-pub use output_batch_coordinator::{run_output_batch_commit_step, OutputBatchCommitResult};
-pub use output_journal_client::{OutputCommitRequest, OutputJournalClient};
+pub use output_batch_coordinator::{
+    run_output_batch_commit_step, run_output_batch_commit_step_report,
+    run_output_batch_commit_step_report_with_identity, OutputBatchCommitResult,
+    OutputBatchCommitStepReport, OutputBatchCommitStepReportWithIdentity, OutputCommitBlockAction,
+    OutputCommitBlockDecision, OutputCommitRetryTracker,
+};
+pub use output_batch_identity::{
+    build_output_batch_identity, OutputBatchId, OutputBatchIdentity, OutputDigest,
+    MATCHING_OUTPUT_VERSION,
+};
+pub use output_commit_metadata_index::{
+    OutputCommitMetadataIndex, OutputCommitMetadataIndexError, OutputCommitMetadataLookup,
+};
+pub use output_journal_client::{
+    OutputBatchQueryStatus, OutputCommitOutcome, OutputCommitRequest, OutputJournalClient,
+};
 pub use pending_output_buffer::{PendingOutputBuffer, PendingOutputBufferError};

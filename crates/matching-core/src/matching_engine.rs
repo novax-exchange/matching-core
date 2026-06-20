@@ -23,12 +23,15 @@ pub enum RejectReason {
     InvalidPrice,
     InvalidQuantity,
     SymbolMismatch,
+    DuplicateCommandId,
+    DuplicateOrderId,
     OrderNotFound,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TradeEvent {
     pub trade_id: TradeId,
+    pub market_seq: MarketSeq,
     pub command_id: CommandId,
     pub journal_seq: JournalSeq,
     pub maker_order_id: OrderId,
@@ -140,6 +143,7 @@ mod tests {
     fn trade_event_can_be_constructed() {
         let event = TradeEvent {
             trade_id: TradeId(1),
+            market_seq: MarketSeq(1),
             command_id: CommandId(10),
             journal_seq: JournalSeq(100),
             maker_order_id: OrderId(1),
@@ -149,6 +153,7 @@ mod tests {
         };
 
         assert_eq!(event.trade_id, TradeId(1));
+        assert_eq!(event.market_seq, MarketSeq(1));
         assert_eq!(event.command_id, CommandId(10));
         assert_eq!(event.journal_seq, JournalSeq(100));
         assert_eq!(event.price, Price(100));
@@ -172,6 +177,7 @@ mod tests {
     fn engine_event_can_wrap_trade_event() {
         let trade = TradeEvent {
             trade_id: TradeId(1),
+            market_seq: MarketSeq(1),
             command_id: CommandId(10),
             journal_seq: JournalSeq(100),
             maker_order_id: OrderId(1),

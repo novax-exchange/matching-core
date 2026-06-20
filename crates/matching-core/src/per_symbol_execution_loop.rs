@@ -6,7 +6,9 @@ use crate::{
     bounded_handoff::BoundedHandoff,
     journal_adapter::{JournalAdapterError, JournalOutputAppender},
     output_commit_boundary::{
-        OutputBatchCommitResult, PendingOutputBuffer, PendingOutputBufferError,
+        run_output_batch_commit_step_report_with_identity, OutputBatchCommitResult,
+        OutputBatchCommitStepReport, OutputBatchIdentity, OutputBatchQueryStatus,
+        OutputJournalClient, PendingOutputBuffer, PendingOutputBufferError,
     },
 };
 use std::thread::{self, JoinHandle};
@@ -17,6 +19,21 @@ pub type PerSymbolExecutionLoopWorkerResult<O> = (
     O,
     Result<usize, JournalAdapterError>,
 );
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PerSymbolExecutionLoopOutputCommitStepReport {
+    pub input_processed_count: usize,
+    pub safe_point_advanced_count: usize,
+    pub output_batch_identity: Option<OutputBatchIdentity>,
+    pub output_batch_query_status: Option<OutputBatchQueryStatus>,
+    pub output_commit_report: OutputBatchCommitStepReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PerSymbolExecutionLoopOutputCommitStepError {
+    PendingOutputBuffer(PendingOutputBufferError),
+    SafePoint(SafePointError),
+}
 
 pub fn spawn_per_symbol_execution_loop_once<O>(
     mut runtime: SymbolRuntime,
@@ -100,6 +117,45 @@ pub fn advance_runtime_safe_point_from_output_commit(
     Ok(advanced)
 }
 
+pub fn run_per_symbol_execution_loop_step_with_output_batch_commit(
+    runtime: &mut SymbolRuntime,
+    handoff: &mut BoundedHandoff,
+    pending_output_buffer: &mut PendingOutputBuffer,
+    journal_client: &mut OutputJournalClient,
+    output: &mut dyn JournalOutputAppender,
+    max_input_entries: usize,
+    max_output_requests: usize,
+) -> Result<PerSymbolExecutionLoopOutputCommitStepReport, PerSymbolExecutionLoopOutputCommitStepError>
+{
+    let input_processed_count = run_per_symbol_execution_loop_step_to_pending_output_buffer(
+        runtime,
+        handoff,
+        pending_output_buffer,
+        max_input_entries,
+    )
+    .map_err(PerSymbolExecutionLoopOutputCommitStepError::PendingOutputBuffer)?;
+
+    let output_commit_report_with_identity = run_output_batch_commit_step_report_with_identity(
+        runtime.symbol(),
+        journal_client,
+        pending_output_buffer,
+        output,
+        max_output_requests,
+    );
+    let output_commit_report = output_commit_report_with_identity.commit_report;
+    let safe_point_advanced_count =
+        advance_runtime_safe_point_from_output_commit(runtime, &output_commit_report.commit_result)
+            .map_err(PerSymbolExecutionLoopOutputCommitStepError::SafePoint)?;
+
+    Ok(PerSymbolExecutionLoopOutputCommitStepReport {
+        input_processed_count,
+        safe_point_advanced_count,
+        output_batch_identity: output_commit_report_with_identity.batch_identity,
+        output_batch_query_status: output_commit_report_with_identity.output_batch_query_status,
+        output_commit_report,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,6 +193,7 @@ mod tests {
                 command_id,
                 journal_seq,
                 events,
+                output_commit_metadata: None,
             });
             Ok(())
         }
@@ -223,6 +280,7 @@ mod tests {
                 command_id,
                 journal_seq,
                 events,
+                output_commit_metadata: None,
             });
 
             Ok(())
