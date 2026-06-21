@@ -161,7 +161,7 @@ flowchart TB
 
 - Domain types、command validation、limit order、cancel、ack、trade 和 market event。
 - 确定性的 bid / ask book、同价位 FIFO、indexed cancellation、checksum、snapshot 和 restore。
-- Multi-symbol runtime management、symbol routing、bounded handoff queue、limited runtime-loop scheduling、pending output pressure 和 runtime policy config。
+- Multi-symbol runtime management、symbol routing、bounded handoff queue、configured manual runtime host run、input-batch preflight、drain boundary、pending output pressure 和 runtime policy config。
 - Output batch identity、output commit retry / query handling，以及 durable output 之后的 safe-point advancement。
 - Replay、snapshot storage、verified manifest 和 snapshot verification evidence。
 

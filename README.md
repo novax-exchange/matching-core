@@ -161,7 +161,7 @@ The core crate already has working pieces for:
 
 - Domain types, command validation, limit orders, cancellation, acknowledgements, trades, and market events.
 - Deterministic bid / ask books with FIFO price levels, indexed cancellation, checksum, snapshot, and restore.
-- Multi-symbol runtime management, symbol routing, bounded handoff queues, limited runtime-loop scheduling, pending output pressure, and runtime policy configuration.
+- Multi-symbol runtime management, symbol routing, bounded handoff queues, configured manual runtime host runs, input-batch preflight, drain boundaries, pending output pressure, and runtime policy configuration.
 - Output batch identity, output commit retry / query handling, and safe-point advancement after durable output.
 - Replay, snapshot storage, verified manifests, and snapshot verification evidence.
 
