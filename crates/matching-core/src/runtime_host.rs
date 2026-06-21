@@ -3,7 +3,7 @@ use crate::output_commit_boundary::OutputJournalClient;
 use crate::runtime_config::{MatchingRuntimeConfig, RuntimeHostMode, RuntimeShardId};
 use crate::runtime_loop::{
     RuntimeLoopError, RuntimeLoopRunLimit, RuntimeLoopRunOnceLimits, RuntimeLoopRunOnceReport,
-    RuntimeLoopRunReport,
+    RuntimeLoopRunReport, RuntimeLoopRunStopReason,
 };
 use crate::runtime_shard_runner::RuntimeShardRunner;
 use crate::runtime_topology::RuntimeTopologyError;
@@ -178,5 +178,46 @@ impl RuntimeHostRunReport {
         self.shard_reports
             .iter()
             .all(|report| report.run_report.is_idle())
+    }
+
+    pub fn idle_shards(&self) -> Vec<RuntimeShardId> {
+        self.shard_reports
+            .iter()
+            .filter(|report| report.run_report.is_idle())
+            .map(|report| report.shard_id)
+            .collect()
+    }
+
+    pub fn shards_with_remaining_work(&self) -> Vec<RuntimeShardId> {
+        self.shard_reports
+            .iter()
+            .filter(|report| report.run_report.has_work_remaining)
+            .map(|report| report.shard_id)
+            .collect()
+    }
+
+    pub fn blocked_shards(&self) -> Vec<RuntimeShardId> {
+        self.shard_reports
+            .iter()
+            .filter(|report| report.run_report.has_blocked_symbols)
+            .map(|report| report.shard_id)
+            .collect()
+    }
+
+    pub fn shards_reaching_run_limit(&self) -> Vec<RuntimeShardId> {
+        self.shard_reports
+            .iter()
+            .filter(|report| {
+                report.run_report.stop_reason == RuntimeLoopRunStopReason::RunLimitReached
+            })
+            .map(|report| report.shard_id)
+            .collect()
+    }
+
+    pub fn needs_another_run(&self) -> bool {
+        self.shard_reports.iter().any(|report| {
+            report.run_report.stop_reason == RuntimeLoopRunStopReason::RunLimitReached
+                && report.run_report.has_work_remaining
+        })
     }
 }
