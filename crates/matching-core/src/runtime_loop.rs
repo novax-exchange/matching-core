@@ -65,12 +65,24 @@ pub struct RuntimeLoopRunReport {
     pub made_progress: bool,
     pub has_work_remaining: bool,
     pub has_blocked_symbols: bool,
+    pub work_status_after_run: Vec<RuntimeLoopSymbolWorkStatus>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeLoopSymbolWorkStatus {
+    pub symbol: Symbol,
+    pub pending_input_len: usize,
+    pub pending_input_capacity: usize,
+    pub pending_input_full: bool,
+    pub pending_output_len: usize,
+    pub pending_output_capacity: usize,
+    pub pending_output_full: bool,
+    pub output_commit_blocked: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeLoopWorkState {
-    has_work_remaining: bool,
-    has_blocked_symbols: bool,
+    symbol_statuses: Vec<RuntimeLoopSymbolWorkStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,13 +240,14 @@ impl RuntimeLoop {
     ) -> Result<RuntimeLoopRunReport, RuntimeLoopError> {
         let initial_state = self.current_work_state()?;
 
-        if !initial_state.has_work_remaining && !initial_state.has_blocked_symbols {
+        if !initial_state.has_work_remaining() && !initial_state.has_blocked_symbols() {
             return Ok(RuntimeLoopRunReport {
                 tick_reports: Vec::new(),
                 stop_reason: RuntimeLoopRunStopReason::Idle,
                 made_progress: false,
                 has_work_remaining: false,
                 has_blocked_symbols: false,
+                work_status_after_run: initial_state.symbol_statuses,
             });
         }
 
@@ -243,23 +256,22 @@ impl RuntimeLoop {
                 tick_reports: Vec::new(),
                 stop_reason: RuntimeLoopRunStopReason::TickBudgetExhausted,
                 made_progress: false,
-                has_work_remaining: initial_state.has_work_remaining,
-                has_blocked_symbols: initial_state.has_blocked_symbols,
+                has_work_remaining: initial_state.has_work_remaining(),
+                has_blocked_symbols: initial_state.has_blocked_symbols(),
+                work_status_after_run: initial_state.symbol_statuses,
             });
         }
 
         let mut tick_reports = Vec::new();
         let mut made_progress = false;
-        let mut has_work_remaining = initial_state.has_work_remaining;
-        let mut has_blocked_symbols = initial_state.has_blocked_symbols;
 
         for _ in 0..budget.max_ticks {
             let tick_report = self.run_tick(journal_client, output, limits)?;
             let tick_made_progress = tick_report.made_progress();
 
             made_progress |= tick_made_progress;
-            has_work_remaining = tick_report.has_work_remaining();
-            has_blocked_symbols = tick_report.has_blocked_symbols();
+            let has_work_remaining = tick_report.has_work_remaining();
+            let has_blocked_symbols = tick_report.has_blocked_symbols();
 
             let stop_reason = if !has_work_remaining && !has_blocked_symbols {
                 Some(RuntimeLoopRunStopReason::Idle)
@@ -272,22 +284,28 @@ impl RuntimeLoop {
             tick_reports.push(tick_report);
 
             if let Some(stop_reason) = stop_reason {
+                let final_state = self.current_work_state()?;
+
                 return Ok(RuntimeLoopRunReport {
                     tick_reports,
                     stop_reason,
                     made_progress,
-                    has_work_remaining,
-                    has_blocked_symbols,
+                    has_work_remaining: final_state.has_work_remaining(),
+                    has_blocked_symbols: final_state.has_blocked_symbols(),
+                    work_status_after_run: final_state.symbol_statuses,
                 });
             }
         }
+
+        let final_state = self.current_work_state()?;
 
         Ok(RuntimeLoopRunReport {
             tick_reports,
             stop_reason: RuntimeLoopRunStopReason::TickBudgetExhausted,
             made_progress,
-            has_work_remaining,
-            has_blocked_symbols,
+            has_work_remaining: final_state.has_work_remaining(),
+            has_blocked_symbols: final_state.has_blocked_symbols(),
+            work_status_after_run: final_state.symbol_statuses,
         })
     }
 
@@ -354,8 +372,7 @@ impl RuntimeLoop {
     fn current_work_state(&self) -> Result<RuntimeLoopWorkState, RuntimeLoopError> {
         self.validate_configuration()?;
 
-        let mut has_work_remaining = false;
-        let mut has_blocked_symbols = false;
+        let mut symbol_statuses = Vec::new();
         let mut symbols = self.manager.symbols();
         symbols.sort_by(|left, right| left.0.cmp(&right.0));
 
@@ -371,16 +388,19 @@ impl RuntimeLoop {
                         RuntimeManagerError::UnknownSymbol,
                     ))?;
 
-            has_blocked_symbols |= runtime_status.output_commit_blockage.is_some();
-            has_work_remaining |= handoff.len() > 0
-                || runtime_status.pending_output_len > 0
-                || runtime_status.output_commit_blockage.is_some();
+            symbol_statuses.push(RuntimeLoopSymbolWorkStatus {
+                symbol,
+                pending_input_len: handoff.len(),
+                pending_input_capacity: handoff.capacity(),
+                pending_input_full: handoff.is_full(),
+                pending_output_len: runtime_status.pending_output_len,
+                pending_output_capacity: runtime_status.pending_output_capacity,
+                pending_output_full: runtime_status.pending_output_full,
+                output_commit_blocked: runtime_status.output_commit_blockage.is_some(),
+            });
         }
 
-        Ok(RuntimeLoopWorkState {
-            has_work_remaining,
-            has_blocked_symbols,
-        })
+        Ok(RuntimeLoopWorkState { symbol_statuses })
     }
 
     pub fn enqueue_input(&mut self, entry: JournalInputEntry) -> Result<(), RuntimeLoopError> {
@@ -517,6 +537,42 @@ impl RuntimeLoopRunReport {
         self.stop_reason == RuntimeLoopRunStopReason::Idle
             && !self.has_work_remaining
             && !self.has_blocked_symbols
+    }
+
+    pub fn symbols_with_remaining_work(&self) -> Vec<Symbol> {
+        self.work_status_after_run
+            .iter()
+            .filter(|status| status.has_work_remaining())
+            .map(|status| status.symbol.clone())
+            .collect()
+    }
+
+    pub fn blocked_symbols(&self) -> Vec<Symbol> {
+        self.work_status_after_run
+            .iter()
+            .filter(|status| status.output_commit_blocked)
+            .map(|status| status.symbol.clone())
+            .collect()
+    }
+}
+
+impl RuntimeLoopSymbolWorkStatus {
+    pub fn has_work_remaining(&self) -> bool {
+        self.pending_input_len > 0 || self.pending_output_len > 0 || self.output_commit_blocked
+    }
+}
+
+impl RuntimeLoopWorkState {
+    fn has_work_remaining(&self) -> bool {
+        self.symbol_statuses
+            .iter()
+            .any(RuntimeLoopSymbolWorkStatus::has_work_remaining)
+    }
+
+    fn has_blocked_symbols(&self) -> bool {
+        self.symbol_statuses
+            .iter()
+            .any(|status| status.output_commit_blocked)
     }
 }
 
