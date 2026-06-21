@@ -378,6 +378,78 @@ fn file_snapshot_store_selects_latest_verified_snapshot_and_skips_unverified_fro
 }
 
 #[test]
+fn file_snapshot_store_verified_manifest_records_snapshot_identity_from_public_api() {
+    let dir = temporary_snapshot_dir("file-store-verified-manifest");
+    let symbol = Symbol("BTC-USDT".to_string());
+    let mut store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 2);
+
+    let snapshot = symbol_runtime_snapshot_at_safe_point(11);
+    let record = store
+        .save_symbol_snapshot(&snapshot)
+        .expect("snapshot should be written");
+    store
+        .mark_symbol_snapshot_verified(&symbol, JournalSeq(11))
+        .expect("snapshot should be marked verified")
+        .expect("snapshot should exist before marking verified");
+
+    let manifest = store
+        .load_symbol_snapshot_verification_manifest(&symbol, JournalSeq(11))
+        .expect("manifest should be readable")
+        .expect("manifest should exist");
+
+    assert_eq!(manifest.symbol, symbol);
+    assert_eq!(manifest.safe_point, JournalSeq(11));
+    assert_eq!(
+        manifest.snapshot_digest,
+        FileSnapshotStore::snapshot_bytes_digest(&record.bytes)
+    );
+    assert_eq!(
+        manifest.snapshot_checksum,
+        snapshot.order_book_snapshot.checksum
+    );
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
+}
+
+#[test]
+fn file_snapshot_store_rejects_verified_snapshot_when_manifest_digest_does_not_match_from_public_api(
+) {
+    let dir = temporary_snapshot_dir("file-store-verified-digest-mismatch");
+    let symbol = Symbol("BTC-USDT".to_string());
+    let mut store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 2);
+
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(11))
+        .expect("snapshot should be written");
+    store
+        .mark_symbol_snapshot_verified(&symbol, JournalSeq(11))
+        .expect("snapshot should be marked verified")
+        .expect("snapshot should exist before marking verified");
+    store
+        .write_raw_symbol_snapshot_bytes(
+            symbol.clone(),
+            JournalSeq(11),
+            symbol_runtime_snapshot_at_safe_point(12).to_canonical_bytes(),
+        )
+        .expect("snapshot bytes should be replaced after verification");
+
+    let report = store
+        .select_latest_verified_symbol_snapshot(&symbol)
+        .expect("verified snapshot selection should read manifest");
+
+    assert_eq!(report.selected, None);
+    assert_eq!(report.selected_record, None);
+    assert_eq!(report.rejected.len(), 1);
+    assert_eq!(report.rejected[0].record.safe_point, JournalSeq(11));
+    assert_eq!(
+        report.rejected[0].error,
+        matching_core::snapshot_store::SnapshotVerificationError::SnapshotDigestMismatch
+    );
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
+}
+
+#[test]
 fn file_snapshot_store_rejects_corrupt_verified_snapshot_and_falls_back_from_public_api() {
     let dir = temporary_snapshot_dir("file-store-corrupt-verified");
     let symbol = Symbol("BTC-USDT".to_string());
@@ -423,7 +495,7 @@ fn file_snapshot_store_rejects_corrupt_verified_snapshot_and_falls_back_from_pub
     assert_eq!(report.rejected[0].record.safe_point, JournalSeq(12));
     assert_eq!(
         report.rejected[0].error,
-        SnapshotSerializationError::InvalidMagic
+        matching_core::snapshot_store::SnapshotVerificationError::SnapshotDigestMismatch
     );
 
     fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");

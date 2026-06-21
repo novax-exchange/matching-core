@@ -1,5 +1,5 @@
 use crate::snapshot_restore::{SnapshotSerializationError, SymbolRuntimeSnapshot};
-use crate::types::{JournalSeq, Symbol};
+use crate::types::{Checksum, JournalSeq, Symbol};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -29,13 +29,37 @@ pub struct VerifiedSnapshotSelectionReport {
     pub selected: Option<SymbolRuntimeSnapshot>,
     pub selected_record: Option<SnapshotRecord>,
     pub skipped_unverified: Vec<SnapshotRecord>,
-    pub rejected: Vec<RejectedSnapshotRecord>,
+    pub rejected: Vec<RejectedVerifiedSnapshotRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RejectedSnapshotRecord {
     pub record: SnapshotRecord,
     pub error: SnapshotSerializationError,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RejectedVerifiedSnapshotRecord {
+    pub record: SnapshotRecord,
+    pub error: SnapshotVerificationError,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnapshotVerificationError {
+    ManifestInvalid,
+    SnapshotDigestMismatch,
+    SnapshotChecksumMismatch,
+    SnapshotSafePointMismatch,
+    SnapshotSymbolMismatch,
+    SnapshotSerialization(SnapshotSerializationError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotVerificationManifest {
+    pub symbol: Symbol,
+    pub safe_point: JournalSeq,
+    pub snapshot_digest: u64,
+    pub snapshot_checksum: Checksum,
 }
 
 pub trait SnapshotStore {
@@ -157,6 +181,17 @@ impl FileSnapshotStore {
         Ok(records)
     }
 
+    pub fn snapshot_bytes_digest(bytes: &[u8]) -> u64 {
+        let mut digest = 0xcbf29ce484222325_u64;
+
+        for byte in bytes {
+            digest ^= *byte as u64;
+            digest = digest.wrapping_mul(0x100000001b3);
+        }
+
+        digest
+    }
+
     pub fn write_raw_symbol_snapshot_bytes(
         &self,
         symbol: Symbol,
@@ -189,15 +224,38 @@ impl FileSnapshotStore {
             return Ok(None);
         };
 
-        SymbolRuntimeSnapshot::from_canonical_bytes(&record.bytes)
+        let snapshot = SymbolRuntimeSnapshot::from_canonical_bytes(&record.bytes)
             .map_err(SnapshotStoreError::SnapshotSerialization)?;
+        let manifest = SnapshotVerificationManifest {
+            symbol: symbol.clone(),
+            safe_point,
+            snapshot_digest: Self::snapshot_bytes_digest(&record.bytes),
+            snapshot_checksum: snapshot.order_book_snapshot.checksum,
+        };
+
         fs::write(
             self.verified_marker_path(symbol, safe_point),
-            b"matching-core snapshot verified\n",
+            encode_verification_manifest(&manifest),
         )
         .map_err(io_error)?;
 
         Ok(Some(record))
+    }
+
+    pub fn load_symbol_snapshot_verification_manifest(
+        &self,
+        symbol: &Symbol,
+        safe_point: JournalSeq,
+    ) -> Result<Option<SnapshotVerificationManifest>, SnapshotStoreError> {
+        let path = self.verified_marker_path(symbol, safe_point);
+
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let bytes = fs::read(path).map_err(io_error)?;
+
+        Ok(decode_verification_manifest(&bytes))
     }
 
     pub fn select_latest_valid_symbol_snapshot(
@@ -246,7 +304,7 @@ impl FileSnapshotStore {
                 continue;
             }
 
-            match SymbolRuntimeSnapshot::from_canonical_bytes(&record.bytes) {
+            match self.verify_record_manifest(symbol, &record) {
                 Ok(snapshot) => {
                     return Ok(VerifiedSnapshotSelectionReport {
                         selected: Some(snapshot),
@@ -255,7 +313,7 @@ impl FileSnapshotStore {
                         rejected,
                     });
                 }
-                Err(error) => rejected.push(RejectedSnapshotRecord { record, error }),
+                Err(error) => rejected.push(RejectedVerifiedSnapshotRecord { record, error }),
             }
         }
 
@@ -265,6 +323,44 @@ impl FileSnapshotStore {
             skipped_unverified,
             rejected,
         })
+    }
+
+    fn verify_record_manifest(
+        &self,
+        symbol: &Symbol,
+        record: &SnapshotRecord,
+    ) -> Result<SymbolRuntimeSnapshot, SnapshotVerificationError> {
+        let Some(manifest) = self
+            .load_symbol_snapshot_verification_manifest(symbol, record.safe_point)
+            .map_err(|_| SnapshotVerificationError::ManifestInvalid)?
+        else {
+            return Err(SnapshotVerificationError::ManifestInvalid);
+        };
+
+        if manifest.symbol != *symbol {
+            return Err(SnapshotVerificationError::SnapshotSymbolMismatch);
+        }
+        if manifest.safe_point != record.safe_point {
+            return Err(SnapshotVerificationError::SnapshotSafePointMismatch);
+        }
+        if manifest.snapshot_digest != Self::snapshot_bytes_digest(&record.bytes) {
+            return Err(SnapshotVerificationError::SnapshotDigestMismatch);
+        }
+
+        let snapshot = SymbolRuntimeSnapshot::from_canonical_bytes(&record.bytes)
+            .map_err(SnapshotVerificationError::SnapshotSerialization)?;
+
+        if snapshot.order_book_snapshot.symbol != *symbol {
+            return Err(SnapshotVerificationError::SnapshotSymbolMismatch);
+        }
+        if snapshot.order_book_snapshot.last_input_seq != record.safe_point {
+            return Err(SnapshotVerificationError::SnapshotSafePointMismatch);
+        }
+        if snapshot.order_book_snapshot.checksum != manifest.snapshot_checksum {
+            return Err(SnapshotVerificationError::SnapshotChecksumMismatch);
+        }
+
+        Ok(snapshot)
     }
 
     fn read_symbol_records(
@@ -396,6 +492,43 @@ fn safe_point_from_snapshot_path(path: &Path) -> Option<JournalSeq> {
     let safe_point = file_name.strip_suffix(".snap")?.parse().ok()?;
 
     Some(JournalSeq(safe_point))
+}
+
+fn encode_verification_manifest(manifest: &SnapshotVerificationManifest) -> Vec<u8> {
+    format!(
+        "matching-core snapshot verification v1\nsymbol={}\nsafe_point={}\nsnapshot_digest={}\nsnapshot_checksum={}\n",
+        manifest.symbol.0, manifest.safe_point.0, manifest.snapshot_digest, manifest.snapshot_checksum.0
+    )
+    .into_bytes()
+}
+
+fn decode_verification_manifest(bytes: &[u8]) -> Option<SnapshotVerificationManifest> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let mut lines = text.lines();
+
+    if lines.next()? != "matching-core snapshot verification v1" {
+        return None;
+    }
+
+    let symbol = lines.next()?.strip_prefix("symbol=")?.to_string();
+    let safe_point = lines.next()?.strip_prefix("safe_point=")?.parse().ok()?;
+    let snapshot_digest = lines
+        .next()?
+        .strip_prefix("snapshot_digest=")?
+        .parse()
+        .ok()?;
+    let snapshot_checksum = lines
+        .next()?
+        .strip_prefix("snapshot_checksum=")?
+        .parse()
+        .ok()?;
+
+    Some(SnapshotVerificationManifest {
+        symbol: Symbol(symbol),
+        safe_point: JournalSeq(safe_point),
+        snapshot_digest,
+        snapshot_checksum: Checksum(snapshot_checksum),
+    })
 }
 
 fn io_error(error: std::io::Error) -> SnapshotStoreError {
