@@ -1,7 +1,9 @@
 use crate::journal_adapter::{JournalInputEntry, JournalOutputAppender};
 use crate::output_commit_boundary::OutputJournalClient;
 use crate::runtime_config::{MatchingRuntimeConfig, RuntimeHostMode, RuntimeShardId};
-use crate::runtime_host_driver::{ManualRuntimeHostDriver, RuntimeHostDriver};
+use crate::runtime_host_driver::{
+    ManualRuntimeHostDriver, RuntimeHostDriver, RuntimeHostDriverError,
+};
 use crate::runtime_loop::{
     RuntimeLoopError, RuntimeLoopRunLimit, RuntimeLoopRunOnceLimits, RuntimeLoopRunOnceReport,
     RuntimeLoopRunReport, RuntimeLoopRunStopReason,
@@ -23,6 +25,7 @@ pub enum RuntimeHostError {
     InputClosed,
     UnsupportedMode(RuntimeHostMode),
     RuntimeDriverRequired(RuntimeHostMode),
+    RuntimeDriver(RuntimeHostDriverError),
     Topology(RuntimeTopologyError),
     RuntimeLoop(RuntimeLoopError),
 }
@@ -179,7 +182,7 @@ impl RuntimeHost {
 
         self.driver
             .enqueue_input(entry)
-            .map_err(RuntimeHostError::RuntimeLoop)
+            .map_err(RuntimeHostError::from_driver_error)
     }
 
     pub fn enqueue_inputs(
@@ -190,7 +193,7 @@ impl RuntimeHost {
 
         self.driver
             .enqueue_inputs(entries)
-            .map_err(RuntimeHostError::RuntimeLoop)
+            .map_err(RuntimeHostError::from_driver_error)
     }
 
     pub fn can_enqueue_inputs(
@@ -200,14 +203,14 @@ impl RuntimeHost {
         self.ensure_input_open()?;
         self.driver
             .can_enqueue_inputs(entries)
-            .map_err(RuntimeHostError::RuntimeLoop)
+            .map_err(RuntimeHostError::from_driver_error)
     }
 
     pub fn status(&self) -> Result<RuntimeHostStatus, RuntimeHostError> {
         let shard_statuses = self
             .driver
             .shard_statuses()
-            .map_err(RuntimeHostError::RuntimeLoop)?;
+            .map_err(RuntimeHostError::from_driver_error)?;
 
         Ok(RuntimeHostStatus {
             input_state: self.input_state,
@@ -231,7 +234,7 @@ impl RuntimeHost {
     ) -> Result<RuntimeHostRunOnceReport, RuntimeHostError> {
         self.driver
             .run_once_all(journal_client, output, limits)
-            .map_err(RuntimeHostError::RuntimeLoop)
+            .map_err(RuntimeHostError::from_driver_error)
     }
 
     pub fn run_limited_all(
@@ -243,7 +246,7 @@ impl RuntimeHost {
     ) -> Result<RuntimeHostRunReport, RuntimeHostError> {
         self.driver
             .run_limited_all(journal_client, output, limits, limit)
-            .map_err(RuntimeHostError::RuntimeLoop)
+            .map_err(RuntimeHostError::from_driver_error)
     }
 
     pub fn run_configured_all(
@@ -317,6 +320,15 @@ impl RuntimeHost {
             run_reports,
             stop_reason: RuntimeHostRunUntilIdleStopReason::CallLimitReached,
         })
+    }
+}
+
+impl RuntimeHostError {
+    fn from_driver_error(error: RuntimeHostDriverError) -> Self {
+        match error {
+            RuntimeHostDriverError::RuntimeLoop(error) => Self::RuntimeLoop(error),
+            error => Self::RuntimeDriver(error),
+        }
     }
 }
 
