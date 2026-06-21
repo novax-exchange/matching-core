@@ -134,6 +134,7 @@ fn runtime_host_builds_manual_host_from_public_api() {
     };
     config.host = RuntimeHostConfig {
         mode: RuntimeHostMode::Manual,
+        max_run_cycles_per_call: 1024,
     };
 
     let host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
@@ -152,6 +153,7 @@ fn runtime_host_rejects_inline_until_inline_scheduling_exists_from_public_api() 
     let mut config = MatchingRuntimeConfig::default();
     config.host = RuntimeHostConfig {
         mode: RuntimeHostMode::Inline,
+        max_run_cycles_per_call: 1024,
     };
 
     let result = RuntimeHost::new_for_symbols_with_config(vec![btc], config);
@@ -168,6 +170,7 @@ fn runtime_host_rejects_unsupported_host_modes_from_public_api() {
     let mut config = MatchingRuntimeConfig::default();
     config.host = RuntimeHostConfig {
         mode: RuntimeHostMode::ThreadPerShard,
+        max_run_cycles_per_call: 1024,
     };
 
     let result = RuntimeHost::new_for_symbols_with_config(vec![btc], config);
@@ -318,6 +321,30 @@ fn runtime_host_run_report_summarizes_mixed_shard_states() {
     );
     assert_eq!(report.blocked_shards(), vec![RuntimeShardId(0)]);
     assert_eq!(report.shards_reaching_run_limit(), vec![RuntimeShardId(1)]);
+}
+
+#[test]
+fn runtime_host_run_configured_all_uses_runtime_config_limits() {
+    let btc = symbol("BTC-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.host.max_run_cycles_per_call = 1;
+    config.symbol_runtime.max_input_entries_per_step = 1;
+    config.output_commit.max_output_requests_per_step = 1;
+    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone()], config)
+        .expect("manual runtime host should be supported");
+    let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
+    let mut output = TestJournalOutputAppender::new();
+
+    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    assert_eq!(host.enqueue_input(command_entry(2, btc.clone())), Ok(()));
+
+    let report = host
+        .run_configured_all(&mut journal_client, &mut output)
+        .expect("manual runtime host should run with configured limits");
+
+    assert!(report.needs_another_run());
+    assert_eq!(report.shards_reaching_run_limit(), vec![RuntimeShardId(0)]);
+    assert_eq!(output.read_all().len(), 1);
 }
 
 #[test]

@@ -51,6 +51,14 @@ pub struct RuntimeLoopRunLimit {
     pub max_cycles: usize,
 }
 
+impl RuntimeLoopRunLimit {
+    pub fn from_config(config: &MatchingRuntimeConfig) -> Self {
+        Self {
+            max_cycles: config.host.max_run_cycles_per_call,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeLoopRunStopReason {
     Idle,

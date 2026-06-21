@@ -12,6 +12,8 @@ use crate::types::Symbol;
 pub struct RuntimeHost {
     mode: RuntimeHostMode,
     runners: Vec<RuntimeShardRunner>,
+    run_once_limits: RuntimeLoopRunOnceLimits,
+    run_limit: RuntimeLoopRunLimit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,10 +53,17 @@ impl RuntimeHost {
         match config.host.mode {
             RuntimeHostMode::Manual => {
                 let mode = config.host.mode;
+                let run_once_limits = RuntimeLoopRunOnceLimits::from_config(&config);
+                let run_limit = RuntimeLoopRunLimit::from_config(&config);
                 let runners = RuntimeShardRunner::from_symbols_with_config(symbols, config)
                     .map_err(RuntimeHostError::Topology)?;
 
-                Ok(Self { mode, runners })
+                Ok(Self {
+                    mode,
+                    runners,
+                    run_once_limits,
+                    run_limit,
+                })
             }
             unsupported => Err(RuntimeHostError::UnsupportedMode(unsupported)),
         }
@@ -138,6 +147,14 @@ impl RuntimeHost {
         }
 
         Ok(RuntimeHostRunReport { shard_reports })
+    }
+
+    pub fn run_configured_all(
+        &mut self,
+        journal_client: &mut OutputJournalClient,
+        output: &mut dyn JournalOutputAppender,
+    ) -> Result<RuntimeHostRunReport, RuntimeHostError> {
+        self.run_limited_all(journal_client, output, self.run_once_limits, self.run_limit)
     }
 }
 

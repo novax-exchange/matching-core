@@ -478,6 +478,7 @@ fn runtime_manager_uses_runtime_config_for_output_policy_from_public_api() {
         },
         host: RuntimeHostConfig {
             mode: RuntimeHostMode::Manual,
+            max_run_cycles_per_call: 19,
         },
         output_commit: OutputCommitConfig {
             pending_output_capacity: 7,
