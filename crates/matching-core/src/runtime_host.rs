@@ -5,6 +5,7 @@ use crate::runtime_loop::{
     RuntimeLoopError, RuntimeLoopRunLimit, RuntimeLoopRunOnceLimits, RuntimeLoopRunOnceReport,
     RuntimeLoopRunReport, RuntimeLoopRunStopReason,
 };
+use crate::runtime_manager::RuntimeManagerError;
 use crate::runtime_shard_runner::RuntimeShardRunner;
 use crate::runtime_topology::RuntimeTopologyError;
 use crate::types::Symbol;
@@ -58,6 +59,29 @@ pub enum RuntimeHostRunUntilIdleStopReason {
 pub struct RuntimeHostRunUntilIdleReport {
     pub run_reports: Vec<RuntimeHostRunReport>,
     pub stop_reason: RuntimeHostRunUntilIdleStopReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeHostStatus {
+    pub shard_statuses: Vec<RuntimeHostShardStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeHostShardStatus {
+    pub shard_id: RuntimeShardId,
+    pub symbol_statuses: Vec<RuntimeHostSymbolStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeHostSymbolStatus {
+    pub symbol: Symbol,
+    pub pending_input_len: usize,
+    pub pending_input_capacity: usize,
+    pub pending_input_full: bool,
+    pub pending_output_len: usize,
+    pub pending_output_capacity: usize,
+    pub pending_output_full: bool,
+    pub output_commit_blocked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +157,46 @@ impl RuntimeHost {
         runner
             .enqueue_input(entry)
             .map_err(RuntimeHostError::RuntimeLoop)
+    }
+
+    pub fn status(&self) -> Result<RuntimeHostStatus, RuntimeHostError> {
+        let mut shard_statuses = Vec::new();
+
+        for runner in &self.runners {
+            let mut symbol_statuses = Vec::new();
+
+            for symbol in runner.symbols() {
+                let pending_input_status =
+                    runner.pending_input_status(symbol).ok_or_else(|| {
+                        RuntimeHostError::RuntimeLoop(RuntimeLoopError::MissingHandoff(
+                            symbol.clone(),
+                        ))
+                    })?;
+                let runtime_status = runner.symbol_status(symbol).ok_or_else(|| {
+                    RuntimeHostError::RuntimeLoop(RuntimeLoopError::RuntimeManager(
+                        RuntimeManagerError::UnknownSymbol,
+                    ))
+                })?;
+
+                symbol_statuses.push(RuntimeHostSymbolStatus {
+                    symbol: symbol.clone(),
+                    pending_input_len: pending_input_status.len,
+                    pending_input_capacity: pending_input_status.capacity,
+                    pending_input_full: pending_input_status.full,
+                    pending_output_len: runtime_status.pending_output_len,
+                    pending_output_capacity: runtime_status.pending_output_capacity,
+                    pending_output_full: runtime_status.pending_output_full,
+                    output_commit_blocked: runtime_status.output_commit_blockage.is_some(),
+                });
+            }
+
+            shard_statuses.push(RuntimeHostShardStatus {
+                shard_id: runner.shard_id(),
+                symbol_statuses,
+            });
+        }
+
+        Ok(RuntimeHostStatus { shard_statuses })
     }
 
     pub fn run_once_all(
@@ -235,6 +299,72 @@ impl RuntimeHostRunOnceReport {
         self.shard_reports
             .iter()
             .find(|report| report.shard_id == shard_id)
+    }
+}
+
+impl RuntimeHostStatus {
+    pub fn shard_status(&self, shard_id: RuntimeShardId) -> Option<&RuntimeHostShardStatus> {
+        self.shard_statuses
+            .iter()
+            .find(|status| status.shard_id == shard_id)
+    }
+
+    pub fn is_idle(&self) -> bool {
+        !self.has_work_remaining() && !self.has_blocked_symbols()
+    }
+
+    pub fn has_work_remaining(&self) -> bool {
+        self.shard_statuses
+            .iter()
+            .any(RuntimeHostShardStatus::has_work_remaining)
+    }
+
+    pub fn has_blocked_symbols(&self) -> bool {
+        self.shard_statuses
+            .iter()
+            .any(RuntimeHostShardStatus::has_blocked_symbols)
+    }
+
+    pub fn shards_with_remaining_work(&self) -> Vec<RuntimeShardId> {
+        self.shard_statuses
+            .iter()
+            .filter(|status| status.has_work_remaining())
+            .map(|status| status.shard_id)
+            .collect()
+    }
+
+    pub fn blocked_shards(&self) -> Vec<RuntimeShardId> {
+        self.shard_statuses
+            .iter()
+            .filter(|status| status.has_blocked_symbols())
+            .map(|status| status.shard_id)
+            .collect()
+    }
+}
+
+impl RuntimeHostShardStatus {
+    pub fn symbol_status(&self, symbol: &Symbol) -> Option<&RuntimeHostSymbolStatus> {
+        self.symbol_statuses
+            .iter()
+            .find(|status| status.symbol == *symbol)
+    }
+
+    pub fn has_work_remaining(&self) -> bool {
+        self.symbol_statuses
+            .iter()
+            .any(RuntimeHostSymbolStatus::has_work_remaining)
+    }
+
+    pub fn has_blocked_symbols(&self) -> bool {
+        self.symbol_statuses
+            .iter()
+            .any(|status| status.output_commit_blocked)
+    }
+}
+
+impl RuntimeHostSymbolStatus {
+    pub fn has_work_remaining(&self) -> bool {
+        self.pending_input_len > 0 || self.pending_output_len > 0 || self.output_commit_blocked
     }
 }
 

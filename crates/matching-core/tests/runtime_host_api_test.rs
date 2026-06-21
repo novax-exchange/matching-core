@@ -476,6 +476,72 @@ fn runtime_host_run_until_idle_configured_uses_runtime_config_limit() {
 }
 
 #[test]
+fn runtime_host_status_reports_pending_input_without_running() {
+    let btc = symbol("BTC-USDT");
+    let eth = symbol("ETH-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.topology = RuntimeTopologyConfig {
+        shard_count: 2,
+        assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
+    };
+    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
+        .expect("manual runtime host should be supported");
+
+    assert_eq!(host.enqueue_input(command_entry(1, eth.clone())), Ok(()));
+
+    let status = host
+        .status()
+        .expect("manual runtime host should report status");
+
+    assert!(!status.is_idle());
+    assert_eq!(status.shards_with_remaining_work(), vec![RuntimeShardId(1)]);
+    assert_eq!(status.blocked_shards(), Vec::<RuntimeShardId>::new());
+
+    let eth_status = status
+        .shard_status(RuntimeShardId(1))
+        .and_then(|item| item.symbol_status(&eth))
+        .expect("eth status should be available from owning shard");
+    assert_eq!(eth_status.pending_input_len, 1);
+    assert_eq!(eth_status.pending_output_len, 0);
+    assert!(!eth_status.output_commit_blocked);
+}
+
+#[test]
+fn runtime_host_status_reports_blocked_output_pressure() {
+    let btc = symbol("BTC-USDT");
+    let mut host = RuntimeHost::new_for_symbols_with_config(
+        vec![btc.clone()],
+        MatchingRuntimeConfig::default(),
+    )
+    .expect("manual runtime host should be supported");
+    let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
+    let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
+
+    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+
+    let run_report = host
+        .run_configured_all(&mut journal_client, &mut output)
+        .expect("manual runtime host should run with configured limits");
+    assert!(run_report.has_blocked_symbols());
+
+    let status = host
+        .status()
+        .expect("manual runtime host should report status");
+
+    assert!(!status.is_idle());
+    assert!(status.has_blocked_symbols());
+    assert_eq!(status.blocked_shards(), vec![RuntimeShardId(0)]);
+
+    let btc_status = status
+        .shard_status(RuntimeShardId(0))
+        .and_then(|item| item.symbol_status(&btc))
+        .expect("btc status should be available from owning shard");
+    assert_eq!(btc_status.pending_input_len, 0);
+    assert_eq!(btc_status.pending_output_len, 1);
+    assert!(btc_status.output_commit_blocked);
+}
+
+#[test]
 fn runtime_host_run_limited_all_reports_remaining_work_when_limit_is_reached() {
     let btc = symbol("BTC-USDT");
     let mut host = RuntimeHost::new_for_symbols_with_config(
