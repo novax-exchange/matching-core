@@ -9,9 +9,9 @@ use crate::runtime_loop::{
     RuntimeLoopError, RuntimeLoopRunLimit, RuntimeLoopRunOnceLimits, RuntimeLoopRunOnceReport,
     RuntimeLoopRunReport,
 };
-use crate::runtime_manager::{RuntimeManagerError, SymbolRuntimeStatus};
 use crate::runtime_shard_runner::RuntimeShardRunner;
 use crate::runtime_topology::RuntimeTopologyError;
+use crate::shard_execution_core::{ShardExecutionCoreError, SymbolRuntimeStatus};
 use crate::types::Symbol;
 use std::collections::HashMap;
 
@@ -257,7 +257,9 @@ impl RuntimeHostDriver for ManualRuntimeHostDriver {
                     runner
                         .symbol_status(symbol)
                         .ok_or(RuntimeHostDriverError::RuntimeLoop(
-                            RuntimeLoopError::RuntimeManager(RuntimeManagerError::UnknownSymbol),
+                            RuntimeLoopError::ShardExecutionCore(
+                                ShardExecutionCoreError::UnknownSymbol,
+                            ),
                         ))?;
 
                 symbol_statuses.push(symbol_status_from_runtime_status(

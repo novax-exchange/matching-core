@@ -17,7 +17,7 @@ use crate::symbol_runtime::{
 use crate::types::{Checksum, JournalSeq, Symbol};
 use std::collections::HashMap;
 
-pub struct RuntimeManager {
+pub struct ShardExecutionCore {
     runtimes: HashMap<Symbol, SymbolRuntime>,
     registered_symbols: Vec<Symbol>,
     topology_config: RuntimeTopologyConfig,
@@ -32,7 +32,7 @@ pub struct RuntimeManager {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RuntimeManagerError {
+pub enum ShardExecutionCoreError {
     UnknownSymbol,
     OutputAppendFailed,
     OutputCommitStepFailed(SymbolRuntimeOutputCommitStepError),
@@ -67,7 +67,7 @@ pub struct SymbolRuntimeStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeManagerOutputCommitStepReport {
+pub struct ShardExecutionCoreOutputCommitStepReport {
     pub safe_point_advanced_count: usize,
     pub output_batch_identity: Option<OutputBatchIdentity>,
     pub output_batch_query_status: Option<OutputBatchQueryStatus>,
@@ -75,7 +75,7 @@ pub struct RuntimeManagerOutputCommitStepReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeManagerRetryAwareStepReport {
+pub struct ShardExecutionCoreRetryAwareStepReport {
     pub input_processed_count: usize,
     pub safe_point_advanced_count: usize,
     pub output_batch_identity: Option<OutputBatchIdentity>,
@@ -84,7 +84,7 @@ pub struct RuntimeManagerRetryAwareStepReport {
     pub block_decision: Option<OutputCommitBlockDecision>,
 }
 
-impl RuntimeManager {
+impl ShardExecutionCore {
     pub fn new() -> Self {
         Self::new_with_config(MatchingRuntimeConfig::default())
     }
@@ -267,10 +267,10 @@ impl RuntimeManager {
     pub fn clear_symbol_output_commit_escalation(
         &mut self,
         symbol: &Symbol,
-    ) -> Result<Option<OutputCommitBlockDecision>, RuntimeManagerError> {
+    ) -> Result<Option<OutputCommitBlockDecision>, ShardExecutionCoreError> {
         self.runtimes
             .get(symbol)
-            .ok_or(RuntimeManagerError::UnknownSymbol)?;
+            .ok_or(ShardExecutionCoreError::UnknownSymbol)?;
 
         self.output_commit_retry_trackers.insert(
             symbol.clone(),
@@ -284,10 +284,10 @@ impl RuntimeManager {
     pub fn quarantine_symbol_output_commit_escalation(
         &mut self,
         symbol: &Symbol,
-    ) -> Result<Option<OutputCommitBlockDecision>, RuntimeManagerError> {
+    ) -> Result<Option<OutputCommitBlockDecision>, ShardExecutionCoreError> {
         self.runtimes
             .get(symbol)
-            .ok_or(RuntimeManagerError::UnknownSymbol)?;
+            .ok_or(ShardExecutionCoreError::UnknownSymbol)?;
 
         let escalation = self.output_commit_escalations.remove(symbol);
         let output_batch_query_status = self.output_commit_escalation_query_statuses.remove(symbol);
@@ -307,10 +307,10 @@ impl RuntimeManager {
     pub fn clear_symbol_output_commit_quarantine(
         &mut self,
         symbol: &Symbol,
-    ) -> Result<Option<OutputCommitBlockDecision>, RuntimeManagerError> {
+    ) -> Result<Option<OutputCommitBlockDecision>, ShardExecutionCoreError> {
         self.runtimes
             .get(symbol)
-            .ok_or(RuntimeManagerError::UnknownSymbol)?;
+            .ok_or(ShardExecutionCoreError::UnknownSymbol)?;
 
         self.output_commit_retry_trackers.insert(
             symbol.clone(),
@@ -329,15 +329,15 @@ impl RuntimeManager {
         output: &mut dyn JournalOutputAppender,
         max_input_entries: usize,
         max_output_requests: usize,
-    ) -> Result<SymbolRuntimeOutputCommitStepReport, RuntimeManagerError> {
+    ) -> Result<SymbolRuntimeOutputCommitStepReport, ShardExecutionCoreError> {
         let runtime = self
             .runtimes
             .get_mut(symbol)
-            .ok_or(RuntimeManagerError::UnknownSymbol)?;
+            .ok_or(ShardExecutionCoreError::UnknownSymbol)?;
         let pending_output_buffer = self
             .pending_output_buffers
             .get_mut(symbol)
-            .ok_or(RuntimeManagerError::UnknownSymbol)?;
+            .ok_or(ShardExecutionCoreError::UnknownSymbol)?;
 
         run_symbol_runtime_step_with_output_batch_commit(
             runtime,
@@ -348,7 +348,7 @@ impl RuntimeManager {
             max_input_entries,
             max_output_requests,
         )
-        .map_err(RuntimeManagerError::OutputCommitStepFailed)
+        .map_err(ShardExecutionCoreError::OutputCommitStepFailed)
     }
 
     pub fn run_symbol_output_batch_commit_step(
@@ -357,15 +357,15 @@ impl RuntimeManager {
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
         max_output_requests: usize,
-    ) -> Result<RuntimeManagerOutputCommitStepReport, RuntimeManagerError> {
+    ) -> Result<ShardExecutionCoreOutputCommitStepReport, ShardExecutionCoreError> {
         let runtime = self
             .runtimes
             .get_mut(symbol)
-            .ok_or(RuntimeManagerError::UnknownSymbol)?;
+            .ok_or(ShardExecutionCoreError::UnknownSymbol)?;
         let pending_output_buffer = self
             .pending_output_buffers
             .get_mut(symbol)
-            .ok_or(RuntimeManagerError::UnknownSymbol)?;
+            .ok_or(ShardExecutionCoreError::UnknownSymbol)?;
 
         let output_commit_report_with_identity = run_output_batch_commit_step_report_with_identity(
             symbol,
@@ -380,12 +380,12 @@ impl RuntimeManager {
             &output_commit_report.commit_result,
         )
         .map_err(|error| {
-            RuntimeManagerError::OutputCommitStepFailed(
+            ShardExecutionCoreError::OutputCommitStepFailed(
                 SymbolRuntimeOutputCommitStepError::SafePoint(error),
             )
         })?;
 
-        Ok(RuntimeManagerOutputCommitStepReport {
+        Ok(ShardExecutionCoreOutputCommitStepReport {
             safe_point_advanced_count,
             output_batch_identity: output_commit_report_with_identity.batch_identity,
             output_batch_query_status: output_commit_report_with_identity.output_batch_query_status,
@@ -401,11 +401,11 @@ impl RuntimeManager {
         output: &mut dyn JournalOutputAppender,
         max_input_entries: usize,
         max_output_requests: usize,
-    ) -> Result<SymbolRuntimeOutputCommitStepReport, RuntimeManagerError> {
+    ) -> Result<SymbolRuntimeOutputCommitStepReport, ShardExecutionCoreError> {
         let pending_output_full = self
             .pending_output_buffers
             .get(symbol)
-            .ok_or(RuntimeManagerError::UnknownSymbol)?
+            .ok_or(ShardExecutionCoreError::UnknownSymbol)?
             .is_full();
 
         if pending_output_full {
@@ -443,13 +443,13 @@ impl RuntimeManager {
         output: &mut dyn JournalOutputAppender,
         max_input_entries: usize,
         max_output_requests: usize,
-    ) -> Result<RuntimeManagerRetryAwareStepReport, RuntimeManagerError> {
+    ) -> Result<ShardExecutionCoreRetryAwareStepReport, ShardExecutionCoreError> {
         self.runtimes
             .get(symbol)
-            .ok_or(RuntimeManagerError::UnknownSymbol)?;
+            .ok_or(ShardExecutionCoreError::UnknownSymbol)?;
 
         if let Some(decision) = self.output_commit_escalations.get(symbol).copied() {
-            return Ok(RuntimeManagerRetryAwareStepReport {
+            return Ok(ShardExecutionCoreRetryAwareStepReport {
                 input_processed_count: 0,
                 safe_point_advanced_count: 0,
                 output_batch_identity: None,
@@ -471,7 +471,7 @@ impl RuntimeManager {
         }
 
         if let Some(decision) = self.output_commit_quarantines.get(symbol).copied() {
-            return Ok(RuntimeManagerRetryAwareStepReport {
+            return Ok(ShardExecutionCoreRetryAwareStepReport {
                 input_processed_count: 0,
                 safe_point_advanced_count: 0,
                 output_batch_identity: None,
@@ -503,7 +503,7 @@ impl RuntimeManager {
         let retry_tracker = self
             .output_commit_retry_trackers
             .get_mut(symbol)
-            .ok_or(RuntimeManagerError::UnknownSymbol)?;
+            .ok_or(ShardExecutionCoreError::UnknownSymbol)?;
         let block_decision = retry_tracker.record_blocked_report(&step_report.output_commit_report);
 
         if let Some(decision) = block_decision {
@@ -519,7 +519,7 @@ impl RuntimeManager {
             }
         }
 
-        Ok(RuntimeManagerRetryAwareStepReport {
+        Ok(ShardExecutionCoreRetryAwareStepReport {
             input_processed_count: step_report.input_processed_count,
             safe_point_advanced_count: step_report.safe_point_advanced_count,
             output_batch_identity: step_report.output_batch_identity,
@@ -533,7 +533,7 @@ impl RuntimeManager {
         &mut self,
         entries: Vec<JournalInputEntry>,
         output: &mut dyn JournalOutputAppender,
-    ) -> Result<usize, RuntimeManagerError> {
+    ) -> Result<usize, ShardExecutionCoreError> {
         let mut processed = 0;
 
         for entry in entries {
@@ -548,16 +548,16 @@ impl RuntimeManager {
         &mut self,
         entry: JournalInputEntry,
         output: &mut dyn JournalOutputAppender,
-    ) -> Result<(), RuntimeManagerError> {
+    ) -> Result<(), ShardExecutionCoreError> {
         let symbol = entry.command.symbol().clone();
         let runtime = self
             .runtimes
             .get_mut(&symbol)
-            .ok_or(RuntimeManagerError::UnknownSymbol)?;
+            .ok_or(ShardExecutionCoreError::UnknownSymbol)?;
 
         runtime
             .process_entry(entry, output)
-            .map_err(|_| RuntimeManagerError::OutputAppendFailed)?;
+            .map_err(|_| ShardExecutionCoreError::OutputAppendFailed)?;
 
         Ok(())
     }
@@ -595,7 +595,7 @@ mod tests {
 
     #[test]
     fn manager_can_register_multiple_symbol_runtimes() {
-        let mut manager = RuntimeManager::new();
+        let mut manager = ShardExecutionCore::new();
 
         manager.add_symbol(btc());
         manager.add_symbol(eth());
@@ -606,7 +606,7 @@ mod tests {
 
     #[test]
     fn manager_returns_none_for_unknown_symbol() {
-        let manager = RuntimeManager::new();
+        let manager = ShardExecutionCore::new();
 
         assert_eq!(manager.last_input_seq(&btc()), None);
     }
@@ -661,7 +661,7 @@ mod tests {
 
     #[test]
     fn manager_routes_entry_to_matching_symbol_runtime() {
-        let mut manager = RuntimeManager::new();
+        let mut manager = ShardExecutionCore::new();
         manager.add_symbol(btc());
         manager.add_symbol(eth());
 
@@ -708,14 +708,14 @@ mod tests {
 
     #[test]
     fn manager_returns_error_for_unknown_symbol_entry() {
-        let mut manager = RuntimeManager::new();
+        let mut manager = ShardExecutionCore::new();
         manager.add_symbol(btc());
 
         let mut output = InMemoryJournalOutputAppender::new();
 
         let result = manager.process_entry(input_entry(1, 10, 100, eth()), &mut output);
 
-        assert_eq!(result, Err(RuntimeManagerError::UnknownSymbol));
+        assert_eq!(result, Err(ShardExecutionCoreError::UnknownSymbol));
         assert_eq!(manager.last_input_seq(&btc()), Some(None));
         assert_eq!(output.read_all(), Vec::new());
     }
@@ -739,20 +739,20 @@ mod tests {
 
     #[test]
     fn manager_maps_output_append_failure_and_does_not_advance_runtime() {
-        let mut manager = RuntimeManager::new();
+        let mut manager = ShardExecutionCore::new();
         manager.add_symbol(btc());
 
         let mut output = FailingJournalOutputAppender;
 
         let result = manager.process_entry(input_entry(1, 10, 100, btc()), &mut output);
 
-        assert_eq!(result, Err(RuntimeManagerError::OutputAppendFailed));
+        assert_eq!(result, Err(ShardExecutionCoreError::OutputAppendFailed));
         assert_eq!(manager.last_input_seq(&btc()), Some(None));
     }
 
     #[test]
     fn manager_processes_batch_across_multiple_symbols() {
-        let mut manager = RuntimeManager::new();
+        let mut manager = ShardExecutionCore::new();
         manager.add_symbol(btc());
         manager.add_symbol(eth());
 
@@ -778,7 +778,7 @@ mod tests {
 
     #[test]
     fn manager_batch_stops_at_unknown_symbol_and_does_not_process_later_entries() {
-        let mut manager = RuntimeManager::new();
+        let mut manager = ShardExecutionCore::new();
         manager.add_symbol(btc());
 
         let mut output = InMemoryJournalOutputAppender::new();
@@ -791,7 +791,7 @@ mod tests {
 
         assert_eq!(
             manager.process_batch(entries, &mut output),
-            Err(RuntimeManagerError::UnknownSymbol)
+            Err(ShardExecutionCoreError::UnknownSymbol)
         );
 
         assert_eq!(manager.last_input_seq(&btc()), Some(Some(JournalSeq(1))));
@@ -845,7 +845,7 @@ mod tests {
 
     #[test]
     fn manager_batch_stops_at_output_append_failure_and_does_not_process_later_entries() {
-        let mut manager = RuntimeManager::new();
+        let mut manager = ShardExecutionCore::new();
         manager.add_symbol(btc());
         manager.add_symbol(eth());
 
@@ -859,7 +859,7 @@ mod tests {
 
         assert_eq!(
             manager.process_batch(entries, &mut output),
-            Err(RuntimeManagerError::OutputAppendFailed)
+            Err(ShardExecutionCoreError::OutputAppendFailed)
         );
 
         assert_eq!(manager.last_input_seq(&btc()), Some(Some(JournalSeq(1))));
@@ -872,7 +872,7 @@ mod tests {
 
     #[test]
     fn manager_output_batch_commit_step_advances_confirmed_prefix_and_preserves_blocked_tail() {
-        let mut manager = RuntimeManager::new();
+        let mut manager = ShardExecutionCore::new();
         let mut handoff = BoundedHandoff::new(4);
         let mut journal_client = OutputJournalClient::new();
         let mut output = FailOnSecondAppendJournalOutputAppender::new();
@@ -913,7 +913,7 @@ mod tests {
 
     #[test]
     fn manager_output_batch_commit_step_retries_blocked_tail_on_next_iteration() {
-        let mut manager = RuntimeManager::new();
+        let mut manager = ShardExecutionCore::new();
         let mut handoff = BoundedHandoff::new(4);
         let mut journal_client = OutputJournalClient::new();
         let mut output = FailOnSecondAppendJournalOutputAppender::new();
@@ -969,7 +969,7 @@ mod tests {
     #[test]
     fn manager_retry_aware_step_tracks_unavailable_attempts_per_symbol() {
         let mut manager =
-            RuntimeManager::new_with_pending_output_capacity_and_output_retry_limit(4, 2);
+            ShardExecutionCore::new_with_pending_output_capacity_and_output_retry_limit(4, 2);
         let mut btc_handoff = BoundedHandoff::new(4);
         let mut eth_handoff = BoundedHandoff::new(4);
         let mut journal_client = OutputJournalClient::new();
@@ -1020,7 +1020,7 @@ mod tests {
     #[test]
     fn manager_output_escalation_pauses_only_the_escalated_symbol() {
         let mut manager =
-            RuntimeManager::new_with_pending_output_capacity_and_output_retry_limit(4, 1);
+            ShardExecutionCore::new_with_pending_output_capacity_and_output_retry_limit(4, 1);
         let mut btc_handoff = BoundedHandoff::new(4);
         let mut eth_handoff = BoundedHandoff::new(4);
         let mut journal_client = OutputJournalClient::new();
@@ -1074,7 +1074,7 @@ mod tests {
 
     #[test]
     fn manager_exposes_registered_symbols() {
-        let mut manager = RuntimeManager::new();
+        let mut manager = ShardExecutionCore::new();
 
         manager.add_symbol(btc());
         manager.add_symbol(eth());
@@ -1088,7 +1088,7 @@ mod tests {
 
     #[test]
     fn manager_exposes_symbol_status_for_registered_symbol() {
-        let mut manager = RuntimeManager::new();
+        let mut manager = ShardExecutionCore::new();
         manager.add_symbol(btc());
 
         let status = manager.symbol_status(&btc());
@@ -1110,7 +1110,7 @@ mod tests {
 
     #[test]
     fn manager_symbol_status_reflects_processed_input_sequence() {
-        let mut manager = RuntimeManager::new();
+        let mut manager = ShardExecutionCore::new();
         manager.add_symbol(btc());
 
         let mut output = InMemoryJournalOutputAppender::new();

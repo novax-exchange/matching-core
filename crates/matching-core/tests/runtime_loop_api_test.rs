@@ -14,7 +14,7 @@ use matching_core::runtime_loop::{
     RuntimeLoop, RuntimeLoopError, RuntimeLoopRunLimit, RuntimeLoopRunOnceLimits,
     RuntimeLoopRunStopReason,
 };
-use matching_core::runtime_manager::RuntimeManager;
+use matching_core::shard_execution_core::ShardExecutionCore;
 use matching_core::snapshot_restore::{OrderBookSnapshot, SymbolRuntimeSnapshot};
 use matching_core::snapshot_store::{FileSnapshotStore, InMemorySnapshotStore, SnapshotStore};
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
@@ -301,7 +301,7 @@ fn normalized_output_for_symbol(
 fn runtime_loop_enqueue_input_routes_entry_to_symbol_handoff() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
 
     manager.add_symbol(btc.clone());
@@ -331,7 +331,7 @@ fn runtime_loop_enqueue_input_routes_entry_to_symbol_handoff() {
 fn runtime_loop_enqueue_input_rejects_entry_without_symbol_handoff() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
 
     manager.add_symbol(btc.clone());
@@ -351,7 +351,7 @@ fn runtime_loop_enqueue_input_rejects_entry_without_symbol_handoff() {
 fn runtime_loop_enqueue_input_rejects_entry_for_unregistered_handoff_symbol() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
 
     manager.add_symbol(btc.clone());
@@ -371,7 +371,7 @@ fn runtime_loop_enqueue_input_rejects_entry_for_unregistered_handoff_symbol() {
 #[test]
 fn runtime_loop_enqueue_input_reports_full_symbol_handoff() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
 
     manager.add_symbol(btc.clone());
@@ -460,7 +460,7 @@ fn runtime_loop_enqueue_inputs_rejects_batch_without_partial_enqueue_when_symbol
 fn runtime_loop_enqueue_inputs_rejects_batch_without_partial_enqueue_when_symbol_is_unregistered() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
 
     manager.add_symbol(btc.clone());
@@ -485,7 +485,7 @@ fn runtime_loop_enqueue_inputs_rejects_batch_without_partial_enqueue_when_symbol
 ) {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
 
     manager.add_symbol(btc.clone());
@@ -1024,7 +1024,7 @@ fn runtime_loop_run_once_report_identifies_idle_run() {
 fn runtime_loop_validate_configuration_reports_missing_handoff_before_run_once() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
 
     manager.add_symbol(btc.clone());
@@ -1045,7 +1045,7 @@ fn runtime_loop_validate_configuration_reports_unregistered_handoff_in_determini
     let btc = Symbol("BTC-USDT".to_string());
     let sol = Symbol("SOL-USDT".to_string());
     let xrp = Symbol("XRP-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
 
     manager.add_symbol(btc.clone());
@@ -1066,7 +1066,7 @@ fn runtime_loop_validate_configuration_reports_unregistered_handoff_in_determini
 fn runtime_loop_run_once_keeps_unblocked_symbol_running_when_one_symbol_output_blocks() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
@@ -1145,7 +1145,7 @@ fn runtime_loop_run_once_keeps_unblocked_symbol_running_when_one_symbol_output_b
 #[test]
 fn runtime_loop_run_once_prioritizes_output_commit_when_pending_output_is_full() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new_with_pending_output_capacity(1);
+    let mut manager = ShardExecutionCore::new_with_pending_output_capacity(1);
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
@@ -1244,7 +1244,7 @@ fn runtime_loop_run_once_prioritizes_output_commit_when_pending_output_is_full()
 #[test]
 fn runtime_loop_cycle_reports_output_batch_identity_and_query_status() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut output = DurableUnknownJournalOutputAppender::new();
@@ -1294,7 +1294,7 @@ fn runtime_loop_cycle_reports_output_batch_identity_and_query_status() {
 fn runtime_loop_run_once_fails_before_processing_when_a_registered_symbol_has_no_handoff() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
@@ -1334,7 +1334,7 @@ fn runtime_loop_run_once_fails_before_processing_when_a_registered_symbol_has_no
 fn runtime_loop_run_once_fails_before_processing_when_handoff_has_unregistered_symbol() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
@@ -1382,7 +1382,7 @@ fn runtime_loop_run_once_fails_before_processing_when_handoff_has_unregistered_s
 fn runtime_loop_run_once_keeps_unblocked_symbol_running_when_one_symbol_is_quarantined() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
@@ -1461,7 +1461,7 @@ fn runtime_loop_run_once_keeps_unblocked_symbol_running_when_one_symbol_is_quara
 #[test]
 fn runtime_loop_can_clear_quarantine_and_retry_pending_output() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut rejecting_output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
@@ -1532,7 +1532,7 @@ fn runtime_loop_can_clear_quarantine_and_retry_pending_output() {
 #[test]
 fn runtime_loop_clear_quarantine_does_not_drop_pending_output_when_retry_fails() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut rejecting_output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
@@ -1613,7 +1613,7 @@ fn runtime_loop_clear_quarantine_does_not_drop_pending_output_when_retry_fails()
 fn runtime_loop_cycle_reports_symbols_in_deterministic_order() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();

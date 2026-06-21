@@ -110,7 +110,7 @@ The next major shift is turning those explicit steps into long-running internal 
 | Replay runner | Partial | `replay_runner.rs`; checksum replay exists, and replay result now regenerates comparable output entries for the current live-vs-replay proof |
 | Snapshot restore | Partial | `snapshot_restore.rs`; in-memory order-book snapshot/restore exists, and `SymbolRuntimeSnapshot` now captures runtime identity state for restore |
 | Symbol runtime | Completed for current stage | `symbol_runtime.rs`, `symbol_runtime/runtime.rs`; deterministic output generation, bounded input draining, retry requeue, pending output handoff, rollback, safe-point advancement, and one-shot worker support are covered for the current layer |
-| Runtime manager | Completed for current stage | `runtime_manager.rs` |
+| Shard execution core | Completed for current stage | `shard_execution_core.rs` |
 | Symbol routing | Completed | `symbol_routing.rs` |
 | Bounded handoff | Completed | `bounded_handoff.rs` |
 | Pending output buffer | Completed | `output_commit_boundary/pending_output_buffer.rs` |
@@ -217,17 +217,17 @@ Progress so far:
 - `OutputCommitRetryTracker` turns blocked output reports into explicit actions: retry later for short `Unavailable`, resolve for `Unknown`, and stop / escalate for `Rejected` or repeated `Unavailable`;
 - the main SymbolRuntime and ReplayRunner determinism tests now use the pending-output plus commit-report path for live execution evidence, rather than treating direct output append as the production commit model;
 - `run_symbol_runtime_step_with_output_batch_commit()` now provides the first integrated step shape for execution, pending output, Output Batch Coordinator commit, confirmed-prefix safe-point advancement, and blocked-tail retention;
-- `RuntimeManager::run_symbol_step_with_output_batch_commit()` exposes that integrated step at the symbol runtime boundary, with one pending output buffer per registered symbol;
-- Runtime Manager tests now cover a blocked output tail across two iterations: the first step advances only the confirmed prefix, and the next step retries the pending tail before advancing the safe point;
-- `RuntimeManager::run_symbol_output_batch_commit_step()` can commit pending output without draining new input, which gives the long-running loop a clear way to relieve pending-output pressure before consuming more commands;
+- `ShardExecutionCore::run_symbol_step_with_output_batch_commit()` exposes that integrated step at the symbol runtime boundary, with one pending output buffer per registered symbol;
+- Shard execution core tests now cover a blocked output tail across two iterations: the first step advances only the confirmed prefix, and the next step retries the pending tail before advancing the safe point;
+- `ShardExecutionCore::run_symbol_output_batch_commit_step()` can commit pending output without draining new input, which gives the long-running loop a clear way to relieve pending-output pressure before consuming more commands;
 - `SymbolRuntimeStatus` reports pending output length, capacity, and full-state so pressure is visible at the runtime boundary;
-- `RuntimeManager::run_symbol_pressure_aware_step()` uses that pressure state for scheduling: if pending output is already full, it runs output-only commit before draining new input;
-- `RuntimeManager::run_symbol_retry_aware_step()` records blocked output reports per symbol and returns retry / resolve / escalate decisions to the caller;
+- `ShardExecutionCore::run_symbol_pressure_aware_step()` uses that pressure state for scheduling: if pending output is already full, it runs output-only commit before draining new input;
+- `ShardExecutionCore::run_symbol_retry_aware_step()` records blocked output reports per symbol and returns retry / resolve / escalate decisions to the caller;
 - `SymbolRuntimeStatus` now exposes the current output commit escalation decision when a rejected output or repeated unavailable output reaches `StopAndEscalate`;
 - once a symbol has an output commit escalation, `run_symbol_retry_aware_step()` pauses that symbol instead of draining new input or retrying the pending output; other symbols remain independent;
-- `RuntimeManager::clear_symbol_output_commit_escalation()` clears the pause record and resets retry tracking for that symbol; pending output must still be committed successfully before safe point advances;
-- `RuntimeManager::quarantine_symbol_output_commit_escalation()` moves the escalation into a quarantine record without removing pending output or advancing safe point;
-- `RuntimeManager::clear_symbol_output_commit_quarantine()` clears the quarantine record for an explicit manual retry; pending output still remains the source to commit before safe point can move;
+- `ShardExecutionCore::clear_symbol_output_commit_escalation()` clears the pause record and resets retry tracking for that symbol; pending output must still be committed successfully before safe point advances;
+- `ShardExecutionCore::quarantine_symbol_output_commit_escalation()` moves the escalation into a quarantine record without removing pending output or advancing safe point;
+- `ShardExecutionCore::clear_symbol_output_commit_quarantine()` clears the quarantine record for an explicit manual retry; pending output still remains the source to commit before safe point can move;
 - `SymbolRuntimeStatus::output_commit_blockage` gives callers a single summary of the active escalation or quarantine, including the decision and current pending-output pressure;
 - `OutputBatchIdentity` gives each output commit attempt a stable symbol, input sequence range, entry count, matching-output version, and deterministic output digest;
 - output batch id identifies the batch position and version, while output digest identifies the batch content;
@@ -238,11 +238,11 @@ Progress so far:
 - `OutputJournalClient::query_output_batch()` returns explicit missing / incomplete / durable / conflict states for recovery and unknown-outcome resolution;
 - `OutputJournalClient` maintains a rebuildable recent output metadata cache that can be warmed by successful metadata appends or rebuilt from Journal output; failed conflict rebuilds do not replace the previous usable cache;
 - missing, incomplete, durable, and conflict query statuses are surfaced through output-only, integrated, pressure-aware, and retry-aware runtime reports when they explain output commit progress or blockage;
-- `RuntimeManager::run_symbol_output_batch_commit_step()` now exposes that output batch identity for output-only commit attempts;
-- `run_symbol_runtime_step_with_output_batch_commit()` and `RuntimeManager::run_symbol_retry_aware_step()` now also surface the attempted output batch identity;
+- `ShardExecutionCore::run_symbol_output_batch_commit_step()` now exposes that output batch identity for output-only commit attempts;
+- `run_symbol_runtime_step_with_output_batch_commit()` and `ShardExecutionCore::run_symbol_retry_aware_step()` now also surface the attempted output batch identity;
 - `SymbolRuntimeStatus::output_commit_blockage` preserves output batch query evidence while a symbol is escalated or quarantined, so paused symbols still explain whether they are blocked by missing, incomplete, durable, or conflict evidence;
 - public API tests cover unresolved unknown, resolved-durable unknown, incomplete durable prefix, unavailable, rejected, and conflicting output outcomes in the middle of an output batch.
-- `MatchingRuntimeConfig` now centralizes runtime-policy knobs for handoff capacity, execution-loop step size, output commit capacity / retry / batch size, snapshot retention, and snapshot verification. Runtime Manager and Runtime Loop can now be constructed from that config surface instead of keeping separate default constants or loose constructor parameters only.
+- `MatchingRuntimeConfig` now centralizes runtime-policy knobs for handoff capacity, execution-loop step size, output commit capacity / retry / batch size, snapshot retention, and snapshot verification. ShardExecutionCore and Runtime Loop can now be constructed from that config surface instead of keeping separate default constants or loose constructor parameters only.
 
 Accepted mechanism:
 

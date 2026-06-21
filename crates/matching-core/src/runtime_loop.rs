@@ -5,8 +5,9 @@ use crate::output_commit_boundary::{
     OutputJournalClient,
 };
 use crate::runtime_config::MatchingRuntimeConfig;
-use crate::runtime_manager::{
-    RuntimeManager, RuntimeManagerError, RuntimeManagerRetryAwareStepReport, SymbolRuntimeStatus,
+use crate::shard_execution_core::{
+    ShardExecutionCore, ShardExecutionCoreError, ShardExecutionCoreRetryAwareStepReport,
+    SymbolRuntimeStatus,
 };
 use crate::snapshot_restore::SymbolRuntimeSnapshot;
 use crate::snapshot_store::{SnapshotRecord, SnapshotStore, SnapshotStoreError};
@@ -14,7 +15,7 @@ use crate::types::{Checksum, JournalSeq, Symbol};
 use std::collections::HashMap;
 
 pub struct RuntimeLoop {
-    manager: RuntimeManager,
+    manager: ShardExecutionCore,
     handoffs: HashMap<Symbol, BoundedHandoff>,
 }
 
@@ -38,7 +39,7 @@ pub enum RuntimeLoopError {
     MissingHandoff(Symbol),
     UnregisteredHandoff(Symbol),
     InputHandoffFull(Symbol),
-    RuntimeManager(RuntimeManagerError),
+    ShardExecutionCore(ShardExecutionCoreError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,7 +118,7 @@ pub struct RuntimeLoopSymbolRunOnceReport {
 }
 
 impl RuntimeLoop {
-    pub fn new(manager: RuntimeManager, handoffs: HashMap<Symbol, BoundedHandoff>) -> Self {
+    pub fn new(manager: ShardExecutionCore, handoffs: HashMap<Symbol, BoundedHandoff>) -> Self {
         Self { manager, handoffs }
     }
 
@@ -126,7 +127,8 @@ impl RuntimeLoop {
         pending_input_capacity: usize,
         pending_output_capacity: usize,
     ) -> Self {
-        let mut manager = RuntimeManager::new_with_pending_output_capacity(pending_output_capacity);
+        let mut manager =
+            ShardExecutionCore::new_with_pending_output_capacity(pending_output_capacity);
         let mut handoffs = HashMap::new();
 
         for symbol in symbols {
@@ -141,7 +143,7 @@ impl RuntimeLoop {
         symbols: Vec<Symbol>,
         config: MatchingRuntimeConfig,
     ) -> Self {
-        let mut manager = RuntimeManager::new_with_config(config.clone());
+        let mut manager = ShardExecutionCore::new_with_config(config.clone());
         let mut handoffs = HashMap::new();
 
         for symbol in symbols {
@@ -157,7 +159,8 @@ impl RuntimeLoop {
         pending_input_capacity: usize,
         pending_output_capacity: usize,
     ) -> Self {
-        let mut manager = RuntimeManager::new_with_pending_output_capacity(pending_output_capacity);
+        let mut manager =
+            ShardExecutionCore::new_with_pending_output_capacity(pending_output_capacity);
         let mut handoffs = HashMap::new();
 
         for snapshot in snapshots {
@@ -174,7 +177,7 @@ impl RuntimeLoop {
         snapshots: Vec<SymbolRuntimeSnapshot>,
         config: MatchingRuntimeConfig,
     ) -> Self {
-        let mut manager = RuntimeManager::new_with_config(config.clone());
+        let mut manager = ShardExecutionCore::new_with_config(config.clone());
         let mut handoffs = HashMap::new();
 
         for snapshot in snapshots {
@@ -215,15 +218,15 @@ impl RuntimeLoop {
                     limits.max_input_entries_per_symbol,
                     limits.max_output_requests_per_symbol,
                 )
-                .map_err(RuntimeLoopError::RuntimeManager)?;
+                .map_err(RuntimeLoopError::ShardExecutionCore)?;
             let pending_input_len_after_run = handoff.len();
             let pending_input_capacity = handoff.capacity();
             let pending_input_full = handoff.is_full();
             let runtime_status_after_run =
                 self.manager
                     .symbol_status(&symbol)
-                    .ok_or(RuntimeLoopError::RuntimeManager(
-                        RuntimeManagerError::UnknownSymbol,
+                    .ok_or(RuntimeLoopError::ShardExecutionCore(
+                        ShardExecutionCoreError::UnknownSymbol,
                     ))?;
 
             symbol_reports.push(RuntimeLoopSymbolRunOnceReport::from_retry_aware_report(
@@ -392,8 +395,8 @@ impl RuntimeLoop {
             let runtime_status =
                 self.manager
                     .symbol_status(&symbol)
-                    .ok_or(RuntimeLoopError::RuntimeManager(
-                        RuntimeManagerError::UnknownSymbol,
+                    .ok_or(RuntimeLoopError::ShardExecutionCore(
+                        ShardExecutionCoreError::UnknownSymbol,
                     ))?;
 
             symbol_statuses.push(RuntimeLoopSymbolWorkStatus {
@@ -480,7 +483,7 @@ impl RuntimeLoop {
     pub fn quarantine_symbol_output_commit_escalation(
         &mut self,
         symbol: &Symbol,
-    ) -> Result<Option<OutputCommitBlockDecision>, RuntimeManagerError> {
+    ) -> Result<Option<OutputCommitBlockDecision>, ShardExecutionCoreError> {
         self.manager
             .quarantine_symbol_output_commit_escalation(symbol)
     }
@@ -488,7 +491,7 @@ impl RuntimeLoop {
     pub fn clear_symbol_output_commit_quarantine(
         &mut self,
         symbol: &Symbol,
-    ) -> Result<Option<OutputCommitBlockDecision>, RuntimeManagerError> {
+    ) -> Result<Option<OutputCommitBlockDecision>, ShardExecutionCoreError> {
         self.manager.clear_symbol_output_commit_quarantine(symbol)
     }
 }
@@ -587,7 +590,7 @@ impl RuntimeLoopWorkState {
 impl RuntimeLoopSymbolRunOnceReport {
     fn from_retry_aware_report(
         symbol: Symbol,
-        report: RuntimeManagerRetryAwareStepReport,
+        report: ShardExecutionCoreRetryAwareStepReport,
         runtime_status_after_run: SymbolRuntimeStatus,
         pending_input_len_after_run: usize,
         pending_input_capacity: usize,

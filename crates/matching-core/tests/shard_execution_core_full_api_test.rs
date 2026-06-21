@@ -17,11 +17,11 @@ use matching_core::runtime_config::{
     RuntimeHostConfig, RuntimeHostMode, RuntimeShardId, RuntimeTopologyConfig, SnapshotConfig,
     SnapshotVerificationConfig, SymbolAssignmentPolicy, SymbolRuntimeConfig, SymbolShardAssignment,
 };
-use matching_core::runtime_manager::{
-    OutputCommitBlockageKind, OutputCommitBlockageStatus, RuntimeManager, RuntimeManagerError,
-    SymbolRuntimeStatus,
-};
 use matching_core::runtime_topology::RuntimeTopologyError;
+use matching_core::shard_execution_core::{
+    OutputCommitBlockageKind, OutputCommitBlockageStatus, ShardExecutionCore,
+    ShardExecutionCoreError, SymbolRuntimeStatus,
+};
 use matching_core::symbol_runtime::SymbolRuntimeOutputCommitStepError;
 use matching_core::types::{
     CommandId, JournalSeq, MarketSeq, OrderId, Price, Quantity, Side, Symbol,
@@ -336,9 +336,9 @@ fn assert_conflicting_query_status(
 }
 
 #[test]
-fn runtime_manager_is_available_from_public_api() {
+fn shard_execution_core_is_available_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut output = TestJournalOutputAppender::new();
 
     manager.add_symbol(btc.clone());
@@ -351,26 +351,26 @@ fn runtime_manager_is_available_from_public_api() {
 }
 
 #[test]
-fn runtime_manager_error_is_available_from_public_api() {
+fn shard_execution_core_error_is_available_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut output = TestJournalOutputAppender::new();
 
     manager.add_symbol(btc);
 
     assert_eq!(
         manager.process_entry(command_entry(1, eth), &mut output),
-        Err(RuntimeManagerError::UnknownSymbol)
+        Err(ShardExecutionCoreError::UnknownSymbol)
     );
 }
 
 #[test]
-fn runtime_manager_query_api_is_available_from_public_api() {
+fn shard_execution_core_query_api_is_available_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
 
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     manager.add_symbol(btc.clone());
     manager.add_symbol(eth.clone());
 
@@ -396,10 +396,10 @@ fn runtime_manager_query_api_is_available_from_public_api() {
 }
 
 #[test]
-fn runtime_manager_resolves_default_runtime_topology_from_public_api() {
+fn shard_execution_core_resolves_default_runtime_topology_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
 
     manager.add_symbol(btc.clone());
     manager.add_symbol(eth.clone());
@@ -416,7 +416,7 @@ fn runtime_manager_resolves_default_runtime_topology_from_public_api() {
 }
 
 #[test]
-fn runtime_manager_resolves_configured_declaration_order_topology_from_public_api() {
+fn shard_execution_core_resolves_configured_declaration_order_topology_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
     let sol = Symbol("SOL-USDT".to_string());
@@ -425,7 +425,7 @@ fn runtime_manager_resolves_configured_declaration_order_topology_from_public_ap
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
-    let mut manager = RuntimeManager::new_with_config(config);
+    let mut manager = ShardExecutionCore::new_with_config(config);
 
     manager.add_symbol(btc.clone());
     manager.add_symbol(eth.clone());
@@ -446,7 +446,7 @@ fn runtime_manager_resolves_configured_declaration_order_topology_from_public_ap
 }
 
 #[test]
-fn runtime_manager_reports_invalid_explicit_topology_from_public_api() {
+fn shard_execution_core_reports_invalid_explicit_topology_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
     let mut config = MatchingRuntimeConfig::default();
@@ -457,7 +457,7 @@ fn runtime_manager_reports_invalid_explicit_topology_from_public_api() {
             shard_id: RuntimeShardId(0),
         }]),
     };
-    let mut manager = RuntimeManager::new_with_config(config);
+    let mut manager = ShardExecutionCore::new_with_config(config);
 
     manager.add_symbol(btc);
     manager.add_symbol(eth.clone());
@@ -469,7 +469,7 @@ fn runtime_manager_reports_invalid_explicit_topology_from_public_api() {
 }
 
 #[test]
-fn runtime_manager_uses_runtime_config_for_output_policy_from_public_api() {
+fn shard_execution_core_uses_runtime_config_for_output_policy_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
     let config = MatchingRuntimeConfig {
         topology: RuntimeTopologyConfig {
@@ -498,7 +498,7 @@ fn runtime_manager_uses_runtime_config_for_output_policy_from_public_api() {
             max_mismatch_attempts: 4,
         },
     };
-    let mut manager = RuntimeManager::new_with_config(config);
+    let mut manager = ShardExecutionCore::new_with_config(config);
 
     manager.add_symbol(btc.clone());
 
@@ -509,9 +509,9 @@ fn runtime_manager_uses_runtime_config_for_output_policy_from_public_api() {
 }
 
 #[test]
-fn runtime_manager_status_reports_pending_output_pressure_from_public_api() {
+fn shard_execution_core_status_reports_pending_output_pressure_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new_with_pending_output_capacity(1);
+    let mut manager = ShardExecutionCore::new_with_pending_output_capacity(1);
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
@@ -548,9 +548,9 @@ fn runtime_manager_status_reports_pending_output_pressure_from_public_api() {
 }
 
 #[test]
-fn runtime_manager_can_commit_pending_output_without_draining_new_input_from_public_api() {
+fn shard_execution_core_can_commit_pending_output_without_draining_new_input_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new_with_pending_output_capacity(1);
+    let mut manager = ShardExecutionCore::new_with_pending_output_capacity(1);
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
@@ -582,7 +582,7 @@ fn runtime_manager_can_commit_pending_output_without_draining_new_input_from_pub
             1,
             0,
         ),
-        Err(RuntimeManagerError::OutputCommitStepFailed(
+        Err(ShardExecutionCoreError::OutputCommitStepFailed(
             SymbolRuntimeOutputCommitStepError::PendingOutputBuffer(
                 PendingOutputBufferError::BufferFull,
             )
@@ -615,10 +615,10 @@ fn runtime_manager_can_commit_pending_output_without_draining_new_input_from_pub
 }
 
 #[test]
-fn runtime_manager_pressure_aware_step_commits_full_pending_output_before_new_input_from_public_api(
+fn shard_execution_core_pressure_aware_step_commits_full_pending_output_before_new_input_from_public_api(
 ) {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new_with_pending_output_capacity(1);
+    let mut manager = ShardExecutionCore::new_with_pending_output_capacity(1);
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
@@ -658,9 +658,10 @@ fn runtime_manager_pressure_aware_step_commits_full_pending_output_before_new_in
 }
 
 #[test]
-fn runtime_manager_retry_aware_step_escalates_repeated_unavailable_output_from_public_api() {
+fn shard_execution_core_retry_aware_step_escalates_repeated_unavailable_output_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new_with_pending_output_capacity_and_output_retry_limit(4, 2);
+    let mut manager =
+        ShardExecutionCore::new_with_pending_output_capacity_and_output_retry_limit(4, 2);
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = AlwaysFailingJournalOutputAppender;
@@ -717,9 +718,10 @@ fn runtime_manager_retry_aware_step_escalates_repeated_unavailable_output_from_p
 }
 
 #[test]
-fn runtime_manager_retry_aware_step_reports_missing_output_batch_query_status_from_public_api() {
+fn shard_execution_core_retry_aware_step_reports_missing_output_batch_query_status_from_public_api()
+{
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = UnknownJournalOutputAppender;
@@ -769,10 +771,10 @@ fn runtime_manager_retry_aware_step_reports_missing_output_batch_query_status_fr
 }
 
 #[test]
-fn runtime_manager_retry_aware_step_advances_safe_point_with_durable_output_batch_query_status_from_public_api(
+fn shard_execution_core_retry_aware_step_advances_safe_point_with_durable_output_batch_query_status_from_public_api(
 ) {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = DurableUnknownJournalOutputAppender::new();
@@ -800,9 +802,10 @@ fn runtime_manager_retry_aware_step_advances_safe_point_with_durable_output_batc
 }
 
 #[test]
-fn runtime_manager_retry_aware_step_reports_incomplete_output_batch_query_status_from_public_api() {
+fn shard_execution_core_retry_aware_step_reports_incomplete_output_batch_query_status_from_public_api(
+) {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = FirstDurableThenUnknownJournalOutputAppender::new();
@@ -857,8 +860,8 @@ fn runtime_manager_retry_aware_step_reports_incomplete_output_batch_query_status
 }
 
 #[test]
-fn runtime_manager_retry_aware_step_reports_conflicting_output_batch_query_status_from_public_api()
-{
+fn shard_execution_core_retry_aware_step_reports_conflicting_output_batch_query_status_from_public_api(
+) {
     let btc = Symbol("BTC-USDT".to_string());
     let current_requests = vec![output_request(1, 1)];
     let drifted_requests = vec![output_request(1, 999)];
@@ -872,7 +875,7 @@ fn runtime_manager_retry_aware_step_reports_conflicting_output_batch_query_statu
         JournalOutputCommitMetadata::from_output_batch_identity(&drifted_identity);
     let durable_drifted_entry =
         durable_output_entry(drifted_requests[0].clone(), drifted_metadata.clone());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = ConflictingJournalOutputAppender::with_entries(vec![durable_drifted_entry]);
@@ -936,7 +939,8 @@ fn runtime_manager_retry_aware_step_reports_conflicting_output_batch_query_statu
 }
 
 #[test]
-fn runtime_manager_quarantine_preserves_conflicting_output_batch_query_status_from_public_api() {
+fn shard_execution_core_quarantine_preserves_conflicting_output_batch_query_status_from_public_api()
+{
     let btc = Symbol("BTC-USDT".to_string());
     let current_requests = vec![output_request(1, 1)];
     let drifted_requests = vec![output_request(1, 999)];
@@ -949,7 +953,7 @@ fn runtime_manager_quarantine_preserves_conflicting_output_batch_query_status_fr
     let drifted_metadata =
         JournalOutputCommitMetadata::from_output_batch_identity(&drifted_identity);
     let durable_drifted_entry = durable_output_entry(drifted_requests[0].clone(), drifted_metadata);
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = ConflictingJournalOutputAppender::with_entries(vec![durable_drifted_entry]);
@@ -1001,9 +1005,9 @@ fn runtime_manager_quarantine_preserves_conflicting_output_batch_query_status_fr
 }
 
 #[test]
-fn runtime_manager_status_records_rejected_output_escalation_from_public_api() {
+fn shard_execution_core_status_records_rejected_output_escalation_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = RejectingJournalOutputAppender;
@@ -1045,9 +1049,9 @@ fn runtime_manager_status_records_rejected_output_escalation_from_public_api() {
 }
 
 #[test]
-fn runtime_manager_retry_aware_step_pauses_symbol_after_output_escalation_from_public_api() {
+fn shard_execution_core_retry_aware_step_pauses_symbol_after_output_escalation_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut rejecting_output = RejectingJournalOutputAppender;
@@ -1097,9 +1101,9 @@ fn runtime_manager_retry_aware_step_pauses_symbol_after_output_escalation_from_p
 }
 
 #[test]
-fn runtime_manager_can_clear_output_escalation_and_retry_pending_output_from_public_api() {
+fn shard_execution_core_can_clear_output_escalation_and_retry_pending_output_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut rejecting_output = RejectingJournalOutputAppender;
@@ -1163,20 +1167,21 @@ fn runtime_manager_can_clear_output_escalation_and_retry_pending_output_from_pub
 }
 
 #[test]
-fn runtime_manager_clear_output_escalation_rejects_unknown_symbol_from_public_api() {
+fn shard_execution_core_clear_output_escalation_rejects_unknown_symbol_from_public_api() {
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
 
     assert_eq!(
         manager.clear_symbol_output_commit_escalation(&eth),
-        Err(RuntimeManagerError::UnknownSymbol)
+        Err(ShardExecutionCoreError::UnknownSymbol)
     );
 }
 
 #[test]
-fn runtime_manager_can_quarantine_output_escalation_without_advancing_safe_point_from_public_api() {
+fn shard_execution_core_can_quarantine_output_escalation_without_advancing_safe_point_from_public_api(
+) {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut rejecting_output = RejectingJournalOutputAppender;
@@ -1244,9 +1249,9 @@ fn runtime_manager_can_quarantine_output_escalation_without_advancing_safe_point
 }
 
 #[test]
-fn runtime_manager_can_clear_output_quarantine_and_retry_pending_output_from_public_api() {
+fn shard_execution_core_can_clear_output_quarantine_and_retry_pending_output_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut rejecting_output = RejectingJournalOutputAppender;
@@ -1307,11 +1312,11 @@ fn runtime_manager_can_clear_output_quarantine_and_retry_pending_output_from_pub
 }
 
 #[test]
-fn runtime_manager_quarantine_output_escalation_handles_empty_and_unknown_symbols_from_public_api()
-{
+fn shard_execution_core_quarantine_output_escalation_handles_empty_and_unknown_symbols_from_public_api(
+) {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
 
     manager.add_symbol(btc.clone());
 
@@ -1321,15 +1326,16 @@ fn runtime_manager_quarantine_output_escalation_handles_empty_and_unknown_symbol
     );
     assert_eq!(
         manager.quarantine_symbol_output_commit_escalation(&eth),
-        Err(RuntimeManagerError::UnknownSymbol)
+        Err(ShardExecutionCoreError::UnknownSymbol)
     );
 }
 
 #[test]
-fn runtime_manager_clear_output_quarantine_handles_empty_and_unknown_symbols_from_public_api() {
+fn shard_execution_core_clear_output_quarantine_handles_empty_and_unknown_symbols_from_public_api()
+{
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
 
     manager.add_symbol(btc.clone());
 
@@ -1339,14 +1345,14 @@ fn runtime_manager_clear_output_quarantine_handles_empty_and_unknown_symbols_fro
     );
     assert_eq!(
         manager.clear_symbol_output_commit_quarantine(&eth),
-        Err(RuntimeManagerError::UnknownSymbol)
+        Err(ShardExecutionCoreError::UnknownSymbol)
     );
 }
 
 #[test]
-fn runtime_manager_output_batch_commit_step_is_available_from_public_api() {
+fn shard_execution_core_output_batch_commit_step_is_available_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = RuntimeManager::new();
+    let mut manager = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();

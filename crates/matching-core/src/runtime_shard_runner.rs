@@ -5,8 +5,8 @@ use crate::runtime_loop::{
     RuntimeLoop, RuntimeLoopError, RuntimeLoopInputStatus, RuntimeLoopRunLimit,
     RuntimeLoopRunOnceLimits, RuntimeLoopRunOnceReport, RuntimeLoopRunReport,
 };
-use crate::runtime_manager::{RuntimeManagerError, SymbolRuntimeStatus};
 use crate::runtime_topology::{RuntimeTopology, RuntimeTopologyError};
+use crate::shard_execution_core::{ShardExecutionCoreError, SymbolRuntimeStatus};
 use crate::types::Symbol;
 
 pub struct RuntimeShardRunner {
@@ -89,7 +89,7 @@ impl RuntimeShardRunner {
     pub fn quarantine_symbol_output_commit_escalation(
         &mut self,
         symbol: &Symbol,
-    ) -> Result<Option<OutputCommitBlockDecision>, RuntimeManagerError> {
+    ) -> Result<Option<OutputCommitBlockDecision>, ShardExecutionCoreError> {
         self.runtime_loop
             .quarantine_symbol_output_commit_escalation(symbol)
     }
@@ -97,7 +97,7 @@ impl RuntimeShardRunner {
     pub fn clear_symbol_output_commit_quarantine(
         &mut self,
         symbol: &Symbol,
-    ) -> Result<Option<OutputCommitBlockDecision>, RuntimeManagerError> {
+    ) -> Result<Option<OutputCommitBlockDecision>, ShardExecutionCoreError> {
         self.runtime_loop
             .clear_symbol_output_commit_quarantine(symbol)
     }
