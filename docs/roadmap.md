@@ -51,7 +51,7 @@ Journal Adapter input reader
 
 The asynchronous output commit discipline is now established at the learning-project level. The matching execution path generates deterministic output requests and enqueues them locally; the output commit path batches and durably appends those requests to Journal; safe-point advancement consumes only confirmed durable prefixes, not attempted remote calls or generated output.
 
-The next major shift is turning those explicit steps into long-running internal runtime loops with pressure, scheduling, shutdown, and multi-symbol isolation tests.
+The next major shift is turning those explicit steps into long-running internal shard runtimes with pressure, scheduling, shutdown, and multi-symbol isolation tests.
 
 ## Phase Roadmap
 
@@ -72,7 +72,7 @@ The next major shift is turning those explicit steps into long-running internal 
 | 12 | Completed | Snapshot | Snapshot/restore checksum consistency |
 | 13 | Completed | Symbol runtime | Output commit advances safe point |
 | 14 | Completed | Batch processing | Batch failure stops at safe point |
-| 15 | Completed | Runtime manager | BTC/ETH runtimes remain isolated |
+| 15 | Completed | Shard execution core | BTC/ETH runtimes remain isolated |
 | 16 | Completed | Symbol routing | Entries route by symbol |
 | 17 | Completed | Bounded handoff | Full queue, ordered consumption, and watermarks |
 | 18 | Completed | Symbol runtime worker | Journal reader and runtime separation shape |
@@ -82,7 +82,7 @@ The next major shift is turning those explicit steps into long-running internal 
 | 22 | Completed | Deterministic output identity and duplicate policy | Stable trade identity model; duplicate order id rejected or resolved before mutation |
 | 23 | Completed | Replay output equivalence | Live path and replay path produce comparable output sequence, state, checksum, and safe point |
 | 24 | Completed | Snapshot restore output determinism | Snapshot restore plus replay tail equals full replay for state, output identity, and safe point |
-| 25 | Completed | Output commit ambiguity and safe-point discipline | Missing / incomplete / durable / conflict output commit evidence is surfaced through Runtime Manager; unknown / failed output commit does not advance safe point beyond the confirmed durable prefix or consume future deterministic identity |
+| 25 | Completed | Output commit ambiguity and safe-point discipline | Missing / incomplete / durable / conflict output commit evidence is surfaced through ShardExecutionCore; unknown / failed output commit does not advance safe point beyond the confirmed durable prefix or consume future deterministic identity |
 | 26 | Planned | Internal runtime concurrency and pressure | Long-running worker, bounded output commit pressure, queue pressure, retry, and safe-point tests |
 | 27 | Planned | Multi-symbol concurrency and hot-symbol isolation | Slow or saturated symbol does not corrupt or block unrelated symbols |
 | 28 | Planned | Output commit pressure | Slow or failing output commit does not create ambiguous safe-point progress |
@@ -110,6 +110,8 @@ The next major shift is turning those explicit steps into long-running internal 
 | Replay runner | Partial | `replay_runner.rs`; checksum replay exists, and replay result now regenerates comparable output entries for the current live-vs-replay proof |
 | Snapshot restore | Partial | `snapshot_restore.rs`; in-memory order-book snapshot/restore exists, and `SymbolRuntimeSnapshot` now captures runtime identity state for restore |
 | Symbol runtime | Completed for current stage | `symbol_runtime.rs`, `symbol_runtime/runtime.rs`; deterministic output generation, bounded input draining, retry requeue, pending output handoff, rollback, safe-point advancement, and one-shot worker support are covered for the current layer |
+| Matching runtime | Completed for current stage | `matching_runtime.rs`, `matching_runtime_driver.rs`; configured execution mode, input close / drain / shutdown boundaries, shard status, and manual multi-shard execution are covered for the current layer |
+| Shard runtime | Completed for current stage | `shard_runtime.rs`; bounded input handoff, shard ownership, run-once / run-limited execution, topology construction, remaining-work reporting, and blocked-symbol reporting are covered for the current layer |
 | Shard execution core | Completed for current stage | `shard_execution_core.rs` |
 | Symbol routing | Completed | `symbol_routing.rs` |
 | Bounded handoff | Completed | `bounded_handoff.rs` |
@@ -242,7 +244,7 @@ Progress so far:
 - `run_symbol_runtime_step_with_output_batch_commit()` and `ShardExecutionCore::run_symbol_retry_aware_step()` now also surface the attempted output batch identity;
 - `SymbolRuntimeStatus::output_commit_blockage` preserves output batch query evidence while a symbol is escalated or quarantined, so paused symbols still explain whether they are blocked by missing, incomplete, durable, or conflict evidence;
 - public API tests cover unresolved unknown, resolved-durable unknown, incomplete durable prefix, unavailable, rejected, and conflicting output outcomes in the middle of an output batch.
-- `MatchingRuntimeConfig` now centralizes runtime-policy knobs for handoff capacity, execution-loop step size, output commit capacity / retry / batch size, snapshot retention, and snapshot verification. ShardExecutionCore and Runtime Loop can now be constructed from that config surface instead of keeping separate default constants or loose constructor parameters only.
+- `MatchingRuntimeConfig` now centralizes runtime-policy knobs for topology, runtime execution mode, handoff capacity, shard-runtime step size, output commit capacity / retry / batch size, snapshot retention, and snapshot verification. MatchingRuntime, ShardRuntime, and ShardExecutionCore can now be constructed from that config surface instead of keeping separate default constants or loose constructor parameters only.
 
 Accepted mechanism:
 
@@ -254,7 +256,7 @@ Accepted mechanism:
 
 Completion boundary:
 
-- Phase 25 is complete for the learning-project contract: output commit ambiguity is represented explicitly, durable prefixes advance safe point conservatively, unresolved tails remain pending, batch identity and digest conflict are detected, and Runtime Manager exposes the evidence needed to pause, clear, quarantine, or retry a symbol.
+- Phase 25 is complete for the learning-project contract: output commit ambiguity is represented explicitly, durable prefixes advance safe point conservatively, unresolved tails remain pending, batch identity and digest conflict are detected, and ShardExecutionCore exposes the evidence needed to pause, clear, quarantine, or retry a symbol.
 - Long-running workers, production shutdown behavior, standby promotion, operational automation, and cross-symbol scheduling pressure move to Phase 26 and later phases.
 
 ## Difficulty Backlog
@@ -266,8 +268,8 @@ This backlog records hard problems discovered or expected during scenario-driven
 | Determinism | Same confirmed input must produce the same output events, order book state, checksums, and safe points across live execution and replay | Partially covered; replay can now regenerate output entries and match live output / checksum / safe point across representative command outcomes |
 | Architecture extraction | Code should reflect responsibilities, state ownership, contracts, boundary rules, flows, failure modes, and validation from the architecture docs | Needs explicit inventory |
 | Single writer | Each symbol order book must have exactly one mutation owner even when runtimes run concurrently | Basic symbol isolation exists; long-running worker model is next |
-| Backpressure | Bounded handoff and pending output buffer saturation must stop unsafe progress without unbounded memory growth | Basic bounded transfer buffers exist; Runtime Manager status exposes pending-output pressure, output-only commit can relieve pressure before more input is consumed, and pressure-aware scheduling now does that automatically when pending output is full. Escalated symbols are paused without stopping unrelated symbols. Slow Journal scheduling is partially covered; production pacing still needs study |
-| Output commit | Matching output must become durable before the runtime advances safe progress | Phase 25 learning contract complete. Output results are classified into explicit commit outcomes; exact durable unknowns can be resolved; incomplete batches advance only the confirmed prefix; conflicts are surfaced as deterministic output evidence; Runtime Manager preserves blockage evidence across escalation and quarantine. The adopted production direction is async batch Journal commit with bounded pending output and backpressure; long-running worker pressure, shutdown, and operational automation move to Phase 26+ |
+| Backpressure | Bounded handoff and pending output buffer saturation must stop unsafe progress without unbounded memory growth | Basic bounded transfer buffers exist; MatchingRuntime status exposes pending-output pressure, output-only commit can relieve pressure before more input is consumed, and pressure-aware scheduling now does that automatically when pending output is full. Escalated symbols are paused without stopping unrelated symbols. Slow Journal scheduling is partially covered; production pacing still needs study |
+| Output commit | Matching output must become durable before the runtime advances safe progress | Phase 25 learning contract complete. Output results are classified into explicit commit outcomes; exact durable unknowns can be resolved; incomplete batches advance only the confirmed prefix; conflicts are surfaced as deterministic output evidence; ShardExecutionCore preserves blockage evidence across escalation and quarantine. The adopted production direction is async batch Journal commit with bounded pending output and backpressure; long-running worker pressure, shutdown, and operational automation move to Phase 26+ |
 | Output identity | Output batches need stable identity so retry does not duplicate or drift | Basic trade and market-sequence identity covered for trade outputs. Output commit attempts have `OutputBatchIdentity` metadata with symbol, input sequence range, entry count, matching-output version, and deterministic output digest. Batch id is separated from digest: same batch id with a different digest is treated as a conflict and rejected by the output journal client. `OutputCommitMetadataIndex` is a rebuildable lookup layer over durable Journal output metadata, and `OutputJournalClient` keeps a recent cache that can be warmed or rebuilt without becoming the source of truth |
 | Market sequence | Per-symbol market sequence should be distinct from global journal sequence | Trade outputs carry `market_seq`; resting-order, cancel, and book-delta market events are not yet modeled |
 | Control state | Matching-affecting config must enter at deterministic sequence positions | Not yet modeled |

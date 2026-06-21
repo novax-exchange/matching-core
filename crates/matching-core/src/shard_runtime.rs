@@ -4,7 +4,8 @@ use crate::output_commit_boundary::{
     OutputBatchIdentity, OutputBatchQueryStatus, OutputCommitBlockDecision, OutputCommitOutcome,
     OutputJournalClient,
 };
-use crate::runtime_config::MatchingRuntimeConfig;
+use crate::runtime_config::{MatchingRuntimeConfig, RuntimeShardId, RuntimeTopologyConfig};
+use crate::runtime_topology::{RuntimeTopology, RuntimeTopologyError};
 use crate::shard_execution_core::{
     ShardExecutionCore, ShardExecutionCoreError, ShardExecutionCoreRetryAwareStepReport,
     SymbolRuntimeStatus,
@@ -14,18 +15,20 @@ use crate::snapshot_store::{SnapshotRecord, SnapshotStore, SnapshotStoreError};
 use crate::types::{Checksum, JournalSeq, Symbol};
 use std::collections::HashMap;
 
-pub struct RuntimeLoop {
-    manager: ShardExecutionCore,
+pub struct ShardRuntime {
+    shard_id: RuntimeShardId,
+    symbols: Vec<Symbol>,
+    execution_core: ShardExecutionCore,
     handoffs: HashMap<Symbol, BoundedHandoff>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuntimeLoopRunOnceLimits {
+pub struct ShardRuntimeRunOnceLimits {
     pub max_input_entries_per_symbol: usize,
     pub max_output_requests_per_symbol: usize,
 }
 
-impl RuntimeLoopRunOnceLimits {
+impl ShardRuntimeRunOnceLimits {
     pub fn from_config(config: &MatchingRuntimeConfig) -> Self {
         Self {
             max_input_entries_per_symbol: config.symbol_runtime.max_input_entries_per_step,
@@ -35,7 +38,7 @@ impl RuntimeLoopRunOnceLimits {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RuntimeLoopError {
+pub enum ShardRuntimeError {
     MissingHandoff(Symbol),
     UnregisteredHandoff(Symbol),
     InputHandoffFull(Symbol),
@@ -43,42 +46,42 @@ pub enum RuntimeLoopError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeLoopRunOnceReport {
-    pub symbol_reports: Vec<RuntimeLoopSymbolRunOnceReport>,
+pub struct ShardRuntimeRunOnceReport {
+    pub symbol_reports: Vec<ShardRuntimeSymbolRunOnceReport>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuntimeLoopRunLimit {
+pub struct ShardRuntimeRunLimit {
     pub max_cycles: usize,
 }
 
-impl RuntimeLoopRunLimit {
+impl ShardRuntimeRunLimit {
     pub fn from_config(config: &MatchingRuntimeConfig) -> Self {
         Self {
-            max_cycles: config.host.max_run_cycles_per_call,
+            max_cycles: config.execution.max_run_cycles_per_call,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeLoopRunStopReason {
+pub enum ShardRuntimeRunStopReason {
     Idle,
     Blocked,
     RunLimitReached,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeLoopRunReport {
-    pub cycle_reports: Vec<RuntimeLoopRunOnceReport>,
-    pub stop_reason: RuntimeLoopRunStopReason,
+pub struct ShardRuntimeRunReport {
+    pub cycle_reports: Vec<ShardRuntimeRunOnceReport>,
+    pub stop_reason: ShardRuntimeRunStopReason,
     pub made_progress: bool,
     pub has_work_remaining: bool,
     pub has_blocked_symbols: bool,
-    pub work_status_after_run: Vec<RuntimeLoopSymbolWorkStatus>,
+    pub work_status_after_run: Vec<ShardRuntimeSymbolWorkStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeLoopSymbolWorkStatus {
+pub struct ShardRuntimeSymbolWorkStatus {
     pub symbol: Symbol,
     pub pending_input_len: usize,
     pub pending_input_capacity: usize,
@@ -90,19 +93,19 @@ pub struct RuntimeLoopSymbolWorkStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct RuntimeLoopWorkState {
-    symbol_statuses: Vec<RuntimeLoopSymbolWorkStatus>,
+struct ShardRuntimeWorkState {
+    symbol_statuses: Vec<ShardRuntimeSymbolWorkStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuntimeLoopInputStatus {
+pub struct ShardRuntimeInputStatus {
     pub len: usize,
     pub capacity: usize,
     pub full: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeLoopSymbolRunOnceReport {
+pub struct ShardRuntimeSymbolRunOnceReport {
     pub symbol: Symbol,
     pub input_processed_count: usize,
     pub safe_point_advanced_count: usize,
@@ -117,9 +120,20 @@ pub struct RuntimeLoopSymbolRunOnceReport {
     pub pending_input_full: bool,
 }
 
-impl RuntimeLoop {
-    pub fn new(manager: ShardExecutionCore, handoffs: HashMap<Symbol, BoundedHandoff>) -> Self {
-        Self { manager, handoffs }
+impl ShardRuntime {
+    pub fn new(
+        execution_core: ShardExecutionCore,
+        handoffs: HashMap<Symbol, BoundedHandoff>,
+    ) -> Self {
+        let mut symbols = execution_core.symbols();
+        symbols.sort_by(|left, right| left.0.cmp(&right.0));
+
+        Self {
+            shard_id: RuntimeShardId(0),
+            symbols,
+            execution_core,
+            handoffs,
+        }
     }
 
     pub fn new_for_symbols(
@@ -127,31 +141,82 @@ impl RuntimeLoop {
         pending_input_capacity: usize,
         pending_output_capacity: usize,
     ) -> Self {
-        let mut manager =
+        Self::new_for_shard_symbols(
+            RuntimeShardId(0),
+            symbols,
+            pending_input_capacity,
+            pending_output_capacity,
+        )
+    }
+
+    fn new_for_shard_symbols(
+        shard_id: RuntimeShardId,
+        symbols: Vec<Symbol>,
+        pending_input_capacity: usize,
+        pending_output_capacity: usize,
+    ) -> Self {
+        let mut execution_core =
             ShardExecutionCore::new_with_pending_output_capacity(pending_output_capacity);
         let mut handoffs = HashMap::new();
 
-        for symbol in symbols {
-            manager.add_symbol(symbol.clone());
-            handoffs.insert(symbol, BoundedHandoff::new(pending_input_capacity));
+        for symbol in &symbols {
+            execution_core.add_symbol(symbol.clone());
+            handoffs.insert(symbol.clone(), BoundedHandoff::new(pending_input_capacity));
         }
 
-        Self { manager, handoffs }
+        Self {
+            shard_id,
+            symbols,
+            execution_core,
+            handoffs,
+        }
     }
 
     pub fn new_for_symbols_with_config(
         symbols: Vec<Symbol>,
         config: MatchingRuntimeConfig,
     ) -> Self {
-        let mut manager = ShardExecutionCore::new_with_config(config.clone());
+        Self::new_for_shard_symbols_with_config(RuntimeShardId(0), symbols, config)
+    }
+
+    fn new_for_shard_symbols_with_config(
+        shard_id: RuntimeShardId,
+        symbols: Vec<Symbol>,
+        config: MatchingRuntimeConfig,
+    ) -> Self {
+        let mut execution_core = ShardExecutionCore::new_with_config(config.clone());
         let mut handoffs = HashMap::new();
 
-        for symbol in symbols {
-            manager.add_symbol(symbol.clone());
-            handoffs.insert(symbol, BoundedHandoff::new(config.handoff.capacity));
+        for symbol in &symbols {
+            execution_core.add_symbol(symbol.clone());
+            handoffs.insert(symbol.clone(), BoundedHandoff::new(config.handoff.capacity));
         }
 
-        Self { manager, handoffs }
+        Self {
+            shard_id,
+            symbols,
+            execution_core,
+            handoffs,
+        }
+    }
+
+    pub fn from_symbols_with_config(
+        symbols: Vec<Symbol>,
+        config: MatchingRuntimeConfig,
+    ) -> Result<Vec<Self>, RuntimeTopologyError> {
+        let topology = RuntimeTopology::resolve(&symbols, &config.topology)?;
+
+        Ok(topology
+            .shards()
+            .iter()
+            .map(|shard| {
+                let symbols = shard.symbols.clone();
+                let mut shard_config = config.clone();
+                shard_config.topology = RuntimeTopologyConfig::default();
+
+                Self::new_for_shard_symbols_with_config(shard.id, symbols, shard_config)
+            })
+            .collect())
     }
 
     pub fn new_from_symbol_snapshots(
@@ -159,46 +224,68 @@ impl RuntimeLoop {
         pending_input_capacity: usize,
         pending_output_capacity: usize,
     ) -> Self {
-        let mut manager =
+        let mut execution_core =
             ShardExecutionCore::new_with_pending_output_capacity(pending_output_capacity);
         let mut handoffs = HashMap::new();
+        let mut symbols = Vec::new();
 
         for snapshot in snapshots {
             let symbol = snapshot.order_book_snapshot.symbol.clone();
 
-            manager.restore_symbol_from_snapshot(snapshot);
-            handoffs.insert(symbol, BoundedHandoff::new(pending_input_capacity));
+            execution_core.restore_symbol_from_snapshot(snapshot);
+            handoffs.insert(symbol.clone(), BoundedHandoff::new(pending_input_capacity));
+            symbols.push(symbol);
         }
 
-        Self { manager, handoffs }
+        Self {
+            shard_id: RuntimeShardId(0),
+            symbols,
+            execution_core,
+            handoffs,
+        }
     }
 
     pub fn new_from_symbol_snapshots_with_config(
         snapshots: Vec<SymbolRuntimeSnapshot>,
         config: MatchingRuntimeConfig,
     ) -> Self {
-        let mut manager = ShardExecutionCore::new_with_config(config.clone());
+        let mut execution_core = ShardExecutionCore::new_with_config(config.clone());
         let mut handoffs = HashMap::new();
+        let mut symbols = Vec::new();
 
         for snapshot in snapshots {
             let symbol = snapshot.order_book_snapshot.symbol.clone();
 
-            manager.restore_symbol_from_snapshot(snapshot);
-            handoffs.insert(symbol, BoundedHandoff::new(config.handoff.capacity));
+            execution_core.restore_symbol_from_snapshot(snapshot);
+            handoffs.insert(symbol.clone(), BoundedHandoff::new(config.handoff.capacity));
+            symbols.push(symbol);
         }
 
-        Self { manager, handoffs }
+        Self {
+            shard_id: RuntimeShardId(0),
+            symbols,
+            execution_core,
+            handoffs,
+        }
+    }
+
+    pub fn shard_id(&self) -> RuntimeShardId {
+        self.shard_id
+    }
+
+    pub fn symbols(&self) -> &[Symbol] {
+        &self.symbols
     }
 
     pub fn run_once(
         &mut self,
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
-        limits: RuntimeLoopRunOnceLimits,
-    ) -> Result<RuntimeLoopRunOnceReport, RuntimeLoopError> {
+        limits: ShardRuntimeRunOnceLimits,
+    ) -> Result<ShardRuntimeRunOnceReport, ShardRuntimeError> {
         self.validate_configuration()?;
 
-        let mut symbols = self.manager.symbols();
+        let mut symbols = self.execution_core.symbols();
         symbols.sort_by(|left, right| left.0.cmp(&right.0));
 
         let mut symbol_reports = Vec::new();
@@ -207,9 +294,9 @@ impl RuntimeLoop {
             let handoff = self
                 .handoffs
                 .get_mut(&symbol)
-                .ok_or_else(|| RuntimeLoopError::MissingHandoff(symbol.clone()))?;
+                .ok_or_else(|| ShardRuntimeError::MissingHandoff(symbol.clone()))?;
             let report = self
-                .manager
+                .execution_core
                 .run_symbol_retry_aware_step(
                     &symbol,
                     handoff,
@@ -218,18 +305,15 @@ impl RuntimeLoop {
                     limits.max_input_entries_per_symbol,
                     limits.max_output_requests_per_symbol,
                 )
-                .map_err(RuntimeLoopError::ShardExecutionCore)?;
+                .map_err(ShardRuntimeError::ShardExecutionCore)?;
             let pending_input_len_after_run = handoff.len();
             let pending_input_capacity = handoff.capacity();
             let pending_input_full = handoff.is_full();
-            let runtime_status_after_run =
-                self.manager
-                    .symbol_status(&symbol)
-                    .ok_or(RuntimeLoopError::ShardExecutionCore(
-                        ShardExecutionCoreError::UnknownSymbol,
-                    ))?;
+            let runtime_status_after_run = self.execution_core.symbol_status(&symbol).ok_or(
+                ShardRuntimeError::ShardExecutionCore(ShardExecutionCoreError::UnknownSymbol),
+            )?;
 
-            symbol_reports.push(RuntimeLoopSymbolRunOnceReport::from_retry_aware_report(
+            symbol_reports.push(ShardRuntimeSymbolRunOnceReport::from_retry_aware_report(
                 symbol,
                 report,
                 runtime_status_after_run,
@@ -239,22 +323,22 @@ impl RuntimeLoop {
             ));
         }
 
-        Ok(RuntimeLoopRunOnceReport { symbol_reports })
+        Ok(ShardRuntimeRunOnceReport { symbol_reports })
     }
 
     pub fn run_limited(
         &mut self,
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
-        limits: RuntimeLoopRunOnceLimits,
-        limit: RuntimeLoopRunLimit,
-    ) -> Result<RuntimeLoopRunReport, RuntimeLoopError> {
+        limits: ShardRuntimeRunOnceLimits,
+        limit: ShardRuntimeRunLimit,
+    ) -> Result<ShardRuntimeRunReport, ShardRuntimeError> {
         let initial_state = self.current_work_state()?;
 
         if !initial_state.has_work_remaining() && !initial_state.has_blocked_symbols() {
-            return Ok(RuntimeLoopRunReport {
+            return Ok(ShardRuntimeRunReport {
                 cycle_reports: Vec::new(),
-                stop_reason: RuntimeLoopRunStopReason::Idle,
+                stop_reason: ShardRuntimeRunStopReason::Idle,
                 made_progress: false,
                 has_work_remaining: false,
                 has_blocked_symbols: false,
@@ -263,9 +347,9 @@ impl RuntimeLoop {
         }
 
         if limit.max_cycles == 0 {
-            return Ok(RuntimeLoopRunReport {
+            return Ok(ShardRuntimeRunReport {
                 cycle_reports: Vec::new(),
-                stop_reason: RuntimeLoopRunStopReason::RunLimitReached,
+                stop_reason: ShardRuntimeRunStopReason::RunLimitReached,
                 made_progress: false,
                 has_work_remaining: initial_state.has_work_remaining(),
                 has_blocked_symbols: initial_state.has_blocked_symbols(),
@@ -285,9 +369,9 @@ impl RuntimeLoop {
             let has_blocked_symbols = run_once_report.has_blocked_symbols();
 
             let stop_reason = if !has_work_remaining && !has_blocked_symbols {
-                Some(RuntimeLoopRunStopReason::Idle)
+                Some(ShardRuntimeRunStopReason::Idle)
             } else if has_blocked_symbols && !cycle_made_progress {
-                Some(RuntimeLoopRunStopReason::Blocked)
+                Some(ShardRuntimeRunStopReason::Blocked)
             } else {
                 None
             };
@@ -297,7 +381,7 @@ impl RuntimeLoop {
             if let Some(stop_reason) = stop_reason {
                 let final_state = self.current_work_state()?;
 
-                return Ok(RuntimeLoopRunReport {
+                return Ok(ShardRuntimeRunReport {
                     cycle_reports,
                     stop_reason,
                     made_progress,
@@ -310,9 +394,9 @@ impl RuntimeLoop {
 
         let final_state = self.current_work_state()?;
 
-        Ok(RuntimeLoopRunReport {
+        Ok(ShardRuntimeRunReport {
             cycle_reports,
-            stop_reason: RuntimeLoopRunStopReason::RunLimitReached,
+            stop_reason: ShardRuntimeRunStopReason::RunLimitReached,
             made_progress,
             has_work_remaining: final_state.has_work_remaining(),
             has_blocked_symbols: final_state.has_blocked_symbols(),
@@ -321,11 +405,11 @@ impl RuntimeLoop {
     }
 
     pub fn last_input_seq(&self, symbol: &Symbol) -> Option<Option<JournalSeq>> {
-        self.manager.last_input_seq(symbol)
+        self.execution_core.last_input_seq(symbol)
     }
 
     pub fn checksum(&self, symbol: &Symbol) -> Option<Checksum> {
-        self.manager.checksum(symbol)
+        self.execution_core.checksum(symbol)
     }
 
     pub fn save_symbol_snapshot(
@@ -333,7 +417,7 @@ impl RuntimeLoop {
         symbol: &Symbol,
         snapshot_store: &mut dyn SnapshotStore,
     ) -> Result<Option<SnapshotRecord>, SnapshotStoreError> {
-        let Some(snapshot) = self.manager.symbol_snapshot(symbol).flatten() else {
+        let Some(snapshot) = self.execution_core.symbol_snapshot(symbol).flatten() else {
             return Ok(None);
         };
 
@@ -341,30 +425,30 @@ impl RuntimeLoop {
     }
 
     pub fn symbol_status(&self, symbol: &Symbol) -> Option<SymbolRuntimeStatus> {
-        self.manager.symbol_status(symbol)
+        self.execution_core.symbol_status(symbol)
     }
 
     pub fn pending_input_len(&self, symbol: &Symbol) -> Option<usize> {
         self.handoffs.get(symbol).map(BoundedHandoff::len)
     }
 
-    pub fn pending_input_status(&self, symbol: &Symbol) -> Option<RuntimeLoopInputStatus> {
+    pub fn pending_input_status(&self, symbol: &Symbol) -> Option<ShardRuntimeInputStatus> {
         self.handoffs
             .get(symbol)
-            .map(|handoff| RuntimeLoopInputStatus {
+            .map(|handoff| ShardRuntimeInputStatus {
                 len: handoff.len(),
                 capacity: handoff.capacity(),
                 full: handoff.is_full(),
             })
     }
 
-    pub fn validate_configuration(&self) -> Result<(), RuntimeLoopError> {
-        let mut symbols = self.manager.symbols();
+    pub fn validate_configuration(&self) -> Result<(), ShardRuntimeError> {
+        let mut symbols = self.execution_core.symbols();
         symbols.sort_by(|left, right| left.0.cmp(&right.0));
 
         for symbol in &symbols {
             if !self.handoffs.contains_key(symbol) {
-                return Err(RuntimeLoopError::MissingHandoff(symbol.clone()));
+                return Err(ShardRuntimeError::MissingHandoff(symbol.clone()));
             }
         }
 
@@ -373,33 +457,30 @@ impl RuntimeLoop {
 
         for symbol in handoff_symbols {
             if !symbols.contains(&symbol) {
-                return Err(RuntimeLoopError::UnregisteredHandoff(symbol));
+                return Err(ShardRuntimeError::UnregisteredHandoff(symbol));
             }
         }
 
         Ok(())
     }
 
-    fn current_work_state(&self) -> Result<RuntimeLoopWorkState, RuntimeLoopError> {
+    fn current_work_state(&self) -> Result<ShardRuntimeWorkState, ShardRuntimeError> {
         self.validate_configuration()?;
 
         let mut symbol_statuses = Vec::new();
-        let mut symbols = self.manager.symbols();
+        let mut symbols = self.execution_core.symbols();
         symbols.sort_by(|left, right| left.0.cmp(&right.0));
 
         for symbol in symbols {
             let handoff = self
                 .handoffs
                 .get(&symbol)
-                .ok_or_else(|| RuntimeLoopError::MissingHandoff(symbol.clone()))?;
-            let runtime_status =
-                self.manager
-                    .symbol_status(&symbol)
-                    .ok_or(RuntimeLoopError::ShardExecutionCore(
-                        ShardExecutionCoreError::UnknownSymbol,
-                    ))?;
+                .ok_or_else(|| ShardRuntimeError::MissingHandoff(symbol.clone()))?;
+            let runtime_status = self.execution_core.symbol_status(&symbol).ok_or(
+                ShardRuntimeError::ShardExecutionCore(ShardExecutionCoreError::UnknownSymbol),
+            )?;
 
-            symbol_statuses.push(RuntimeLoopSymbolWorkStatus {
+            symbol_statuses.push(ShardRuntimeSymbolWorkStatus {
                 symbol,
                 pending_input_len: handoff.len(),
                 pending_input_capacity: handoff.capacity(),
@@ -411,38 +492,38 @@ impl RuntimeLoop {
             });
         }
 
-        Ok(RuntimeLoopWorkState { symbol_statuses })
+        Ok(ShardRuntimeWorkState { symbol_statuses })
     }
 
-    pub fn enqueue_input(&mut self, entry: JournalInputEntry) -> Result<(), RuntimeLoopError> {
+    pub fn enqueue_input(&mut self, entry: JournalInputEntry) -> Result<(), ShardRuntimeError> {
         let symbol = entry.command.symbol().clone();
-        if self.manager.symbol_status(&symbol).is_none() {
-            return Err(RuntimeLoopError::UnregisteredHandoff(symbol));
+        if self.execution_core.symbol_status(&symbol).is_none() {
+            return Err(ShardRuntimeError::UnregisteredHandoff(symbol));
         }
 
         let handoff = self
             .handoffs
             .get_mut(&symbol)
-            .ok_or_else(|| RuntimeLoopError::MissingHandoff(symbol.clone()))?;
+            .ok_or_else(|| ShardRuntimeError::MissingHandoff(symbol.clone()))?;
 
         handoff
             .enqueue(entry)
-            .map_err(|_| RuntimeLoopError::InputHandoffFull(symbol))
+            .map_err(|_| ShardRuntimeError::InputHandoffFull(symbol))
     }
 
     pub fn enqueue_inputs(
         &mut self,
         entries: Vec<JournalInputEntry>,
-    ) -> Result<usize, RuntimeLoopError> {
+    ) -> Result<usize, ShardRuntimeError> {
         let mut requested_by_symbol: HashMap<Symbol, usize> = HashMap::new();
 
         for entry in &entries {
             let symbol = entry.command.symbol().clone();
-            if self.manager.symbol_status(&symbol).is_none() {
-                return Err(RuntimeLoopError::UnregisteredHandoff(symbol));
+            if self.execution_core.symbol_status(&symbol).is_none() {
+                return Err(ShardRuntimeError::UnregisteredHandoff(symbol));
             }
             if !self.handoffs.contains_key(&symbol) {
-                return Err(RuntimeLoopError::MissingHandoff(symbol));
+                return Err(ShardRuntimeError::MissingHandoff(symbol));
             }
 
             *requested_by_symbol.entry(symbol).or_insert(0) += 1;
@@ -458,9 +539,9 @@ impl RuntimeLoop {
             let handoff = self
                 .handoffs
                 .get(&symbol)
-                .ok_or_else(|| RuntimeLoopError::MissingHandoff(symbol.clone()))?;
+                .ok_or_else(|| ShardRuntimeError::MissingHandoff(symbol.clone()))?;
             if handoff.available_capacity() < *requested_count {
-                return Err(RuntimeLoopError::InputHandoffFull(symbol));
+                return Err(ShardRuntimeError::InputHandoffFull(symbol));
             }
         }
 
@@ -471,10 +552,10 @@ impl RuntimeLoop {
             let handoff = self
                 .handoffs
                 .get_mut(&symbol)
-                .ok_or_else(|| RuntimeLoopError::MissingHandoff(symbol.clone()))?;
+                .ok_or_else(|| ShardRuntimeError::MissingHandoff(symbol.clone()))?;
             handoff
                 .enqueue(entry)
-                .map_err(|_| RuntimeLoopError::InputHandoffFull(symbol))?;
+                .map_err(|_| ShardRuntimeError::InputHandoffFull(symbol))?;
         }
 
         Ok(enqueued_count)
@@ -484,7 +565,7 @@ impl RuntimeLoop {
         &mut self,
         symbol: &Symbol,
     ) -> Result<Option<OutputCommitBlockDecision>, ShardExecutionCoreError> {
-        self.manager
+        self.execution_core
             .quarantine_symbol_output_commit_escalation(symbol)
     }
 
@@ -492,12 +573,13 @@ impl RuntimeLoop {
         &mut self,
         symbol: &Symbol,
     ) -> Result<Option<OutputCommitBlockDecision>, ShardExecutionCoreError> {
-        self.manager.clear_symbol_output_commit_quarantine(symbol)
+        self.execution_core
+            .clear_symbol_output_commit_quarantine(symbol)
     }
 }
 
-impl RuntimeLoopRunOnceReport {
-    pub fn symbol_report(&self, symbol: &Symbol) -> Option<&RuntimeLoopSymbolRunOnceReport> {
+impl ShardRuntimeRunOnceReport {
+    pub fn symbol_report(&self, symbol: &Symbol) -> Option<&ShardRuntimeSymbolRunOnceReport> {
         self.symbol_reports
             .iter()
             .find(|report| report.symbol == *symbol)
@@ -535,17 +617,17 @@ impl RuntimeLoopRunOnceReport {
     }
 }
 
-impl RuntimeLoopRunReport {
+impl ShardRuntimeRunReport {
     pub fn cycle_count(&self) -> usize {
         self.cycle_reports.len()
     }
 
-    pub fn last_run_once_report(&self) -> Option<&RuntimeLoopRunOnceReport> {
+    pub fn last_run_once_report(&self) -> Option<&ShardRuntimeRunOnceReport> {
         self.cycle_reports.last()
     }
 
     pub fn is_idle(&self) -> bool {
-        self.stop_reason == RuntimeLoopRunStopReason::Idle
+        self.stop_reason == ShardRuntimeRunStopReason::Idle
             && !self.has_work_remaining
             && !self.has_blocked_symbols
     }
@@ -567,17 +649,17 @@ impl RuntimeLoopRunReport {
     }
 }
 
-impl RuntimeLoopSymbolWorkStatus {
+impl ShardRuntimeSymbolWorkStatus {
     pub fn has_work_remaining(&self) -> bool {
         self.pending_input_len > 0 || self.pending_output_len > 0 || self.output_commit_blocked
     }
 }
 
-impl RuntimeLoopWorkState {
+impl ShardRuntimeWorkState {
     fn has_work_remaining(&self) -> bool {
         self.symbol_statuses
             .iter()
-            .any(RuntimeLoopSymbolWorkStatus::has_work_remaining)
+            .any(ShardRuntimeSymbolWorkStatus::has_work_remaining)
     }
 
     fn has_blocked_symbols(&self) -> bool {
@@ -587,7 +669,7 @@ impl RuntimeLoopWorkState {
     }
 }
 
-impl RuntimeLoopSymbolRunOnceReport {
+impl ShardRuntimeSymbolRunOnceReport {
     fn from_retry_aware_report(
         symbol: Symbol,
         report: ShardExecutionCoreRetryAwareStepReport,

@@ -4,7 +4,7 @@
 
 NovaX Matching Core is the deterministic matching library behind the NovaX Matching Service.
 
-This repository is not the whole exchange and not yet the production service host. It is the part that must stay explainable under replay: confirmed input goes in, order books change in a deterministic way, matching output is committed durably, and safe points move only after that output is known to be durable.
+This repository is not the whole exchange and not yet the production service process. It is the part that must stay explainable under replay: confirmed input goes in, order books change in a deterministic way, matching output is committed durably, and safe points move only after that output is known to be durable.
 
 ## What This Repo Owns
 
@@ -94,8 +94,10 @@ flowchart TB
     end
 
     subgraph Execution["Execution"]
-        Manager["Runtime Manager"]
-        Loops["Symbol Runtimes\n(BTC-USDT, ETH-USDT, ...)"]
+        MatchingRuntime["Matching Runtime"]
+        ShardRuntime["Shard Runtime(s)\nshard 0, shard 1, ..."]
+        ExecutionCore["Shard Execution Core"]
+        SymbolRuntime["Symbol Runtime(s)\nBTC-USDT, ETH-USDT, ..."]
         Engine["Matching Engine"]
         Book["Order Book"]
     end
@@ -118,27 +120,32 @@ flowchart TB
     RuntimeShell -.->|"governed runtime context"| Governance
     RuntimeShell -.->|"trace / degradation context"| Evidence
     Interface --> Governance
-    Governance -.-> Manager
-    Manager -.->|"status view"| Interface
-    RuntimeShell -.->|"startup / drain / readiness"| Manager
-    Manager -.->|"lifecycle"| Loops
+    Governance -.-> MatchingRuntime
+    MatchingRuntime -.->|"status"| Interface
+    RuntimeShell -.->|"lifecycle"| MatchingRuntime
+    MatchingRuntime --> ShardRuntime
     Consumer --> Router
     Router --> Handoff
-    Handoff --> Loops
-    Governance -.-> Loops
-    Loops --> Engine
+    Handoff --> ShardRuntime
+    Governance -.-> ShardRuntime
+    ShardRuntime --> ExecutionCore
+    ExecutionCore --> SymbolRuntime
+    SymbolRuntime --> Engine
     Engine --> Book
-    Engine --> Loops
-    Loops --> Commit
+    Engine --> SymbolRuntime
+    SymbolRuntime --> ExecutionCore
+    ExecutionCore --> Commit
     Commit --> Messaging --> EventBus
     Commit --> JournalAdapter --> Journal
-    Commit -.->|"safe point"| Loops
+    Commit -.->|"safe point"| ExecutionCore
     Governance -.-> Evidence
-    Loops -.-> Evidence
+    MatchingRuntime -.-> Evidence
+    ShardRuntime -.-> Evidence
+    ExecutionCore -.-> Evidence
+    SymbolRuntime -.-> Evidence
     Commit -.-> Evidence
-    Manager -.-> Evidence
     RuntimeShell -.->|"scheduled snapshot verification task"| Snapshot
-    Loops --> Snapshot
+    SymbolRuntime --> Snapshot
     Snapshot --> SnapshotStore
     Snapshot -.->|"verification replay / comparison"| Replay
     Snapshot -.->|"signed verification evidence"| SnapshotStore
@@ -150,10 +157,10 @@ flowchart TB
     SnapshotStore --> Snapshot
     Interface -.-> Replay
     JournalAdapter -.-> Replay
-    Replay --> Loops
+    Replay --> SymbolRuntime
 ```
 
-`Symbol Runtimes` represents many runtime instances, usually one per symbol. Snapshot bytes and verified manifests are stored recovery artifacts, not live runtime components.
+`Matching Runtime` owns the in-process core runtime. `Shard Runtime` owns shard-level scheduling and pressure; `Shard Execution Core` owns the per-shard symbol set and safe-point discipline; `Symbol Runtime` owns one symbol's deterministic order book execution. Snapshot bytes and verified manifests are stored recovery artifacts, not live runtime components.
 
 ## Current State
 
@@ -161,7 +168,7 @@ The core crate already has working pieces for:
 
 - Domain types, command validation, limit orders, cancellation, acknowledgements, trades, and market events.
 - Deterministic bid / ask books with FIFO price levels, indexed cancellation, checksum, snapshot, and restore.
-- Multi-symbol runtime management, symbol routing, bounded handoff queues, configured manual runtime host runs, input-batch preflight, drain boundaries, pending output pressure, and runtime policy configuration.
+- Multi-symbol runtime management, symbol routing, bounded handoff queues, configured manual matching runtime runs, input-batch preflight, drain boundaries, pending output pressure, and runtime policy configuration.
 - Output batch identity, output commit retry / query handling, and safe-point advancement after durable output.
 - Replay, snapshot storage, verified manifests, and snapshot verification evidence.
 
@@ -185,7 +192,7 @@ cargo test
 Commit messages use concise Conventional Commit style:
 
 ```text
-feat(core): add limited runtime loop scheduling
+feat(core): add shard runtime scheduling
 ```
 
 ## Documentation

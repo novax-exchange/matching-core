@@ -3,17 +3,18 @@ use matching_core::journal_adapter::{
     JournalOutputEntry,
 };
 use matching_core::matching_engine::EngineEvent;
+use matching_core::matching_runtime::{
+    MatchingRuntime, MatchingRuntimeDrainStopReason, MatchingRuntimeError,
+    MatchingRuntimeInputState, MatchingRuntimeRunUntilIdleLimit,
+    MatchingRuntimeRunUntilIdleStopReason,
+};
 use matching_core::order::{Command, Order};
 use matching_core::runtime_config::{
-    MatchingRuntimeConfig, RuntimeHostConfig, RuntimeHostMode, RuntimeShardId,
+    MatchingRuntimeConfig, RuntimeExecutionConfig, RuntimeExecutionMode, RuntimeShardId,
     RuntimeTopologyConfig, SymbolAssignmentPolicy,
 };
-use matching_core::runtime_host::{
-    RuntimeHost, RuntimeHostDrainStopReason, RuntimeHostError, RuntimeHostInputState,
-    RuntimeHostRunUntilIdleLimit, RuntimeHostRunUntilIdleStopReason,
-};
-use matching_core::runtime_loop::{
-    RuntimeLoopError, RuntimeLoopRunLimit, RuntimeLoopRunOnceLimits, RuntimeLoopRunStopReason,
+use matching_core::shard_runtime::{
+    ShardRuntimeError, ShardRuntimeRunLimit, ShardRuntimeRunOnceLimits, ShardRuntimeRunStopReason,
 };
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
@@ -127,7 +128,7 @@ fn command_entry(seq: u64, symbol: Symbol) -> JournalInputEntry {
 }
 
 #[test]
-fn runtime_host_builds_manual_host_from_public_api() {
+fn matching_runtime_builds_manual_runtime_from_public_api() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -135,82 +136,74 @@ fn runtime_host_builds_manual_host_from_public_api() {
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
-    config.host = RuntimeHostConfig {
-        mode: RuntimeHostMode::Manual,
+    config.execution = RuntimeExecutionConfig {
+        mode: RuntimeExecutionMode::Manual,
         max_run_cycles_per_call: 1024,
         max_run_calls_per_until_idle: 1024,
     };
 
-    let host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-        .expect("manual runtime host should be supported");
+    let runtime =
+        MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
+            .expect("manual matching runtime should be supported");
 
-    assert_eq!(host.mode(), RuntimeHostMode::Manual);
-    assert_eq!(host.shard_count(), 2);
-    assert_eq!(host.shard_ids(), vec![RuntimeShardId(0), RuntimeShardId(1)]);
-    assert_eq!(host.symbols_for_shard(RuntimeShardId(0)), Some(&[btc][..]));
-    assert_eq!(host.symbols_for_shard(RuntimeShardId(1)), Some(&[eth][..]));
+    assert_eq!(runtime.mode(), RuntimeExecutionMode::Manual);
+    assert_eq!(runtime.shard_count(), 2);
+    assert_eq!(
+        runtime.shard_ids(),
+        vec![RuntimeShardId(0), RuntimeShardId(1)]
+    );
+    assert_eq!(
+        runtime.symbols_for_shard(RuntimeShardId(0)),
+        Some(&[btc][..])
+    );
+    assert_eq!(
+        runtime.symbols_for_shard(RuntimeShardId(1)),
+        Some(&[eth][..])
+    );
 }
 
 #[test]
-fn runtime_host_rejects_inline_until_inline_scheduling_exists_from_public_api() {
+fn matching_runtime_rejects_thread_mode_until_runtime_driver_exists_from_public_api() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.host = RuntimeHostConfig {
-        mode: RuntimeHostMode::Inline,
+    config.execution = RuntimeExecutionConfig {
+        mode: RuntimeExecutionMode::ThreadPerShard,
         max_run_cycles_per_call: 1024,
         max_run_calls_per_until_idle: 1024,
     };
 
-    let result = RuntimeHost::new_for_symbols_with_config(vec![btc], config);
+    let result = MatchingRuntime::new_for_symbols_with_config(vec![btc], config);
 
     assert!(matches!(
         result,
-        Err(RuntimeHostError::UnsupportedMode(RuntimeHostMode::Inline))
-    ));
-}
-
-#[test]
-fn runtime_host_rejects_unsupported_host_modes_from_public_api() {
-    let btc = symbol("BTC-USDT");
-    let mut config = MatchingRuntimeConfig::default();
-    config.host = RuntimeHostConfig {
-        mode: RuntimeHostMode::ThreadPerShard,
-        max_run_cycles_per_call: 1024,
-        max_run_calls_per_until_idle: 1024,
-    };
-
-    let result = RuntimeHost::new_for_symbols_with_config(vec![btc], config);
-
-    assert!(matches!(
-        result,
-        Err(RuntimeHostError::RuntimeDriverRequired(
-            RuntimeHostMode::ThreadPerShard
+        Err(MatchingRuntimeError::RuntimeDriverRequired(
+            RuntimeExecutionMode::ThreadPerShard
         ))
     ));
 }
 
 #[test]
-fn runtime_host_rejects_async_mode_until_runtime_driver_exists_from_public_api() {
+fn matching_runtime_rejects_async_mode_until_runtime_driver_exists_from_public_api() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.host = RuntimeHostConfig {
-        mode: RuntimeHostMode::AsyncTaskPerShard,
+    config.execution = RuntimeExecutionConfig {
+        mode: RuntimeExecutionMode::AsyncTaskPerShard,
         max_run_cycles_per_call: 1024,
         max_run_calls_per_until_idle: 1024,
     };
 
-    let result = RuntimeHost::new_for_symbols_with_config(vec![btc], config);
+    let result = MatchingRuntime::new_for_symbols_with_config(vec![btc], config);
 
     assert!(matches!(
         result,
-        Err(RuntimeHostError::RuntimeDriverRequired(
-            RuntimeHostMode::AsyncTaskPerShard
+        Err(MatchingRuntimeError::RuntimeDriverRequired(
+            RuntimeExecutionMode::AsyncTaskPerShard
         ))
     ));
 }
 
 #[test]
-fn runtime_host_routes_input_to_owning_shard_and_runs_once_all() {
+fn matching_runtime_routes_input_to_owning_shard_and_runs_once_all() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -218,23 +211,24 @@ fn runtime_host_routes_input_to_owning_shard_and_runs_once_all() {
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
-    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-        .expect("manual runtime host should be supported");
+    let mut runtime =
+        MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
+            .expect("manual matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
-    assert_eq!(host.enqueue_input(command_entry(1, eth.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(1, eth.clone())), Ok(()));
 
-    let report = host
+    let report = runtime
         .run_once_all(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 1,
             },
         )
-        .expect("manual runtime host should run all shard run_once cycles");
+        .expect("manual matching runtime should run all shard run_once cycles");
 
     assert_eq!(report.shard_reports.len(), 2);
     assert_eq!(
@@ -247,7 +241,7 @@ fn runtime_host_routes_input_to_owning_shard_and_runs_once_all() {
 }
 
 #[test]
-fn runtime_host_enqueue_inputs_routes_batch_across_shards() {
+fn matching_runtime_enqueue_inputs_routes_batch_across_shards() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -255,11 +249,12 @@ fn runtime_host_enqueue_inputs_routes_batch_across_shards() {
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
-    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-        .expect("manual runtime host should be supported");
+    let mut runtime =
+        MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
+            .expect("manual matching runtime should be supported");
 
     assert_eq!(
-        host.enqueue_inputs(vec![
+        runtime.enqueue_inputs(vec![
             command_entry(1, btc.clone()),
             command_entry(2, eth.clone()),
             command_entry(3, btc.clone()),
@@ -267,9 +262,9 @@ fn runtime_host_enqueue_inputs_routes_batch_across_shards() {
         Ok(3)
     );
 
-    let status = host
+    let status = runtime
         .status()
-        .expect("manual runtime host should report status");
+        .expect("manual matching runtime should report status");
     assert_eq!(
         status
             .shard_status(RuntimeShardId(0))
@@ -287,7 +282,7 @@ fn runtime_host_enqueue_inputs_routes_batch_across_shards() {
 }
 
 #[test]
-fn runtime_host_can_enqueue_inputs_preflights_batch_without_mutating_state() {
+fn matching_runtime_can_enqueue_inputs_preflights_batch_without_mutating_state() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -295,11 +290,12 @@ fn runtime_host_can_enqueue_inputs_preflights_batch_without_mutating_state() {
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
-    let host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-        .expect("manual runtime host should be supported");
+    let runtime =
+        MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
+            .expect("manual matching runtime should be supported");
 
     assert_eq!(
-        host.can_enqueue_inputs(&[
+        runtime.can_enqueue_inputs(&[
             command_entry(1, btc.clone()),
             command_entry(2, eth.clone()),
             command_entry(3, btc.clone()),
@@ -307,14 +303,14 @@ fn runtime_host_can_enqueue_inputs_preflights_batch_without_mutating_state() {
         Ok(())
     );
 
-    let status = host
+    let status = runtime
         .status()
-        .expect("manual runtime host should report status");
+        .expect("manual matching runtime should report status");
     assert!(status.is_idle());
 }
 
 #[test]
-fn runtime_host_can_enqueue_inputs_reports_capacity_without_partial_enqueue() {
+fn matching_runtime_can_enqueue_inputs_reports_capacity_without_partial_enqueue() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -323,28 +319,29 @@ fn runtime_host_can_enqueue_inputs_reports_capacity_without_partial_enqueue() {
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
     config.handoff.capacity = 1;
-    let host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-        .expect("manual runtime host should be supported");
+    let runtime =
+        MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
+            .expect("manual matching runtime should be supported");
 
     assert_eq!(
-        host.can_enqueue_inputs(&[
+        runtime.can_enqueue_inputs(&[
             command_entry(1, btc.clone()),
             command_entry(2, eth.clone()),
             command_entry(3, eth.clone()),
         ]),
-        Err(RuntimeHostError::RuntimeLoop(
-            RuntimeLoopError::InputHandoffFull(eth.clone())
+        Err(MatchingRuntimeError::ShardRuntime(
+            ShardRuntimeError::InputHandoffFull(eth.clone())
         ))
     );
 
-    let status = host
+    let status = runtime
         .status()
-        .expect("manual runtime host should report status");
+        .expect("manual matching runtime should report status");
     assert!(status.is_idle());
 }
 
 #[test]
-fn runtime_host_enqueue_inputs_rejects_batch_without_partial_enqueue_when_handoff_would_fill() {
+fn matching_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue_when_handoff_would_fill() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -353,23 +350,24 @@ fn runtime_host_enqueue_inputs_rejects_batch_without_partial_enqueue_when_handof
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
     config.handoff.capacity = 1;
-    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-        .expect("manual runtime host should be supported");
+    let mut runtime =
+        MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
+            .expect("manual matching runtime should be supported");
 
     assert_eq!(
-        host.enqueue_inputs(vec![
+        runtime.enqueue_inputs(vec![
             command_entry(1, btc.clone()),
             command_entry(2, eth.clone()),
             command_entry(3, eth.clone()),
         ]),
-        Err(RuntimeHostError::RuntimeLoop(
-            RuntimeLoopError::InputHandoffFull(eth.clone())
+        Err(MatchingRuntimeError::ShardRuntime(
+            ShardRuntimeError::InputHandoffFull(eth.clone())
         ))
     );
 
-    let status = host
+    let status = runtime
         .status()
-        .expect("manual runtime host should report status");
+        .expect("manual matching runtime should report status");
     assert!(status.is_idle());
     assert_eq!(
         status.shards_with_remaining_work(),
@@ -378,88 +376,88 @@ fn runtime_host_enqueue_inputs_rejects_batch_without_partial_enqueue_when_handof
 }
 
 #[test]
-fn runtime_host_enqueue_inputs_rejects_batch_without_partial_enqueue_when_symbol_is_unknown() {
+fn matching_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue_when_symbol_is_unknown() {
     let btc = symbol("BTC-USDT");
     let sol = symbol("SOL-USDT");
-    let mut host = RuntimeHost::new_for_symbols_with_config(
+    let mut runtime = MatchingRuntime::new_for_symbols_with_config(
         vec![btc.clone()],
         MatchingRuntimeConfig::default(),
     )
-    .expect("manual runtime host should be supported");
+    .expect("manual matching runtime should be supported");
 
     assert_eq!(
-        host.enqueue_inputs(vec![
+        runtime.enqueue_inputs(vec![
             command_entry(1, btc.clone()),
             command_entry(2, sol.clone())
         ]),
-        Err(RuntimeHostError::RuntimeLoop(
-            RuntimeLoopError::UnregisteredHandoff(sol)
+        Err(MatchingRuntimeError::ShardRuntime(
+            ShardRuntimeError::UnregisteredHandoff(sol)
         ))
     );
 
-    let status = host
+    let status = runtime
         .status()
-        .expect("manual runtime host should report status");
+        .expect("manual matching runtime should report status");
     assert!(status.is_idle());
 }
 
 #[test]
-fn runtime_host_close_input_rejects_new_single_and_batch_inputs() {
+fn matching_runtime_close_input_rejects_new_single_and_batch_inputs() {
     let btc = symbol("BTC-USDT");
-    let mut host = RuntimeHost::new_for_symbols_with_config(
+    let mut runtime = MatchingRuntime::new_for_symbols_with_config(
         vec![btc.clone()],
         MatchingRuntimeConfig::default(),
     )
-    .expect("manual runtime host should be supported");
+    .expect("manual matching runtime should be supported");
 
-    assert_eq!(host.input_state(), RuntimeHostInputState::Open);
-    host.close_input();
-    assert_eq!(host.input_state(), RuntimeHostInputState::Closed);
+    assert_eq!(runtime.input_state(), MatchingRuntimeInputState::Open);
+    runtime.close_input();
+    assert_eq!(runtime.input_state(), MatchingRuntimeInputState::Closed);
 
     assert_eq!(
-        host.enqueue_input(command_entry(1, btc.clone())),
-        Err(RuntimeHostError::InputClosed)
+        runtime.enqueue_input(command_entry(1, btc.clone())),
+        Err(MatchingRuntimeError::InputClosed)
     );
     assert_eq!(
-        host.can_enqueue_inputs(&[command_entry(1, btc.clone())]),
-        Err(RuntimeHostError::InputClosed)
+        runtime.can_enqueue_inputs(&[command_entry(1, btc.clone())]),
+        Err(MatchingRuntimeError::InputClosed)
     );
     assert_eq!(
-        host.enqueue_inputs(vec![command_entry(1, btc.clone())]),
-        Err(RuntimeHostError::InputClosed)
+        runtime.enqueue_inputs(vec![command_entry(1, btc.clone())]),
+        Err(MatchingRuntimeError::InputClosed)
     );
-    assert!(host
+    assert!(runtime
         .status()
-        .expect("host status should be available")
+        .expect("runtime status should be available")
         .is_idle());
 }
 
 #[test]
-fn runtime_host_shutdown_closes_input_without_draining_pending_work() {
+fn matching_runtime_shutdown_closes_input_without_draining_pending_work() {
     let btc = symbol("BTC-USDT");
-    let mut host = RuntimeHost::new_for_symbols_with_config(
+    let mut runtime = MatchingRuntime::new_for_symbols_with_config(
         vec![btc.clone()],
         MatchingRuntimeConfig::default(),
     )
-    .expect("manual runtime host should be supported");
+    .expect("manual matching runtime should be supported");
 
-    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
 
-    let report = host
+    let report = runtime
         .shutdown()
-        .expect("manual runtime host should shut down");
+        .expect("manual matching runtime should shut down");
 
-    assert_eq!(report.input_state, RuntimeHostInputState::Closed);
+    assert_eq!(report.input_state, MatchingRuntimeInputState::Closed);
     assert_eq!(report.driver_report.shard_ids, vec![RuntimeShardId(0)]);
-    assert_eq!(host.input_state(), RuntimeHostInputState::Closed);
+    assert_eq!(runtime.input_state(), MatchingRuntimeInputState::Closed);
     assert_eq!(
-        host.enqueue_input(command_entry(2, btc.clone())),
-        Err(RuntimeHostError::InputClosed)
+        runtime.enqueue_input(command_entry(2, btc.clone())),
+        Err(MatchingRuntimeError::InputClosed)
     );
 
-    let status = host
+    let status = runtime
         .status()
-        .expect("manual runtime host status should remain available");
+        .expect("manual matching runtime status should remain available");
     let symbol_status = status
         .shard_status(RuntimeShardId(0))
         .and_then(|shard_status| shard_status.symbol_status(&btc))
@@ -468,61 +466,61 @@ fn runtime_host_shutdown_closes_input_without_draining_pending_work() {
 }
 
 #[test]
-fn runtime_host_drain_configured_closes_input_and_drains_existing_work() {
+fn matching_runtime_drain_configured_closes_input_and_drains_existing_work() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.host.max_run_cycles_per_call = 1;
-    config.host.max_run_calls_per_until_idle = 4;
+    config.execution.max_run_cycles_per_call = 1;
+    config.execution.max_run_calls_per_until_idle = 4;
     config.symbol_runtime.max_input_entries_per_step = 1;
     config.output_commit.max_output_requests_per_step = 1;
-    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("manual runtime host should be supported");
+    let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
+        .expect("manual matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
-    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
-    assert_eq!(host.enqueue_input(command_entry(2, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(2, btc.clone())), Ok(()));
 
-    let report = host
+    let report = runtime
         .drain_configured(&mut journal_client, &mut output)
-        .expect("manual runtime host should drain with configured limits");
+        .expect("manual matching runtime should drain with configured limits");
 
-    assert_eq!(host.input_state(), RuntimeHostInputState::Closed);
-    assert_eq!(report.stop_reason, RuntimeHostDrainStopReason::Drained);
+    assert_eq!(runtime.input_state(), MatchingRuntimeInputState::Closed);
+    assert_eq!(report.stop_reason, MatchingRuntimeDrainStopReason::Drained);
     assert!(report.is_drained());
     assert_eq!(report.configured_run_count(), 2);
     assert_eq!(output.read_all().len(), 2);
     assert_eq!(
-        host.enqueue_input(command_entry(3, btc.clone())),
-        Err(RuntimeHostError::InputClosed)
+        runtime.enqueue_input(command_entry(3, btc.clone())),
+        Err(MatchingRuntimeError::InputClosed)
     );
 }
 
 #[test]
-fn runtime_host_drain_configured_reports_blocked_output() {
+fn matching_runtime_drain_configured_reports_blocked_output() {
     let btc = symbol("BTC-USDT");
-    let mut host = RuntimeHost::new_for_symbols_with_config(
+    let mut runtime = MatchingRuntime::new_for_symbols_with_config(
         vec![btc.clone()],
         MatchingRuntimeConfig::default(),
     )
-    .expect("manual runtime host should be supported");
+    .expect("manual matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
 
-    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
 
-    let report = host
+    let report = runtime
         .drain_configured(&mut journal_client, &mut output)
-        .expect("manual runtime host should report blocked drain");
+        .expect("manual matching runtime should report blocked drain");
 
-    assert_eq!(host.input_state(), RuntimeHostInputState::Closed);
-    assert_eq!(report.stop_reason, RuntimeHostDrainStopReason::Blocked);
+    assert_eq!(runtime.input_state(), MatchingRuntimeInputState::Closed);
+    assert_eq!(report.stop_reason, MatchingRuntimeDrainStopReason::Blocked);
     assert!(report.has_blocked_symbols());
     assert_eq!(report.blocked_shards(), vec![RuntimeShardId(0)]);
 }
 
 #[test]
-fn runtime_host_run_limited_all_drives_all_shards_until_idle() {
+fn matching_runtime_run_limited_all_drives_all_shards_until_idle() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -530,25 +528,26 @@ fn runtime_host_run_limited_all_drives_all_shards_until_idle() {
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
-    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-        .expect("manual runtime host should be supported");
+    let mut runtime =
+        MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
+            .expect("manual matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
-    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
-    assert_eq!(host.enqueue_input(command_entry(2, eth.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(2, eth.clone())), Ok(()));
 
-    let report = host
+    let report = runtime
         .run_limited_all(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 1,
             },
-            RuntimeLoopRunLimit { max_cycles: 2 },
+            ShardRuntimeRunLimit { max_cycles: 2 },
         )
-        .expect("manual runtime host should run all shard run limits");
+        .expect("manual matching runtime should run all shard run limits");
 
     assert_eq!(report.shard_reports.len(), 2);
     assert!(report.is_idle());
@@ -570,18 +569,18 @@ fn runtime_host_run_limited_all_drives_all_shards_until_idle() {
         report
             .shard_report(RuntimeShardId(0))
             .map(|item| item.run_report.stop_reason),
-        Some(RuntimeLoopRunStopReason::Idle)
+        Some(ShardRuntimeRunStopReason::Idle)
     );
     assert_eq!(
         report
             .shard_report(RuntimeShardId(1))
             .map(|item| item.run_report.stop_reason),
-        Some(RuntimeLoopRunStopReason::Idle)
+        Some(ShardRuntimeRunStopReason::Idle)
     );
 }
 
 #[test]
-fn runtime_host_run_report_summarizes_mixed_shard_states() {
+fn matching_runtime_run_report_summarizes_mixed_shard_states() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -589,27 +588,28 @@ fn runtime_host_run_report_summarizes_mixed_shard_states() {
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
-    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-        .expect("manual runtime host should be supported");
+    let mut runtime =
+        MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
+            .expect("manual matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
 
-    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
-    assert_eq!(host.enqueue_input(command_entry(1, eth.clone())), Ok(()));
-    assert_eq!(host.enqueue_input(command_entry(2, eth.clone())), Ok(()));
-    assert_eq!(host.enqueue_input(command_entry(3, eth.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(1, eth.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(2, eth.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(3, eth.clone())), Ok(()));
 
-    let report = host
+    let report = runtime
         .run_limited_all(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 1,
             },
-            RuntimeLoopRunLimit { max_cycles: 2 },
+            ShardRuntimeRunLimit { max_cycles: 2 },
         )
-        .expect("manual runtime host should summarize shard run states");
+        .expect("manual matching runtime should summarize shard run states");
 
     assert!(!report.is_idle());
     assert!(report.has_work_remaining());
@@ -625,23 +625,23 @@ fn runtime_host_run_report_summarizes_mixed_shard_states() {
 }
 
 #[test]
-fn runtime_host_run_configured_all_uses_runtime_config_limits() {
+fn matching_runtime_run_configured_all_uses_runtime_config_limits() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.host.max_run_cycles_per_call = 1;
+    config.execution.max_run_cycles_per_call = 1;
     config.symbol_runtime.max_input_entries_per_step = 1;
     config.output_commit.max_output_requests_per_step = 1;
-    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("manual runtime host should be supported");
+    let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
+        .expect("manual matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
-    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
-    assert_eq!(host.enqueue_input(command_entry(2, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(2, btc.clone())), Ok(()));
 
-    let report = host
+    let report = runtime
         .run_configured_all(&mut journal_client, &mut output)
-        .expect("manual runtime host should run with configured limits");
+        .expect("manual matching runtime should run with configured limits");
 
     assert!(report.needs_another_run());
     assert_eq!(report.shards_reaching_run_limit(), vec![RuntimeShardId(0)]);
@@ -649,62 +649,65 @@ fn runtime_host_run_configured_all_uses_runtime_config_limits() {
 }
 
 #[test]
-fn runtime_host_run_until_idle_repeats_configured_runs_until_idle() {
+fn matching_runtime_run_until_idle_repeats_configured_runs_until_idle() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.host.max_run_cycles_per_call = 1;
+    config.execution.max_run_cycles_per_call = 1;
     config.symbol_runtime.max_input_entries_per_step = 1;
     config.output_commit.max_output_requests_per_step = 1;
-    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("manual runtime host should be supported");
+    let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
+        .expect("manual matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
-    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
-    assert_eq!(host.enqueue_input(command_entry(2, btc.clone())), Ok(()));
-    assert_eq!(host.enqueue_input(command_entry(3, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(2, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(3, btc.clone())), Ok(()));
 
-    let report = host
+    let report = runtime
         .run_until_idle(
             &mut journal_client,
             &mut output,
-            RuntimeHostRunUntilIdleLimit { max_run_calls: 4 },
+            MatchingRuntimeRunUntilIdleLimit { max_run_calls: 4 },
         )
-        .expect("manual runtime host should run configured calls until idle");
+        .expect("manual matching runtime should run configured calls until idle");
 
-    assert_eq!(report.stop_reason, RuntimeHostRunUntilIdleStopReason::Idle);
+    assert_eq!(
+        report.stop_reason,
+        MatchingRuntimeRunUntilIdleStopReason::Idle
+    );
     assert_eq!(report.configured_run_count(), 3);
     assert!(report.is_idle());
     assert_eq!(output.read_all().len(), 3);
 }
 
 #[test]
-fn runtime_host_run_until_idle_reports_call_limit_before_idle() {
+fn matching_runtime_run_until_idle_reports_call_limit_before_idle() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.host.max_run_cycles_per_call = 1;
+    config.execution.max_run_cycles_per_call = 1;
     config.symbol_runtime.max_input_entries_per_step = 1;
     config.output_commit.max_output_requests_per_step = 1;
-    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("manual runtime host should be supported");
+    let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
+        .expect("manual matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
-    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
-    assert_eq!(host.enqueue_input(command_entry(2, btc.clone())), Ok(()));
-    assert_eq!(host.enqueue_input(command_entry(3, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(2, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(3, btc.clone())), Ok(()));
 
-    let report = host
+    let report = runtime
         .run_until_idle(
             &mut journal_client,
             &mut output,
-            RuntimeHostRunUntilIdleLimit { max_run_calls: 2 },
+            MatchingRuntimeRunUntilIdleLimit { max_run_calls: 2 },
         )
-        .expect("manual runtime host should stop at outer call limit");
+        .expect("manual matching runtime should stop at outer call limit");
 
     assert_eq!(
         report.stop_reason,
-        RuntimeHostRunUntilIdleStopReason::CallLimitReached
+        MatchingRuntimeRunUntilIdleStopReason::CallLimitReached
     );
     assert_eq!(report.configured_run_count(), 2);
     assert!(report.has_work_remaining());
@@ -712,30 +715,30 @@ fn runtime_host_run_until_idle_reports_call_limit_before_idle() {
 }
 
 #[test]
-fn runtime_host_run_until_idle_stops_when_only_blocked_work_remains() {
+fn matching_runtime_run_until_idle_stops_when_only_blocked_work_remains() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.host.max_run_cycles_per_call = 2;
+    config.execution.max_run_cycles_per_call = 2;
     config.symbol_runtime.max_input_entries_per_step = 1;
     config.output_commit.max_output_requests_per_step = 1;
-    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("manual runtime host should be supported");
+    let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
+        .expect("manual matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
 
-    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
 
-    let report = host
+    let report = runtime
         .run_until_idle(
             &mut journal_client,
             &mut output,
-            RuntimeHostRunUntilIdleLimit { max_run_calls: 3 },
+            MatchingRuntimeRunUntilIdleLimit { max_run_calls: 3 },
         )
-        .expect("manual runtime host should stop when output remains blocked");
+        .expect("manual matching runtime should stop when output remains blocked");
 
     assert_eq!(
         report.stop_reason,
-        RuntimeHostRunUntilIdleStopReason::Blocked
+        MatchingRuntimeRunUntilIdleStopReason::Blocked
     );
     assert_eq!(report.configured_run_count(), 1);
     assert!(report.has_blocked_symbols());
@@ -743,36 +746,36 @@ fn runtime_host_run_until_idle_stops_when_only_blocked_work_remains() {
 }
 
 #[test]
-fn runtime_host_run_until_idle_configured_uses_runtime_config_limit() {
+fn matching_runtime_run_until_idle_configured_uses_runtime_config_limit() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.host.max_run_cycles_per_call = 1;
-    config.host.max_run_calls_per_until_idle = 2;
+    config.execution.max_run_cycles_per_call = 1;
+    config.execution.max_run_calls_per_until_idle = 2;
     config.symbol_runtime.max_input_entries_per_step = 1;
     config.output_commit.max_output_requests_per_step = 1;
-    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("manual runtime host should be supported");
+    let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
+        .expect("manual matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
-    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
-    assert_eq!(host.enqueue_input(command_entry(2, btc.clone())), Ok(()));
-    assert_eq!(host.enqueue_input(command_entry(3, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(2, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(3, btc.clone())), Ok(()));
 
-    let report = host
+    let report = runtime
         .run_until_idle_configured(&mut journal_client, &mut output)
-        .expect("manual runtime host should run until idle with configured limit");
+        .expect("manual matching runtime should run until idle with configured limit");
 
     assert_eq!(
         report.stop_reason,
-        RuntimeHostRunUntilIdleStopReason::CallLimitReached
+        MatchingRuntimeRunUntilIdleStopReason::CallLimitReached
     );
     assert_eq!(report.configured_run_count(), 2);
     assert_eq!(output.read_all().len(), 2);
 }
 
 #[test]
-fn runtime_host_status_reports_pending_input_without_running() {
+fn matching_runtime_status_reports_pending_input_without_running() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -780,16 +783,17 @@ fn runtime_host_status_reports_pending_input_without_running() {
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
-    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-        .expect("manual runtime host should be supported");
+    let mut runtime =
+        MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
+            .expect("manual matching runtime should be supported");
 
-    assert_eq!(host.enqueue_input(command_entry(1, eth.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(1, eth.clone())), Ok(()));
 
-    let status = host
+    let status = runtime
         .status()
-        .expect("manual runtime host should report status");
+        .expect("manual matching runtime should report status");
 
-    assert_eq!(status.input_state, RuntimeHostInputState::Open);
+    assert_eq!(status.input_state, MatchingRuntimeInputState::Open);
     assert!(!status.is_idle());
     assert_eq!(status.shards_with_remaining_work(), vec![RuntimeShardId(1)]);
     assert_eq!(status.blocked_shards(), Vec::<RuntimeShardId>::new());
@@ -804,43 +808,43 @@ fn runtime_host_status_reports_pending_input_without_running() {
 }
 
 #[test]
-fn runtime_host_status_reports_closed_input_state() {
+fn matching_runtime_status_reports_closed_input_state() {
     let btc = symbol("BTC-USDT");
-    let mut host =
-        RuntimeHost::new_for_symbols_with_config(vec![btc], MatchingRuntimeConfig::default())
-            .expect("manual runtime host should be supported");
+    let mut runtime =
+        MatchingRuntime::new_for_symbols_with_config(vec![btc], MatchingRuntimeConfig::default())
+            .expect("manual matching runtime should be supported");
 
-    host.close_input();
+    runtime.close_input();
 
-    let status = host
+    let status = runtime
         .status()
-        .expect("manual runtime host should report status");
+        .expect("manual matching runtime should report status");
 
-    assert_eq!(status.input_state, RuntimeHostInputState::Closed);
+    assert_eq!(status.input_state, MatchingRuntimeInputState::Closed);
     assert!(status.is_idle());
 }
 
 #[test]
-fn runtime_host_status_reports_blocked_output_pressure() {
+fn matching_runtime_status_reports_blocked_output_pressure() {
     let btc = symbol("BTC-USDT");
-    let mut host = RuntimeHost::new_for_symbols_with_config(
+    let mut runtime = MatchingRuntime::new_for_symbols_with_config(
         vec![btc.clone()],
         MatchingRuntimeConfig::default(),
     )
-    .expect("manual runtime host should be supported");
+    .expect("manual matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
 
-    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
 
-    let run_report = host
+    let run_report = runtime
         .run_configured_all(&mut journal_client, &mut output)
-        .expect("manual runtime host should run with configured limits");
+        .expect("manual matching runtime should run with configured limits");
     assert!(run_report.has_blocked_symbols());
 
-    let status = host
+    let status = runtime
         .status()
-        .expect("manual runtime host should report status");
+        .expect("manual matching runtime should report status");
 
     assert!(!status.is_idle());
     assert!(status.has_blocked_symbols());
@@ -856,7 +860,7 @@ fn runtime_host_status_reports_blocked_output_pressure() {
 }
 
 #[test]
-fn runtime_host_status_summarizes_full_input_and_output_pressure() {
+fn matching_runtime_status_summarizes_full_input_and_output_pressure() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -868,21 +872,22 @@ fn runtime_host_status_summarizes_full_input_and_output_pressure() {
     config.output_commit.pending_output_capacity = 1;
     config.symbol_runtime.max_input_entries_per_step = 1;
     config.output_commit.max_output_requests_per_step = 1;
-    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-        .expect("manual runtime host should be supported");
+    let mut runtime =
+        MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
+            .expect("manual matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
 
-    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
-    let run_report = host
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    let run_report = runtime
         .run_configured_all(&mut journal_client, &mut output)
-        .expect("manual runtime host should run with configured limits");
+        .expect("manual matching runtime should run with configured limits");
     assert!(run_report.has_blocked_symbols());
-    assert_eq!(host.enqueue_input(command_entry(1, eth.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(1, eth.clone())), Ok(()));
 
-    let status = host
+    let status = runtime
         .status()
-        .expect("manual runtime host should report status");
+        .expect("manual matching runtime should report status");
 
     assert_eq!(status.shards_with_full_input(), vec![RuntimeShardId(1)]);
     assert_eq!(status.shards_with_full_output(), vec![RuntimeShardId(0)]);
@@ -891,30 +896,30 @@ fn runtime_host_status_summarizes_full_input_and_output_pressure() {
 }
 
 #[test]
-fn runtime_host_run_limited_all_reports_remaining_work_when_limit_is_reached() {
+fn matching_runtime_run_limited_all_reports_remaining_work_when_limit_is_reached() {
     let btc = symbol("BTC-USDT");
-    let mut host = RuntimeHost::new_for_symbols_with_config(
+    let mut runtime = MatchingRuntime::new_for_symbols_with_config(
         vec![btc.clone()],
         MatchingRuntimeConfig::default(),
     )
-    .expect("manual runtime host should be supported");
+    .expect("manual matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
-    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
-    assert_eq!(host.enqueue_input(command_entry(2, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    assert_eq!(runtime.enqueue_input(command_entry(2, btc.clone())), Ok(()));
 
-    let report = host
+    let report = runtime
         .run_limited_all(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 1,
             },
-            RuntimeLoopRunLimit { max_cycles: 1 },
+            ShardRuntimeRunLimit { max_cycles: 1 },
         )
-        .expect("manual runtime host should run all shard run limits");
+        .expect("manual matching runtime should run all shard run limits");
 
     assert!(!report.is_idle());
     assert!(report.has_work_remaining());
@@ -922,6 +927,6 @@ fn runtime_host_run_limited_all_reports_remaining_work_when_limit_is_reached() {
         report
             .shard_report(RuntimeShardId(0))
             .map(|item| item.run_report.stop_reason),
-        Some(RuntimeLoopRunStopReason::RunLimitReached)
+        Some(ShardRuntimeRunStopReason::RunLimitReached)
     );
 }

@@ -1,10 +1,11 @@
+use matching_core::matching_runtime::MatchingRuntimeRunUntilIdleLimit;
 use matching_core::runtime_config::{
     HandoffConfig, InputConsumerConfig, MatchingRuntimeConfig, OutputCommitConfig,
-    RuntimeHostConfig, RuntimeHostMode, RuntimeShardId, RuntimeTopologyConfig, SnapshotConfig,
-    SnapshotVerificationConfig, SymbolAssignmentPolicy, SymbolRuntimeConfig, SymbolShardAssignment,
+    RuntimeExecutionConfig, RuntimeExecutionMode, RuntimeShardId, RuntimeTopologyConfig,
+    SnapshotConfig, SnapshotVerificationConfig, SymbolAssignmentPolicy, SymbolRuntimeConfig,
+    SymbolShardAssignment,
 };
-use matching_core::runtime_host::RuntimeHostRunUntilIdleLimit;
-use matching_core::runtime_loop::RuntimeLoopRunLimit;
+use matching_core::shard_runtime::ShardRuntimeRunLimit;
 use matching_core::types::Symbol;
 
 #[test]
@@ -18,8 +19,8 @@ fn matching_runtime_config_groups_runtime_policy_from_public_api() {
                 shard_id: RuntimeShardId(1),
             }]),
         },
-        host: RuntimeHostConfig {
-            mode: RuntimeHostMode::Manual,
+        execution: RuntimeExecutionConfig {
+            mode: RuntimeExecutionMode::Manual,
             max_run_cycles_per_call: 7,
             max_run_calls_per_until_idle: 9,
         },
@@ -49,9 +50,9 @@ fn matching_runtime_config_groups_runtime_policy_from_public_api() {
             shard_id: RuntimeShardId(1),
         }])
     );
-    assert_eq!(config.host.mode, RuntimeHostMode::Manual);
-    assert_eq!(config.host.max_run_cycles_per_call, 7);
-    assert_eq!(config.host.max_run_calls_per_until_idle, 9);
+    assert_eq!(config.execution.mode, RuntimeExecutionMode::Manual);
+    assert_eq!(config.execution.max_run_cycles_per_call, 7);
+    assert_eq!(config.execution.max_run_calls_per_until_idle, 9);
     assert_eq!(config.output_commit.pending_output_capacity, 512);
     assert_eq!(config.output_commit.max_unavailable_attempts, 2);
     assert_eq!(config.output_commit.max_output_requests_per_step, 64);
@@ -71,9 +72,9 @@ fn matching_runtime_config_defaults_are_available_from_public_api() {
         config.topology.assignment_policy,
         SymbolAssignmentPolicy::DeclarationOrder
     );
-    assert_eq!(config.host.mode, RuntimeHostMode::Manual);
-    assert_eq!(config.host.max_run_cycles_per_call, 1024);
-    assert_eq!(config.host.max_run_calls_per_until_idle, 1024);
+    assert_eq!(config.execution.mode, RuntimeExecutionMode::Manual);
+    assert_eq!(config.execution.max_run_cycles_per_call, 1024);
+    assert_eq!(config.execution.max_run_calls_per_until_idle, 1024);
     assert_eq!(config.output_commit.pending_output_capacity, 1024);
     assert_eq!(config.output_commit.max_unavailable_attempts, 3);
     assert_eq!(config.output_commit.max_output_requests_per_step, 1024);
@@ -85,21 +86,21 @@ fn matching_runtime_config_defaults_are_available_from_public_api() {
 }
 
 #[test]
-fn runtime_host_run_until_idle_limit_can_be_derived_from_runtime_config() {
+fn matching_runtime_run_until_idle_limit_can_be_derived_from_runtime_config() {
     let mut config = MatchingRuntimeConfig::default();
-    config.host.max_run_calls_per_until_idle = 17;
+    config.execution.max_run_calls_per_until_idle = 17;
 
-    let limit = RuntimeHostRunUntilIdleLimit::from_config(&config);
+    let limit = MatchingRuntimeRunUntilIdleLimit::from_config(&config);
 
     assert_eq!(limit.max_run_calls, 17);
 }
 
 #[test]
-fn runtime_loop_run_limit_can_be_derived_from_runtime_config() {
+fn shard_runtime_run_limit_can_be_derived_from_runtime_config() {
     let mut config = MatchingRuntimeConfig::default();
-    config.host.max_run_cycles_per_call = 13;
+    config.execution.max_run_cycles_per_call = 13;
 
-    let limit = RuntimeLoopRunLimit::from_config(&config);
+    let limit = ShardRuntimeRunLimit::from_config(&config);
 
     assert_eq!(limit.max_cycles, 13);
 }

@@ -3,7 +3,7 @@ use crate::types::Symbol;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchingRuntimeConfig {
     pub topology: RuntimeTopologyConfig,
-    pub host: RuntimeHostConfig,
+    pub execution: RuntimeExecutionConfig,
     pub output_commit: OutputCommitConfig,
     pub input_consumer: InputConsumerConfig,
     pub handoff: HandoffConfig,
@@ -16,7 +16,7 @@ impl Default for MatchingRuntimeConfig {
     fn default() -> Self {
         Self {
             topology: RuntimeTopologyConfig::default(),
-            host: RuntimeHostConfig::default(),
+            execution: RuntimeExecutionConfig::default(),
             output_commit: OutputCommitConfig::default(),
             input_consumer: InputConsumerConfig::default(),
             handoff: HandoffConfig::default(),
@@ -59,16 +59,16 @@ pub struct SymbolShardAssignment {
 pub struct RuntimeShardId(pub usize);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeHostConfig {
-    pub mode: RuntimeHostMode,
+pub struct RuntimeExecutionConfig {
+    pub mode: RuntimeExecutionMode,
     pub max_run_cycles_per_call: usize,
     pub max_run_calls_per_until_idle: usize,
 }
 
-impl Default for RuntimeHostConfig {
+impl Default for RuntimeExecutionConfig {
     fn default() -> Self {
         Self {
-            mode: RuntimeHostMode::Manual,
+            mode: RuntimeExecutionMode::Manual,
             max_run_cycles_per_call: 1024,
             max_run_calls_per_until_idle: 1024,
         }
@@ -76,9 +76,8 @@ impl Default for RuntimeHostConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeHostMode {
+pub enum RuntimeExecutionMode {
     Manual,
-    Inline,
     ThreadPerShard,
     AsyncTaskPerShard,
 }

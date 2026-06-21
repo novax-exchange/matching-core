@@ -594,21 +594,21 @@ mod tests {
     }
 
     #[test]
-    fn manager_can_register_multiple_symbol_runtimes() {
-        let mut manager = ShardExecutionCore::new();
+    fn shard_execution_core_can_register_multiple_symbol_runtimes() {
+        let mut execution_core = ShardExecutionCore::new();
 
-        manager.add_symbol(btc());
-        manager.add_symbol(eth());
+        execution_core.add_symbol(btc());
+        execution_core.add_symbol(eth());
 
-        assert_eq!(manager.last_input_seq(&btc()), Some(None));
-        assert_eq!(manager.last_input_seq(&eth()), Some(None));
+        assert_eq!(execution_core.last_input_seq(&btc()), Some(None));
+        assert_eq!(execution_core.last_input_seq(&eth()), Some(None));
     }
 
     #[test]
-    fn manager_returns_none_for_unknown_symbol() {
-        let manager = ShardExecutionCore::new();
+    fn shard_execution_core_returns_none_for_unknown_symbol() {
+        let execution_core = ShardExecutionCore::new();
 
-        assert_eq!(manager.last_input_seq(&btc()), None);
+        assert_eq!(execution_core.last_input_seq(&btc()), None);
     }
 
     struct InMemoryJournalOutputAppender {
@@ -660,20 +660,23 @@ mod tests {
     }
 
     #[test]
-    fn manager_routes_entry_to_matching_symbol_runtime() {
-        let mut manager = ShardExecutionCore::new();
-        manager.add_symbol(btc());
-        manager.add_symbol(eth());
+    fn shard_execution_core_routes_entry_to_matching_symbol_runtime() {
+        let mut execution_core = ShardExecutionCore::new();
+        execution_core.add_symbol(btc());
+        execution_core.add_symbol(eth());
 
         let mut output = InMemoryJournalOutputAppender::new();
 
         assert_eq!(
-            manager.process_entry(input_entry(1, 10, 100, btc()), &mut output),
+            execution_core.process_entry(input_entry(1, 10, 100, btc()), &mut output),
             Ok(())
         );
 
-        assert_eq!(manager.last_input_seq(&btc()), Some(Some(JournalSeq(1))));
-        assert_eq!(manager.last_input_seq(&eth()), Some(None));
+        assert_eq!(
+            execution_core.last_input_seq(&btc()),
+            Some(Some(JournalSeq(1)))
+        );
+        assert_eq!(execution_core.last_input_seq(&eth()), Some(None));
 
         let entries = output.read_all();
         assert_eq!(entries.len(), 1);
@@ -707,16 +710,16 @@ mod tests {
     }
 
     #[test]
-    fn manager_returns_error_for_unknown_symbol_entry() {
-        let mut manager = ShardExecutionCore::new();
-        manager.add_symbol(btc());
+    fn shard_execution_core_returns_error_for_unknown_symbol_entry() {
+        let mut execution_core = ShardExecutionCore::new();
+        execution_core.add_symbol(btc());
 
         let mut output = InMemoryJournalOutputAppender::new();
 
-        let result = manager.process_entry(input_entry(1, 10, 100, eth()), &mut output);
+        let result = execution_core.process_entry(input_entry(1, 10, 100, eth()), &mut output);
 
         assert_eq!(result, Err(ShardExecutionCoreError::UnknownSymbol));
-        assert_eq!(manager.last_input_seq(&btc()), Some(None));
+        assert_eq!(execution_core.last_input_seq(&btc()), Some(None));
         assert_eq!(output.read_all(), Vec::new());
     }
 
@@ -738,23 +741,23 @@ mod tests {
     }
 
     #[test]
-    fn manager_maps_output_append_failure_and_does_not_advance_runtime() {
-        let mut manager = ShardExecutionCore::new();
-        manager.add_symbol(btc());
+    fn shard_execution_core_maps_output_append_failure_and_does_not_advance_runtime() {
+        let mut execution_core = ShardExecutionCore::new();
+        execution_core.add_symbol(btc());
 
         let mut output = FailingJournalOutputAppender;
 
-        let result = manager.process_entry(input_entry(1, 10, 100, btc()), &mut output);
+        let result = execution_core.process_entry(input_entry(1, 10, 100, btc()), &mut output);
 
         assert_eq!(result, Err(ShardExecutionCoreError::OutputAppendFailed));
-        assert_eq!(manager.last_input_seq(&btc()), Some(None));
+        assert_eq!(execution_core.last_input_seq(&btc()), Some(None));
     }
 
     #[test]
-    fn manager_processes_batch_across_multiple_symbols() {
-        let mut manager = ShardExecutionCore::new();
-        manager.add_symbol(btc());
-        manager.add_symbol(eth());
+    fn shard_execution_core_processes_batch_across_multiple_symbols() {
+        let mut execution_core = ShardExecutionCore::new();
+        execution_core.add_symbol(btc());
+        execution_core.add_symbol(eth());
 
         let mut output = InMemoryJournalOutputAppender::new();
 
@@ -764,10 +767,16 @@ mod tests {
             input_entry(3, 12, 101, btc()),
         ];
 
-        assert_eq!(manager.process_batch(entries, &mut output), Ok(3));
+        assert_eq!(execution_core.process_batch(entries, &mut output), Ok(3));
 
-        assert_eq!(manager.last_input_seq(&btc()), Some(Some(JournalSeq(3))));
-        assert_eq!(manager.last_input_seq(&eth()), Some(Some(JournalSeq(2))));
+        assert_eq!(
+            execution_core.last_input_seq(&btc()),
+            Some(Some(JournalSeq(3)))
+        );
+        assert_eq!(
+            execution_core.last_input_seq(&eth()),
+            Some(Some(JournalSeq(2)))
+        );
 
         let output_entries = output.read_all();
         assert_eq!(output_entries.len(), 3);
@@ -777,9 +786,9 @@ mod tests {
     }
 
     #[test]
-    fn manager_batch_stops_at_unknown_symbol_and_does_not_process_later_entries() {
-        let mut manager = ShardExecutionCore::new();
-        manager.add_symbol(btc());
+    fn shard_execution_core_batch_stops_at_unknown_symbol_and_does_not_process_later_entries() {
+        let mut execution_core = ShardExecutionCore::new();
+        execution_core.add_symbol(btc());
 
         let mut output = InMemoryJournalOutputAppender::new();
 
@@ -790,11 +799,14 @@ mod tests {
         ];
 
         assert_eq!(
-            manager.process_batch(entries, &mut output),
+            execution_core.process_batch(entries, &mut output),
             Err(ShardExecutionCoreError::UnknownSymbol)
         );
 
-        assert_eq!(manager.last_input_seq(&btc()), Some(Some(JournalSeq(1))));
+        assert_eq!(
+            execution_core.last_input_seq(&btc()),
+            Some(Some(JournalSeq(1)))
+        );
 
         let output_entries = output.read_all();
         assert_eq!(output_entries.len(), 1);
@@ -844,10 +856,11 @@ mod tests {
     }
 
     #[test]
-    fn manager_batch_stops_at_output_append_failure_and_does_not_process_later_entries() {
-        let mut manager = ShardExecutionCore::new();
-        manager.add_symbol(btc());
-        manager.add_symbol(eth());
+    fn shard_execution_core_batch_stops_at_output_append_failure_and_does_not_process_later_entries(
+    ) {
+        let mut execution_core = ShardExecutionCore::new();
+        execution_core.add_symbol(btc());
+        execution_core.add_symbol(eth());
 
         let mut output = FailOnSecondAppendJournalOutputAppender::new();
 
@@ -858,12 +871,15 @@ mod tests {
         ];
 
         assert_eq!(
-            manager.process_batch(entries, &mut output),
+            execution_core.process_batch(entries, &mut output),
             Err(ShardExecutionCoreError::OutputAppendFailed)
         );
 
-        assert_eq!(manager.last_input_seq(&btc()), Some(Some(JournalSeq(1))));
-        assert_eq!(manager.last_input_seq(&eth()), Some(None));
+        assert_eq!(
+            execution_core.last_input_seq(&btc()),
+            Some(Some(JournalSeq(1)))
+        );
+        assert_eq!(execution_core.last_input_seq(&eth()), Some(None));
 
         let output_entries = output.read_all();
         assert_eq!(output_entries.len(), 1);
@@ -871,18 +887,19 @@ mod tests {
     }
 
     #[test]
-    fn manager_output_batch_commit_step_advances_confirmed_prefix_and_preserves_blocked_tail() {
-        let mut manager = ShardExecutionCore::new();
+    fn shard_execution_core_output_batch_commit_step_advances_confirmed_prefix_and_preserves_blocked_tail(
+    ) {
+        let mut execution_core = ShardExecutionCore::new();
         let mut handoff = BoundedHandoff::new(4);
         let mut journal_client = OutputJournalClient::new();
         let mut output = FailOnSecondAppendJournalOutputAppender::new();
 
-        manager.add_symbol(btc());
+        execution_core.add_symbol(btc());
         assert_eq!(handoff.enqueue(input_entry(1, 10, 100, btc())), Ok(()));
         assert_eq!(handoff.enqueue(input_entry(2, 11, 101, btc())), Ok(()));
         assert_eq!(handoff.enqueue(input_entry(3, 12, 102, btc())), Ok(()));
 
-        let report = manager
+        let report = execution_core
             .run_symbol_step_with_output_batch_commit(
                 &btc(),
                 &mut handoff,
@@ -903,8 +920,11 @@ mod tests {
             report.output_commit_report.blocking_outcome,
             Some(OutputCommitOutcome::Unavailable)
         );
-        assert_eq!(manager.last_input_seq(&btc()), Some(Some(JournalSeq(1))));
-        assert_eq!(manager.pending_output_len(&btc()), Some(2));
+        assert_eq!(
+            execution_core.last_input_seq(&btc()),
+            Some(Some(JournalSeq(1)))
+        );
+        assert_eq!(execution_core.pending_output_len(&btc()), Some(2));
 
         let output_entries = output.read_all();
         assert_eq!(output_entries.len(), 1);
@@ -912,18 +932,18 @@ mod tests {
     }
 
     #[test]
-    fn manager_output_batch_commit_step_retries_blocked_tail_on_next_iteration() {
-        let mut manager = ShardExecutionCore::new();
+    fn shard_execution_core_output_batch_commit_step_retries_blocked_tail_on_next_iteration() {
+        let mut execution_core = ShardExecutionCore::new();
         let mut handoff = BoundedHandoff::new(4);
         let mut journal_client = OutputJournalClient::new();
         let mut output = FailOnSecondAppendJournalOutputAppender::new();
 
-        manager.add_symbol(btc());
+        execution_core.add_symbol(btc());
         assert_eq!(handoff.enqueue(input_entry(1, 10, 100, btc())), Ok(()));
         assert_eq!(handoff.enqueue(input_entry(2, 11, 101, btc())), Ok(()));
         assert_eq!(handoff.enqueue(input_entry(3, 12, 102, btc())), Ok(()));
 
-        let first_report = manager
+        let first_report = execution_core
             .run_symbol_step_with_output_batch_commit(
                 &btc(),
                 &mut handoff,
@@ -939,10 +959,13 @@ mod tests {
             first_report.output_commit_report.blocking_seq,
             Some(JournalSeq(2))
         );
-        assert_eq!(manager.last_input_seq(&btc()), Some(Some(JournalSeq(1))));
-        assert_eq!(manager.pending_output_len(&btc()), Some(2));
+        assert_eq!(
+            execution_core.last_input_seq(&btc()),
+            Some(Some(JournalSeq(1)))
+        );
+        assert_eq!(execution_core.pending_output_len(&btc()), Some(2));
 
-        let second_report = manager
+        let second_report = execution_core
             .run_symbol_step_with_output_batch_commit(
                 &btc(),
                 &mut handoff,
@@ -956,8 +979,11 @@ mod tests {
         assert_eq!(second_report.input_processed_count, 0);
         assert_eq!(second_report.safe_point_advanced_count, 2);
         assert_eq!(second_report.output_commit_report.blocking_seq, None);
-        assert_eq!(manager.last_input_seq(&btc()), Some(Some(JournalSeq(3))));
-        assert_eq!(manager.pending_output_len(&btc()), Some(0));
+        assert_eq!(
+            execution_core.last_input_seq(&btc()),
+            Some(Some(JournalSeq(3)))
+        );
+        assert_eq!(execution_core.pending_output_len(&btc()), Some(0));
 
         let output_entries = output.read_all();
         assert_eq!(output_entries.len(), 3);
@@ -967,20 +993,20 @@ mod tests {
     }
 
     #[test]
-    fn manager_retry_aware_step_tracks_unavailable_attempts_per_symbol() {
-        let mut manager =
+    fn shard_execution_core_retry_aware_step_tracks_unavailable_attempts_per_symbol() {
+        let mut execution_core =
             ShardExecutionCore::new_with_pending_output_capacity_and_output_retry_limit(4, 2);
         let mut btc_handoff = BoundedHandoff::new(4);
         let mut eth_handoff = BoundedHandoff::new(4);
         let mut journal_client = OutputJournalClient::new();
         let mut output = FailingJournalOutputAppender;
 
-        manager.add_symbol(btc());
-        manager.add_symbol(eth());
+        execution_core.add_symbol(btc());
+        execution_core.add_symbol(eth());
         assert_eq!(btc_handoff.enqueue(input_entry(1, 10, 100, btc())), Ok(()));
         assert_eq!(eth_handoff.enqueue(input_entry(2, 20, 200, eth())), Ok(()));
 
-        let btc_report = manager
+        let btc_report = execution_core
             .run_symbol_retry_aware_step(
                 &btc(),
                 &mut btc_handoff,
@@ -998,7 +1024,7 @@ mod tests {
         assert_eq!(btc_decision.blocked_seq, JournalSeq(1));
         assert_eq!(btc_decision.attempt_count, 1);
 
-        let eth_report = manager
+        let eth_report = execution_core
             .run_symbol_retry_aware_step(
                 &eth(),
                 &mut eth_handoff,
@@ -1018,19 +1044,19 @@ mod tests {
     }
 
     #[test]
-    fn manager_output_escalation_pauses_only_the_escalated_symbol() {
-        let mut manager =
+    fn shard_execution_core_output_escalation_pauses_only_the_escalated_symbol() {
+        let mut execution_core =
             ShardExecutionCore::new_with_pending_output_capacity_and_output_retry_limit(4, 1);
         let mut btc_handoff = BoundedHandoff::new(4);
         let mut eth_handoff = BoundedHandoff::new(4);
         let mut journal_client = OutputJournalClient::new();
         let mut failing_output = FailingJournalOutputAppender;
 
-        manager.add_symbol(btc());
-        manager.add_symbol(eth());
+        execution_core.add_symbol(btc());
+        execution_core.add_symbol(eth());
         assert_eq!(btc_handoff.enqueue(input_entry(1, 10, 100, btc())), Ok(()));
 
-        let btc_report = manager
+        let btc_report = execution_core
             .run_symbol_retry_aware_step(
                 &btc(),
                 &mut btc_handoff,
@@ -1048,13 +1074,13 @@ mod tests {
             btc_decision.action,
             OutputCommitBlockAction::StopAndEscalate
         );
-        assert_eq!(manager.last_input_seq(&btc()), Some(None));
-        assert_eq!(manager.pending_output_len(&btc()), Some(1));
+        assert_eq!(execution_core.last_input_seq(&btc()), Some(None));
+        assert_eq!(execution_core.pending_output_len(&btc()), Some(1));
 
         let mut successful_output = InMemoryJournalOutputAppender::new();
         assert_eq!(eth_handoff.enqueue(input_entry(1, 20, 200, eth())), Ok(()));
 
-        let eth_report = manager
+        let eth_report = execution_core
             .run_symbol_retry_aware_step(
                 &eth(),
                 &mut eth_handoff,
@@ -1068,18 +1094,21 @@ mod tests {
         assert_eq!(eth_report.input_processed_count, 1);
         assert_eq!(eth_report.safe_point_advanced_count, 1);
         assert_eq!(eth_report.block_decision, None);
-        assert_eq!(manager.last_input_seq(&eth()), Some(Some(JournalSeq(1))));
-        assert_eq!(manager.pending_output_len(&eth()), Some(0));
+        assert_eq!(
+            execution_core.last_input_seq(&eth()),
+            Some(Some(JournalSeq(1)))
+        );
+        assert_eq!(execution_core.pending_output_len(&eth()), Some(0));
     }
 
     #[test]
-    fn manager_exposes_registered_symbols() {
-        let mut manager = ShardExecutionCore::new();
+    fn shard_execution_core_exposes_registered_symbols() {
+        let mut execution_core = ShardExecutionCore::new();
 
-        manager.add_symbol(btc());
-        manager.add_symbol(eth());
+        execution_core.add_symbol(btc());
+        execution_core.add_symbol(eth());
 
-        let symbols = manager.symbols();
+        let symbols = execution_core.symbols();
 
         assert_eq!(symbols.len(), 2);
         assert!(symbols.contains(&btc()));
@@ -1087,11 +1116,11 @@ mod tests {
     }
 
     #[test]
-    fn manager_exposes_symbol_status_for_registered_symbol() {
-        let mut manager = ShardExecutionCore::new();
-        manager.add_symbol(btc());
+    fn shard_execution_core_exposes_symbol_status_for_registered_symbol() {
+        let mut execution_core = ShardExecutionCore::new();
+        execution_core.add_symbol(btc());
 
-        let status = manager.symbol_status(&btc());
+        let status = execution_core.symbol_status(&btc());
 
         assert_eq!(
             status,
@@ -1109,18 +1138,18 @@ mod tests {
     }
 
     #[test]
-    fn manager_symbol_status_reflects_processed_input_sequence() {
-        let mut manager = ShardExecutionCore::new();
-        manager.add_symbol(btc());
+    fn shard_execution_core_symbol_status_reflects_processed_input_sequence() {
+        let mut execution_core = ShardExecutionCore::new();
+        execution_core.add_symbol(btc());
 
         let mut output = InMemoryJournalOutputAppender::new();
 
         assert_eq!(
-            manager.process_entry(input_entry(7, 10, 100, btc()), &mut output),
+            execution_core.process_entry(input_entry(7, 10, 100, btc()), &mut output),
             Ok(())
         );
 
-        let status = manager.symbol_status(&btc());
+        let status = execution_core.symbol_status(&btc());
 
         assert_eq!(
             status,

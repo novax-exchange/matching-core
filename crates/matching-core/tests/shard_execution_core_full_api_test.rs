@@ -14,8 +14,9 @@ use matching_core::output_commit_boundary::{
 };
 use matching_core::runtime_config::{
     HandoffConfig, InputConsumerConfig, MatchingRuntimeConfig, OutputCommitConfig,
-    RuntimeHostConfig, RuntimeHostMode, RuntimeShardId, RuntimeTopologyConfig, SnapshotConfig,
-    SnapshotVerificationConfig, SymbolAssignmentPolicy, SymbolRuntimeConfig, SymbolShardAssignment,
+    RuntimeExecutionConfig, RuntimeExecutionMode, RuntimeShardId, RuntimeTopologyConfig,
+    SnapshotConfig, SnapshotVerificationConfig, SymbolAssignmentPolicy, SymbolRuntimeConfig,
+    SymbolShardAssignment,
 };
 use matching_core::runtime_topology::RuntimeTopologyError;
 use matching_core::shard_execution_core::{
@@ -338,29 +339,32 @@ fn assert_conflicting_query_status(
 #[test]
 fn shard_execution_core_is_available_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut output = TestJournalOutputAppender::new();
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
 
     assert_eq!(
-        manager.process_entry(command_entry(1, btc.clone()), &mut output),
+        execution_core.process_entry(command_entry(1, btc.clone()), &mut output),
         Ok(())
     );
-    assert_eq!(manager.last_input_seq(&btc), Some(Some(JournalSeq(1))));
+    assert_eq!(
+        execution_core.last_input_seq(&btc),
+        Some(Some(JournalSeq(1)))
+    );
 }
 
 #[test]
 fn shard_execution_core_error_is_available_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut output = TestJournalOutputAppender::new();
 
-    manager.add_symbol(btc);
+    execution_core.add_symbol(btc);
 
     assert_eq!(
-        manager.process_entry(command_entry(1, eth), &mut output),
+        execution_core.process_entry(command_entry(1, eth), &mut output),
         Err(ShardExecutionCoreError::UnknownSymbol)
     );
 }
@@ -370,18 +374,18 @@ fn shard_execution_core_query_api_is_available_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
 
-    let mut manager = ShardExecutionCore::new();
-    manager.add_symbol(btc.clone());
-    manager.add_symbol(eth.clone());
+    let mut execution_core = ShardExecutionCore::new();
+    execution_core.add_symbol(btc.clone());
+    execution_core.add_symbol(eth.clone());
 
-    let symbols = manager.symbols();
+    let symbols = execution_core.symbols();
 
     assert_eq!(symbols.len(), 2);
     assert!(symbols.contains(&btc));
     assert!(symbols.contains(&eth));
 
     assert_eq!(
-        manager.symbol_status(&btc),
+        execution_core.symbol_status(&btc),
         Some(SymbolRuntimeStatus {
             symbol: btc.clone(),
             last_input_seq: None,
@@ -399,12 +403,12 @@ fn shard_execution_core_query_api_is_available_from_public_api() {
 fn shard_execution_core_resolves_default_runtime_topology_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
 
-    manager.add_symbol(btc.clone());
-    manager.add_symbol(eth.clone());
+    execution_core.add_symbol(btc.clone());
+    execution_core.add_symbol(eth.clone());
 
-    let topology = manager
+    let topology = execution_core
         .resolve_runtime_topology()
         .expect("default runtime topology should resolve");
 
@@ -425,13 +429,13 @@ fn shard_execution_core_resolves_configured_declaration_order_topology_from_publ
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
-    let mut manager = ShardExecutionCore::new_with_config(config);
+    let mut execution_core = ShardExecutionCore::new_with_config(config);
 
-    manager.add_symbol(btc.clone());
-    manager.add_symbol(eth.clone());
-    manager.add_symbol(sol.clone());
+    execution_core.add_symbol(btc.clone());
+    execution_core.add_symbol(eth.clone());
+    execution_core.add_symbol(sol.clone());
 
-    let topology = manager
+    let topology = execution_core
         .resolve_runtime_topology()
         .expect("configured runtime topology should resolve");
 
@@ -457,13 +461,13 @@ fn shard_execution_core_reports_invalid_explicit_topology_from_public_api() {
             shard_id: RuntimeShardId(0),
         }]),
     };
-    let mut manager = ShardExecutionCore::new_with_config(config);
+    let mut execution_core = ShardExecutionCore::new_with_config(config);
 
-    manager.add_symbol(btc);
-    manager.add_symbol(eth.clone());
+    execution_core.add_symbol(btc);
+    execution_core.add_symbol(eth.clone());
 
     assert_eq!(
-        manager.resolve_runtime_topology(),
+        execution_core.resolve_runtime_topology(),
         Err(RuntimeTopologyError::MissingSymbolAssignment(eth))
     );
 }
@@ -476,8 +480,8 @@ fn shard_execution_core_uses_runtime_config_for_output_policy_from_public_api() 
             shard_count: 1,
             assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
         },
-        host: RuntimeHostConfig {
-            mode: RuntimeHostMode::Manual,
+        execution: RuntimeExecutionConfig {
+            mode: RuntimeExecutionMode::Manual,
             max_run_cycles_per_call: 19,
             max_run_calls_per_until_idle: 23,
         },
@@ -498,11 +502,11 @@ fn shard_execution_core_uses_runtime_config_for_output_policy_from_public_api() 
             max_mismatch_attempts: 4,
         },
     };
-    let mut manager = ShardExecutionCore::new_with_config(config);
+    let mut execution_core = ShardExecutionCore::new_with_config(config);
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
 
-    let status = manager
+    let status = execution_core
         .symbol_status(&btc)
         .expect("configured symbol should have status");
     assert_eq!(status.pending_output_capacity, 7);
@@ -511,15 +515,15 @@ fn shard_execution_core_uses_runtime_config_for_output_policy_from_public_api() 
 #[test]
 fn shard_execution_core_status_reports_pending_output_pressure_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new_with_pending_output_capacity(1);
+    let mut execution_core = ShardExecutionCore::new_with_pending_output_capacity(1);
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     assert_eq!(handoff.enqueue(command_entry(1, btc.clone())), Ok(()));
 
-    let report = manager
+    let report = execution_core
         .run_symbol_step_with_output_batch_commit(
             &btc,
             &mut handoff,
@@ -533,7 +537,7 @@ fn shard_execution_core_status_reports_pending_output_pressure_from_public_api()
     assert_eq!(report.input_processed_count, 1);
     assert_eq!(report.safe_point_advanced_count, 0);
     assert_eq!(
-        manager.symbol_status(&btc),
+        execution_core.symbol_status(&btc),
         Some(SymbolRuntimeStatus {
             symbol: btc.clone(),
             last_input_seq: None,
@@ -550,15 +554,15 @@ fn shard_execution_core_status_reports_pending_output_pressure_from_public_api()
 #[test]
 fn shard_execution_core_can_commit_pending_output_without_draining_new_input_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new_with_pending_output_capacity(1);
+    let mut execution_core = ShardExecutionCore::new_with_pending_output_capacity(1);
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     assert_eq!(handoff.enqueue(command_entry(1, btc.clone())), Ok(()));
 
-    let first_report = manager
+    let first_report = execution_core
         .run_symbol_step_with_output_batch_commit(
             &btc,
             &mut handoff,
@@ -570,11 +574,11 @@ fn shard_execution_core_can_commit_pending_output_without_draining_new_input_fro
         .expect("first step should create one pending output request");
 
     assert_eq!(first_report.input_processed_count, 1);
-    assert_eq!(manager.pending_output_len(&btc), Some(1));
+    assert_eq!(execution_core.pending_output_len(&btc), Some(1));
 
     assert_eq!(handoff.enqueue(command_entry(2, btc.clone())), Ok(()));
     assert_eq!(
-        manager.run_symbol_step_with_output_batch_commit(
+        execution_core.run_symbol_step_with_output_batch_commit(
             &btc,
             &mut handoff,
             &mut journal_client,
@@ -589,10 +593,10 @@ fn shard_execution_core_can_commit_pending_output_without_draining_new_input_fro
         ))
     );
     assert_eq!(handoff.len(), 1);
-    assert_eq!(manager.last_input_seq(&btc), Some(None));
-    assert_eq!(manager.pending_output_len(&btc), Some(1));
+    assert_eq!(execution_core.last_input_seq(&btc), Some(None));
+    assert_eq!(execution_core.pending_output_len(&btc), Some(1));
 
-    let output_only_report = manager
+    let output_only_report = execution_core
         .run_symbol_output_batch_commit_step(&btc, &mut journal_client, &mut output, 10)
         .expect("output-only step should commit pending output");
 
@@ -609,8 +613,11 @@ fn shard_execution_core_can_commit_pending_output_without_draining_new_input_fro
         output_batch_identity.matching_version,
         MATCHING_OUTPUT_VERSION
     );
-    assert_eq!(manager.last_input_seq(&btc), Some(Some(JournalSeq(1))));
-    assert_eq!(manager.pending_output_len(&btc), Some(0));
+    assert_eq!(
+        execution_core.last_input_seq(&btc),
+        Some(Some(JournalSeq(1)))
+    );
+    assert_eq!(execution_core.pending_output_len(&btc), Some(0));
     assert_eq!(handoff.len(), 1);
 }
 
@@ -618,58 +625,64 @@ fn shard_execution_core_can_commit_pending_output_without_draining_new_input_fro
 fn shard_execution_core_pressure_aware_step_commits_full_pending_output_before_new_input_from_public_api(
 ) {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new_with_pending_output_capacity(1);
+    let mut execution_core = ShardExecutionCore::new_with_pending_output_capacity(1);
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     assert_eq!(handoff.enqueue(command_entry(1, btc.clone())), Ok(()));
 
-    let first_report = manager
+    let first_report = execution_core
         .run_symbol_pressure_aware_step(&btc, &mut handoff, &mut journal_client, &mut output, 1, 0)
         .expect("first step should fill pending output");
 
     assert_eq!(first_report.input_processed_count, 1);
     assert_eq!(first_report.safe_point_advanced_count, 0);
-    assert_eq!(manager.pending_output_len(&btc), Some(1));
+    assert_eq!(execution_core.pending_output_len(&btc), Some(1));
 
     assert_eq!(handoff.enqueue(command_entry(2, btc.clone())), Ok(()));
 
-    let second_report = manager
+    let second_report = execution_core
         .run_symbol_pressure_aware_step(&btc, &mut handoff, &mut journal_client, &mut output, 1, 10)
         .expect("second step should relieve pending output before draining input");
 
     assert_eq!(second_report.input_processed_count, 0);
     assert_eq!(second_report.safe_point_advanced_count, 1);
-    assert_eq!(manager.last_input_seq(&btc), Some(Some(JournalSeq(1))));
-    assert_eq!(manager.pending_output_len(&btc), Some(0));
+    assert_eq!(
+        execution_core.last_input_seq(&btc),
+        Some(Some(JournalSeq(1)))
+    );
+    assert_eq!(execution_core.pending_output_len(&btc), Some(0));
     assert_eq!(handoff.len(), 1);
 
-    let third_report = manager
+    let third_report = execution_core
         .run_symbol_pressure_aware_step(&btc, &mut handoff, &mut journal_client, &mut output, 1, 10)
         .expect("third step should process the waiting input after pressure is relieved");
 
     assert_eq!(third_report.input_processed_count, 1);
     assert_eq!(third_report.safe_point_advanced_count, 1);
-    assert_eq!(manager.last_input_seq(&btc), Some(Some(JournalSeq(2))));
-    assert_eq!(manager.pending_output_len(&btc), Some(0));
+    assert_eq!(
+        execution_core.last_input_seq(&btc),
+        Some(Some(JournalSeq(2)))
+    );
+    assert_eq!(execution_core.pending_output_len(&btc), Some(0));
     assert_eq!(handoff.len(), 0);
 }
 
 #[test]
 fn shard_execution_core_retry_aware_step_escalates_repeated_unavailable_output_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager =
+    let mut execution_core =
         ShardExecutionCore::new_with_pending_output_capacity_and_output_retry_limit(4, 2);
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = AlwaysFailingJournalOutputAppender;
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     assert_eq!(handoff.enqueue(command_entry(1, btc.clone())), Ok(()));
 
-    let first_report = manager
+    let first_report = execution_core
         .run_symbol_retry_aware_step(&btc, &mut handoff, &mut journal_client, &mut output, 1, 10)
         .expect("first unavailable output should be reported as retryable");
 
@@ -688,11 +701,11 @@ fn shard_execution_core_retry_aware_step_escalates_repeated_unavailable_output_f
     assert_eq!(first_decision.blocked_seq, JournalSeq(1));
     assert_eq!(first_decision.outcome, OutputCommitOutcome::Unavailable);
     assert_eq!(first_decision.attempt_count, 1);
-    assert_eq!(manager.last_input_seq(&btc), Some(None));
-    assert_eq!(manager.pending_output_len(&btc), Some(1));
+    assert_eq!(execution_core.last_input_seq(&btc), Some(None));
+    assert_eq!(execution_core.pending_output_len(&btc), Some(1));
     assert_eq!(handoff.len(), 0);
 
-    let second_report = manager
+    let second_report = execution_core
         .run_symbol_retry_aware_step(&btc, &mut handoff, &mut journal_client, &mut output, 1, 10)
         .expect("second unavailable output should be reported as escalated");
 
@@ -706,10 +719,10 @@ fn shard_execution_core_retry_aware_step_escalates_repeated_unavailable_output_f
     assert_eq!(second_decision.blocked_seq, JournalSeq(1));
     assert_eq!(second_decision.outcome, OutputCommitOutcome::Unavailable);
     assert_eq!(second_decision.attempt_count, 2);
-    assert_eq!(manager.last_input_seq(&btc), Some(None));
-    assert_eq!(manager.pending_output_len(&btc), Some(1));
+    assert_eq!(execution_core.last_input_seq(&btc), Some(None));
+    assert_eq!(execution_core.pending_output_len(&btc), Some(1));
     assert_eq!(
-        manager
+        execution_core
             .symbol_status(&btc)
             .expect("symbol status should exist")
             .output_commit_escalation,
@@ -721,15 +734,15 @@ fn shard_execution_core_retry_aware_step_escalates_repeated_unavailable_output_f
 fn shard_execution_core_retry_aware_step_reports_missing_output_batch_query_status_from_public_api()
 {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = UnknownJournalOutputAppender;
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     assert_eq!(handoff.enqueue(command_entry(1, btc.clone())), Ok(()));
 
-    let report = manager
+    let report = execution_core
         .run_symbol_retry_aware_step(&btc, &mut handoff, &mut journal_client, &mut output, 1, 10)
         .expect("unknown output commit should be reported without advancing the safe point");
 
@@ -766,23 +779,23 @@ fn shard_execution_core_retry_aware_step_reports_missing_output_batch_query_stat
     assert_eq!(decision.blocked_seq, JournalSeq(1));
     assert_eq!(decision.outcome, OutputCommitOutcome::Unknown);
     assert_eq!(decision.attempt_count, 1);
-    assert_eq!(manager.last_input_seq(&btc), Some(None));
-    assert_eq!(manager.pending_output_len(&btc), Some(1));
+    assert_eq!(execution_core.last_input_seq(&btc), Some(None));
+    assert_eq!(execution_core.pending_output_len(&btc), Some(1));
 }
 
 #[test]
 fn shard_execution_core_retry_aware_step_advances_safe_point_with_durable_output_batch_query_status_from_public_api(
 ) {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = DurableUnknownJournalOutputAppender::new();
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     assert_eq!(handoff.enqueue(command_entry(1, btc.clone())), Ok(()));
 
-    let report = manager
+    let report = execution_core
         .run_symbol_retry_aware_step(&btc, &mut handoff, &mut journal_client, &mut output, 1, 10)
         .expect("durable unknown output commit should advance the safe point");
 
@@ -796,8 +809,11 @@ fn shard_execution_core_retry_aware_step_advances_safe_point_with_durable_output
         report.output_batch_query_status,
         Some(OutputBatchQueryStatus::Durable)
     );
-    assert_eq!(manager.last_input_seq(&btc), Some(Some(JournalSeq(1))));
-    assert_eq!(manager.pending_output_len(&btc), Some(0));
+    assert_eq!(
+        execution_core.last_input_seq(&btc),
+        Some(Some(JournalSeq(1)))
+    );
+    assert_eq!(execution_core.pending_output_len(&btc), Some(0));
     assert_eq!(output.read_all().len(), 1);
 }
 
@@ -805,16 +821,16 @@ fn shard_execution_core_retry_aware_step_advances_safe_point_with_durable_output
 fn shard_execution_core_retry_aware_step_reports_incomplete_output_batch_query_status_from_public_api(
 ) {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = FirstDurableThenUnknownJournalOutputAppender::new();
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     assert_eq!(handoff.enqueue(command_entry(1, btc.clone())), Ok(()));
     assert_eq!(handoff.enqueue(command_entry(2, btc.clone())), Ok(()));
 
-    let report = manager
+    let report = execution_core
         .run_symbol_retry_aware_step(&btc, &mut handoff, &mut journal_client, &mut output, 2, 10)
         .expect("partially durable unknown output batch should report incomplete status");
 
@@ -854,8 +870,11 @@ fn shard_execution_core_retry_aware_step_reports_incomplete_output_batch_query_s
     assert_eq!(decision.action, OutputCommitBlockAction::ResolveUnknown);
     assert_eq!(decision.blocked_seq, JournalSeq(2));
     assert_eq!(decision.outcome, OutputCommitOutcome::Unknown);
-    assert_eq!(manager.last_input_seq(&btc), Some(Some(JournalSeq(1))));
-    assert_eq!(manager.pending_output_len(&btc), Some(1));
+    assert_eq!(
+        execution_core.last_input_seq(&btc),
+        Some(Some(JournalSeq(1)))
+    );
+    assert_eq!(execution_core.pending_output_len(&btc), Some(1));
     assert_eq!(output.read_all().len(), 1);
 }
 
@@ -875,7 +894,7 @@ fn shard_execution_core_retry_aware_step_reports_conflicting_output_batch_query_
         JournalOutputCommitMetadata::from_output_batch_identity(&drifted_identity);
     let durable_drifted_entry =
         durable_output_entry(drifted_requests[0].clone(), drifted_metadata.clone());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = ConflictingJournalOutputAppender::with_entries(vec![durable_drifted_entry]);
@@ -885,10 +904,10 @@ fn shard_execution_core_retry_aware_step_reports_conflicting_output_batch_query_
         current_identity.output_digest,
         drifted_identity.output_digest
     );
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     assert_eq!(handoff.enqueue(command_entry(1, btc.clone())), Ok(()));
 
-    let report = manager
+    let report = execution_core
         .run_symbol_retry_aware_step(&btc, &mut handoff, &mut journal_client, &mut output, 1, 10)
         .expect("conflicting output batch should be reported without advancing the safe point");
 
@@ -914,10 +933,10 @@ fn shard_execution_core_retry_aware_step_reports_conflicting_output_batch_query_
     assert_eq!(decision.action, OutputCommitBlockAction::StopAndEscalate);
     assert_eq!(decision.blocked_seq, JournalSeq(1));
     assert_eq!(decision.outcome, OutputCommitOutcome::Rejected);
-    assert_eq!(manager.last_input_seq(&btc), Some(None));
-    assert_eq!(manager.pending_output_len(&btc), Some(1));
+    assert_eq!(execution_core.last_input_seq(&btc), Some(None));
+    assert_eq!(execution_core.pending_output_len(&btc), Some(1));
     assert_eq!(handoff.enqueue(command_entry(2, btc.clone())), Ok(()));
-    let paused_report = manager
+    let paused_report = execution_core
         .run_symbol_retry_aware_step(&btc, &mut handoff, &mut journal_client, &mut output, 1, 10)
         .expect("conflicting symbol should remain paused");
     assert_eq!(paused_report.input_processed_count, 0);
@@ -928,7 +947,7 @@ fn shard_execution_core_retry_aware_step_reports_conflicting_output_batch_query_
         report.output_batch_query_status
     );
     assert_eq!(handoff.len(), 1);
-    let blockage_query_status = manager
+    let blockage_query_status = execution_core
         .symbol_status(&btc)
         .expect("symbol status should exist")
         .output_commit_blockage
@@ -953,15 +972,15 @@ fn shard_execution_core_quarantine_preserves_conflicting_output_batch_query_stat
     let drifted_metadata =
         JournalOutputCommitMetadata::from_output_batch_identity(&drifted_identity);
     let durable_drifted_entry = durable_output_entry(drifted_requests[0].clone(), drifted_metadata);
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = ConflictingJournalOutputAppender::with_entries(vec![durable_drifted_entry]);
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     assert_eq!(handoff.enqueue(command_entry(1, btc.clone())), Ok(()));
 
-    let report = manager
+    let report = execution_core
         .run_symbol_retry_aware_step(&btc, &mut handoff, &mut journal_client, &mut output, 1, 10)
         .expect("conflicting output batch should create an escalation");
     let decision = report
@@ -974,11 +993,11 @@ fn shard_execution_core_quarantine_preserves_conflicting_output_batch_query_stat
         &drifted_identity,
     );
     assert_eq!(
-        manager.quarantine_symbol_output_commit_escalation(&btc),
+        execution_core.quarantine_symbol_output_commit_escalation(&btc),
         Ok(Some(decision))
     );
 
-    let blockage = manager
+    let blockage = execution_core
         .symbol_status(&btc)
         .expect("symbol status should exist")
         .output_commit_blockage
@@ -991,7 +1010,7 @@ fn shard_execution_core_quarantine_preserves_conflicting_output_batch_query_stat
         &drifted_identity,
     );
 
-    let paused_report = manager
+    let paused_report = execution_core
         .run_symbol_retry_aware_step(&btc, &mut handoff, &mut journal_client, &mut output, 1, 10)
         .expect("quarantined symbol should remain paused");
     assert_eq!(paused_report.input_processed_count, 0);
@@ -1007,15 +1026,15 @@ fn shard_execution_core_quarantine_preserves_conflicting_output_batch_query_stat
 #[test]
 fn shard_execution_core_status_records_rejected_output_escalation_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = RejectingJournalOutputAppender;
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     assert_eq!(handoff.enqueue(command_entry(1, btc.clone())), Ok(()));
 
-    let report = manager
+    let report = execution_core
         .run_symbol_retry_aware_step(&btc, &mut handoff, &mut journal_client, &mut output, 1, 10)
         .expect("rejected output should be reported as an escalation decision");
     let decision = report
@@ -1027,7 +1046,7 @@ fn shard_execution_core_status_records_rejected_output_escalation_from_public_ap
     assert_eq!(decision.outcome, OutputCommitOutcome::Rejected);
     assert_eq!(decision.attempt_count, 1);
     assert_eq!(
-        manager.symbol_status(&btc),
+        execution_core.symbol_status(&btc),
         Some(SymbolRuntimeStatus {
             symbol: btc.clone(),
             last_input_seq: None,
@@ -1051,15 +1070,15 @@ fn shard_execution_core_status_records_rejected_output_escalation_from_public_ap
 #[test]
 fn shard_execution_core_retry_aware_step_pauses_symbol_after_output_escalation_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut rejecting_output = RejectingJournalOutputAppender;
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     assert_eq!(handoff.enqueue(command_entry(1, btc.clone())), Ok(()));
 
-    let escalation_report = manager
+    let escalation_report = execution_core
         .run_symbol_retry_aware_step(
             &btc,
             &mut handoff,
@@ -1074,13 +1093,13 @@ fn shard_execution_core_retry_aware_step_pauses_symbol_after_output_escalation_f
         .expect("rejected output should produce a block decision");
 
     assert_eq!(escalation.action, OutputCommitBlockAction::StopAndEscalate);
-    assert_eq!(manager.pending_output_len(&btc), Some(1));
+    assert_eq!(execution_core.pending_output_len(&btc), Some(1));
     assert_eq!(handoff.len(), 0);
 
     let mut successful_output = TestJournalOutputAppender::new();
     assert_eq!(handoff.enqueue(command_entry(2, btc.clone())), Ok(()));
 
-    let paused_report = manager
+    let paused_report = execution_core
         .run_symbol_retry_aware_step(
             &btc,
             &mut handoff,
@@ -1094,8 +1113,8 @@ fn shard_execution_core_retry_aware_step_pauses_symbol_after_output_escalation_f
     assert_eq!(paused_report.input_processed_count, 0);
     assert_eq!(paused_report.safe_point_advanced_count, 0);
     assert_eq!(paused_report.block_decision, Some(escalation));
-    assert_eq!(manager.last_input_seq(&btc), Some(None));
-    assert_eq!(manager.pending_output_len(&btc), Some(1));
+    assert_eq!(execution_core.last_input_seq(&btc), Some(None));
+    assert_eq!(execution_core.pending_output_len(&btc), Some(1));
     assert_eq!(handoff.len(), 1);
     assert_eq!(successful_output.read_all(), Vec::new());
 }
@@ -1103,15 +1122,15 @@ fn shard_execution_core_retry_aware_step_pauses_symbol_after_output_escalation_f
 #[test]
 fn shard_execution_core_can_clear_output_escalation_and_retry_pending_output_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut rejecting_output = RejectingJournalOutputAppender;
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     assert_eq!(handoff.enqueue(command_entry(1, btc.clone())), Ok(()));
 
-    let escalation_report = manager
+    let escalation_report = execution_core
         .run_symbol_retry_aware_step(
             &btc,
             &mut handoff,
@@ -1125,9 +1144,9 @@ fn shard_execution_core_can_clear_output_escalation_and_retry_pending_output_fro
         .block_decision
         .expect("rejected output should produce a block decision");
 
-    assert_eq!(manager.pending_output_len(&btc), Some(1));
+    assert_eq!(execution_core.pending_output_len(&btc), Some(1));
     assert_eq!(
-        manager
+        execution_core
             .symbol_status(&btc)
             .expect("symbol status should exist")
             .output_commit_escalation,
@@ -1135,11 +1154,11 @@ fn shard_execution_core_can_clear_output_escalation_and_retry_pending_output_fro
     );
 
     assert_eq!(
-        manager.clear_symbol_output_commit_escalation(&btc),
+        execution_core.clear_symbol_output_commit_escalation(&btc),
         Ok(Some(escalation))
     );
     assert_eq!(
-        manager
+        execution_core
             .symbol_status(&btc)
             .expect("symbol status should exist")
             .output_commit_escalation,
@@ -1147,7 +1166,7 @@ fn shard_execution_core_can_clear_output_escalation_and_retry_pending_output_fro
     );
 
     let mut successful_output = TestJournalOutputAppender::new();
-    let retry_report = manager
+    let retry_report = execution_core
         .run_symbol_retry_aware_step(
             &btc,
             &mut handoff,
@@ -1161,18 +1180,21 @@ fn shard_execution_core_can_clear_output_escalation_and_retry_pending_output_fro
     assert_eq!(retry_report.input_processed_count, 0);
     assert_eq!(retry_report.safe_point_advanced_count, 1);
     assert_eq!(retry_report.block_decision, None);
-    assert_eq!(manager.last_input_seq(&btc), Some(Some(JournalSeq(1))));
-    assert_eq!(manager.pending_output_len(&btc), Some(0));
+    assert_eq!(
+        execution_core.last_input_seq(&btc),
+        Some(Some(JournalSeq(1)))
+    );
+    assert_eq!(execution_core.pending_output_len(&btc), Some(0));
     assert_eq!(successful_output.read_all().len(), 1);
 }
 
 #[test]
 fn shard_execution_core_clear_output_escalation_rejects_unknown_symbol_from_public_api() {
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
 
     assert_eq!(
-        manager.clear_symbol_output_commit_escalation(&eth),
+        execution_core.clear_symbol_output_commit_escalation(&eth),
         Err(ShardExecutionCoreError::UnknownSymbol)
     );
 }
@@ -1181,15 +1203,15 @@ fn shard_execution_core_clear_output_escalation_rejects_unknown_symbol_from_publ
 fn shard_execution_core_can_quarantine_output_escalation_without_advancing_safe_point_from_public_api(
 ) {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut rejecting_output = RejectingJournalOutputAppender;
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     assert_eq!(handoff.enqueue(command_entry(1, btc.clone())), Ok(()));
 
-    let escalation_report = manager
+    let escalation_report = execution_core
         .run_symbol_retry_aware_step(
             &btc,
             &mut handoff,
@@ -1204,11 +1226,11 @@ fn shard_execution_core_can_quarantine_output_escalation_without_advancing_safe_
         .expect("rejected output should produce a block decision");
 
     assert_eq!(
-        manager.quarantine_symbol_output_commit_escalation(&btc),
+        execution_core.quarantine_symbol_output_commit_escalation(&btc),
         Ok(Some(escalation))
     );
     assert_eq!(
-        manager.symbol_status(&btc),
+        execution_core.symbol_status(&btc),
         Some(SymbolRuntimeStatus {
             symbol: btc.clone(),
             last_input_seq: None,
@@ -1229,7 +1251,7 @@ fn shard_execution_core_can_quarantine_output_escalation_without_advancing_safe_
     );
 
     let mut successful_output = TestJournalOutputAppender::new();
-    let quarantined_report = manager
+    let quarantined_report = execution_core
         .run_symbol_retry_aware_step(
             &btc,
             &mut handoff,
@@ -1243,23 +1265,23 @@ fn shard_execution_core_can_quarantine_output_escalation_without_advancing_safe_
     assert_eq!(quarantined_report.input_processed_count, 0);
     assert_eq!(quarantined_report.safe_point_advanced_count, 0);
     assert_eq!(quarantined_report.block_decision, Some(escalation));
-    assert_eq!(manager.last_input_seq(&btc), Some(None));
-    assert_eq!(manager.pending_output_len(&btc), Some(1));
+    assert_eq!(execution_core.last_input_seq(&btc), Some(None));
+    assert_eq!(execution_core.pending_output_len(&btc), Some(1));
     assert_eq!(successful_output.read_all(), Vec::new());
 }
 
 #[test]
 fn shard_execution_core_can_clear_output_quarantine_and_retry_pending_output_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut rejecting_output = RejectingJournalOutputAppender;
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     assert_eq!(handoff.enqueue(command_entry(1, btc.clone())), Ok(()));
 
-    let escalation_report = manager
+    let escalation_report = execution_core
         .run_symbol_retry_aware_step(
             &btc,
             &mut handoff,
@@ -1274,25 +1296,25 @@ fn shard_execution_core_can_clear_output_quarantine_and_retry_pending_output_fro
         .expect("rejected output should produce a block decision");
 
     assert_eq!(
-        manager.quarantine_symbol_output_commit_escalation(&btc),
+        execution_core.quarantine_symbol_output_commit_escalation(&btc),
         Ok(Some(escalation))
     );
     assert_eq!(
-        manager.clear_symbol_output_commit_quarantine(&btc),
+        execution_core.clear_symbol_output_commit_quarantine(&btc),
         Ok(Some(escalation))
     );
     assert_eq!(
-        manager
+        execution_core
             .symbol_status(&btc)
             .expect("symbol status should exist")
             .output_commit_blockage,
         None
     );
-    assert_eq!(manager.last_input_seq(&btc), Some(None));
-    assert_eq!(manager.pending_output_len(&btc), Some(1));
+    assert_eq!(execution_core.last_input_seq(&btc), Some(None));
+    assert_eq!(execution_core.pending_output_len(&btc), Some(1));
 
     let mut successful_output = TestJournalOutputAppender::new();
-    let retry_report = manager
+    let retry_report = execution_core
         .run_symbol_retry_aware_step(
             &btc,
             &mut handoff,
@@ -1306,8 +1328,11 @@ fn shard_execution_core_can_clear_output_quarantine_and_retry_pending_output_fro
     assert_eq!(retry_report.input_processed_count, 0);
     assert_eq!(retry_report.safe_point_advanced_count, 1);
     assert_eq!(retry_report.block_decision, None);
-    assert_eq!(manager.last_input_seq(&btc), Some(Some(JournalSeq(1))));
-    assert_eq!(manager.pending_output_len(&btc), Some(0));
+    assert_eq!(
+        execution_core.last_input_seq(&btc),
+        Some(Some(JournalSeq(1)))
+    );
+    assert_eq!(execution_core.pending_output_len(&btc), Some(0));
     assert_eq!(successful_output.read_all().len(), 1);
 }
 
@@ -1316,16 +1341,16 @@ fn shard_execution_core_quarantine_output_escalation_handles_empty_and_unknown_s
 ) {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
 
     assert_eq!(
-        manager.quarantine_symbol_output_commit_escalation(&btc),
+        execution_core.quarantine_symbol_output_commit_escalation(&btc),
         Ok(None)
     );
     assert_eq!(
-        manager.quarantine_symbol_output_commit_escalation(&eth),
+        execution_core.quarantine_symbol_output_commit_escalation(&eth),
         Err(ShardExecutionCoreError::UnknownSymbol)
     );
 }
@@ -1335,16 +1360,16 @@ fn shard_execution_core_clear_output_quarantine_handles_empty_and_unknown_symbol
 {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
 
     assert_eq!(
-        manager.clear_symbol_output_commit_quarantine(&btc),
+        execution_core.clear_symbol_output_commit_quarantine(&btc),
         Ok(None)
     );
     assert_eq!(
-        manager.clear_symbol_output_commit_quarantine(&eth),
+        execution_core.clear_symbol_output_commit_quarantine(&eth),
         Err(ShardExecutionCoreError::UnknownSymbol)
     );
 }
@@ -1352,16 +1377,16 @@ fn shard_execution_core_clear_output_quarantine_handles_empty_and_unknown_symbol
 #[test]
 fn shard_execution_core_output_batch_commit_step_is_available_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoff = BoundedHandoff::new(4);
     let mut journal_client = OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     assert_eq!(handoff.enqueue(command_entry(1, btc.clone())), Ok(()));
     assert_eq!(handoff.enqueue(command_entry(2, btc.clone())), Ok(()));
 
-    let report = manager
+    let report = execution_core
         .run_symbol_step_with_output_batch_commit(
             &btc,
             &mut handoff,
@@ -1370,7 +1395,7 @@ fn shard_execution_core_output_batch_commit_step_is_available_from_public_api() 
             10,
             10,
         )
-        .expect("runtime manager step should commit output");
+        .expect("shard execution core step should commit output");
 
     assert_eq!(report.input_processed_count, 2);
     assert_eq!(report.safe_point_advanced_count, 2);
@@ -1386,7 +1411,10 @@ fn shard_execution_core_output_batch_commit_step_is_available_from_public_api() 
         output_batch_identity.matching_version,
         MATCHING_OUTPUT_VERSION
     );
-    assert_eq!(manager.last_input_seq(&btc), Some(Some(JournalSeq(2))));
-    assert_eq!(manager.pending_output_len(&btc), Some(0));
+    assert_eq!(
+        execution_core.last_input_seq(&btc),
+        Some(Some(JournalSeq(2)))
+    );
+    assert_eq!(execution_core.pending_output_len(&btc), Some(0));
     assert_eq!(output.read_all().len(), 2);
 }

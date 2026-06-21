@@ -10,11 +10,11 @@ use matching_core::output_commit_boundary::{
 };
 use matching_core::replay_runner::{ReplayResult, ReplayRunner};
 use matching_core::runtime_config::MatchingRuntimeConfig;
-use matching_core::runtime_loop::{
-    RuntimeLoop, RuntimeLoopError, RuntimeLoopRunLimit, RuntimeLoopRunOnceLimits,
-    RuntimeLoopRunStopReason,
-};
 use matching_core::shard_execution_core::ShardExecutionCore;
+use matching_core::shard_runtime::{
+    ShardRuntime, ShardRuntimeError, ShardRuntimeRunLimit, ShardRuntimeRunOnceLimits,
+    ShardRuntimeRunStopReason,
+};
 use matching_core::snapshot_restore::{OrderBookSnapshot, SymbolRuntimeSnapshot};
 use matching_core::snapshot_store::{FileSnapshotStore, InMemorySnapshotStore, SnapshotStore};
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
@@ -234,11 +234,11 @@ fn temporary_snapshot_dir(test_name: &str) -> PathBuf {
 }
 
 #[derive(Clone)]
-struct RuntimeLoopReplayJournal {
+struct ShardRuntimeReplayJournal {
     entries: Vec<JournalInputEntry>,
 }
 
-impl RuntimeLoopReplayJournal {
+impl ShardRuntimeReplayJournal {
     fn for_symbol(entries: &[JournalInputEntry], symbol: &Symbol) -> Self {
         Self {
             entries: entries
@@ -250,7 +250,7 @@ impl RuntimeLoopReplayJournal {
     }
 }
 
-impl JournalInputReader for RuntimeLoopReplayJournal {
+impl JournalInputReader for ShardRuntimeReplayJournal {
     fn append(&mut self, command_id: CommandId, command: Command) -> JournalSeq {
         let seq = JournalSeq(self.entries.len() as u64 + 1);
 
@@ -298,28 +298,28 @@ fn normalized_output_for_symbol(
 }
 
 #[test]
-fn runtime_loop_enqueue_input_routes_entry_to_symbol_handoff() {
+fn shard_runtime_enqueue_input_routes_entry_to_symbol_handoff() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
 
-    manager.add_symbol(btc.clone());
-    manager.add_symbol(eth.clone());
+    execution_core.add_symbol(btc.clone());
+    execution_core.add_symbol(eth.clone());
     handoffs.insert(btc.clone(), BoundedHandoff::new(4));
     handoffs.insert(eth.clone(), BoundedHandoff::new(4));
 
-    let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
+    let mut shard_runtime = ShardRuntime::new(execution_core, handoffs);
 
     assert_eq!(
-        runtime_loop.enqueue_input(command_entry(1, eth.clone())),
+        shard_runtime.enqueue_input(command_entry(1, eth.clone())),
         Ok(())
     );
-    assert_eq!(runtime_loop.pending_input_len(&btc), Some(0));
-    assert_eq!(runtime_loop.pending_input_len(&eth), Some(1));
+    assert_eq!(shard_runtime.pending_input_len(&btc), Some(0));
+    assert_eq!(shard_runtime.pending_input_len(&eth), Some(1));
     assert_eq!(
-        runtime_loop.pending_input_status(&eth),
-        Some(matching_core::runtime_loop::RuntimeLoopInputStatus {
+        shard_runtime.pending_input_status(&eth),
+        Some(matching_core::shard_runtime::ShardRuntimeInputStatus {
             len: 1,
             capacity: 4,
             full: false,
@@ -328,99 +328,99 @@ fn runtime_loop_enqueue_input_routes_entry_to_symbol_handoff() {
 }
 
 #[test]
-fn runtime_loop_enqueue_input_rejects_entry_without_symbol_handoff() {
+fn shard_runtime_enqueue_input_rejects_entry_without_symbol_handoff() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
 
-    manager.add_symbol(btc.clone());
-    manager.add_symbol(eth.clone());
+    execution_core.add_symbol(btc.clone());
+    execution_core.add_symbol(eth.clone());
     handoffs.insert(btc.clone(), BoundedHandoff::new(4));
 
-    let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
+    let mut shard_runtime = ShardRuntime::new(execution_core, handoffs);
 
     assert_eq!(
-        runtime_loop.enqueue_input(command_entry(1, eth.clone())),
-        Err(RuntimeLoopError::MissingHandoff(eth.clone()))
+        shard_runtime.enqueue_input(command_entry(1, eth.clone())),
+        Err(ShardRuntimeError::MissingHandoff(eth.clone()))
     );
-    assert_eq!(runtime_loop.pending_input_len(&btc), Some(0));
+    assert_eq!(shard_runtime.pending_input_len(&btc), Some(0));
 }
 
 #[test]
-fn runtime_loop_enqueue_input_rejects_entry_for_unregistered_handoff_symbol() {
+fn shard_runtime_enqueue_input_rejects_entry_for_unregistered_handoff_symbol() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     handoffs.insert(btc.clone(), BoundedHandoff::new(4));
     handoffs.insert(eth.clone(), BoundedHandoff::new(4));
 
-    let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
+    let mut shard_runtime = ShardRuntime::new(execution_core, handoffs);
 
     assert_eq!(
-        runtime_loop.enqueue_input(command_entry(1, eth.clone())),
-        Err(RuntimeLoopError::UnregisteredHandoff(eth.clone()))
+        shard_runtime.enqueue_input(command_entry(1, eth.clone())),
+        Err(ShardRuntimeError::UnregisteredHandoff(eth.clone()))
     );
-    assert_eq!(runtime_loop.pending_input_len(&btc), Some(0));
-    assert_eq!(runtime_loop.pending_input_len(&eth), Some(0));
+    assert_eq!(shard_runtime.pending_input_len(&btc), Some(0));
+    assert_eq!(shard_runtime.pending_input_len(&eth), Some(0));
 }
 
 #[test]
-fn runtime_loop_enqueue_input_reports_full_symbol_handoff() {
+fn shard_runtime_enqueue_input_reports_full_symbol_handoff() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     handoffs.insert(btc.clone(), BoundedHandoff::new(1));
 
-    let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
+    let mut shard_runtime = ShardRuntime::new(execution_core, handoffs);
 
     assert_eq!(
-        runtime_loop.enqueue_input(command_entry(1, btc.clone())),
+        shard_runtime.enqueue_input(command_entry(1, btc.clone())),
         Ok(())
     );
     assert_eq!(
-        runtime_loop.enqueue_input(command_entry(2, btc.clone())),
-        Err(RuntimeLoopError::InputHandoffFull(btc.clone()))
+        shard_runtime.enqueue_input(command_entry(2, btc.clone())),
+        Err(ShardRuntimeError::InputHandoffFull(btc.clone()))
     );
-    assert_eq!(runtime_loop.pending_input_len(&btc), Some(1));
+    assert_eq!(shard_runtime.pending_input_len(&btc), Some(1));
 }
 
 #[test]
-fn runtime_loop_enqueue_inputs_routes_batch_to_symbol_handoffs() {
+fn shard_runtime_enqueue_inputs_routes_batch_to_symbol_handoffs() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone(), eth.clone()], 4, 8);
+    let mut shard_runtime = ShardRuntime::new_for_symbols(vec![btc.clone(), eth.clone()], 4, 8);
 
     assert_eq!(
-        runtime_loop.enqueue_inputs(vec![
+        shard_runtime.enqueue_inputs(vec![
             command_entry(1, btc.clone()),
             command_entry(2, eth.clone()),
             command_entry(3, btc.clone()),
         ]),
         Ok(3)
     );
-    assert_eq!(runtime_loop.pending_input_len(&btc), Some(2));
-    assert_eq!(runtime_loop.pending_input_len(&eth), Some(1));
+    assert_eq!(shard_runtime.pending_input_len(&btc), Some(2));
+    assert_eq!(shard_runtime.pending_input_len(&eth), Some(1));
 }
 
 #[test]
-fn runtime_loop_can_be_created_for_symbols_with_runtime_config() {
+fn shard_runtime_can_be_created_for_symbols_with_runtime_config() {
     let btc = Symbol("BTC-USDT".to_string());
     let mut config = MatchingRuntimeConfig::default();
     config.handoff.capacity = 3;
     config.output_commit.pending_output_capacity = 5;
 
-    let runtime_loop = RuntimeLoop::new_for_symbols_with_config(vec![btc.clone()], config);
+    let shard_runtime = ShardRuntime::new_for_symbols_with_config(vec![btc.clone()], config);
 
-    let input_status = runtime_loop
+    let input_status = shard_runtime
         .pending_input_status(&btc)
         .expect("configured symbol should have pending input status");
-    let runtime_status = runtime_loop
+    let runtime_status = shard_runtime
         .symbol_status(&btc)
         .expect("configured symbol should have runtime status");
 
@@ -429,130 +429,131 @@ fn runtime_loop_can_be_created_for_symbols_with_runtime_config() {
 }
 
 #[test]
-fn runtime_loop_run_once_limits_can_be_derived_from_runtime_config() {
+fn shard_runtime_run_once_limits_can_be_derived_from_runtime_config() {
     let mut config = MatchingRuntimeConfig::default();
     config.symbol_runtime.max_input_entries_per_step = 7;
     config.output_commit.max_output_requests_per_step = 9;
 
-    let limits = RuntimeLoopRunOnceLimits::from_config(&config);
+    let limits = ShardRuntimeRunOnceLimits::from_config(&config);
 
     assert_eq!(limits.max_input_entries_per_symbol, 7);
     assert_eq!(limits.max_output_requests_per_symbol, 9);
 }
 
 #[test]
-fn runtime_loop_enqueue_inputs_rejects_batch_without_partial_enqueue_when_symbol_handoff_would_fill(
+fn shard_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue_when_symbol_handoff_would_fill(
 ) {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone()], 1, 8);
+    let mut shard_runtime = ShardRuntime::new_for_symbols(vec![btc.clone()], 1, 8);
 
     assert_eq!(
-        runtime_loop.enqueue_inputs(vec![
+        shard_runtime.enqueue_inputs(vec![
             command_entry(1, btc.clone()),
             command_entry(2, btc.clone()),
         ]),
-        Err(RuntimeLoopError::InputHandoffFull(btc.clone()))
+        Err(ShardRuntimeError::InputHandoffFull(btc.clone()))
     );
-    assert_eq!(runtime_loop.pending_input_len(&btc), Some(0));
+    assert_eq!(shard_runtime.pending_input_len(&btc), Some(0));
 }
 
 #[test]
-fn runtime_loop_enqueue_inputs_rejects_batch_without_partial_enqueue_when_symbol_is_unregistered() {
+fn shard_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue_when_symbol_is_unregistered()
+{
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     handoffs.insert(btc.clone(), BoundedHandoff::new(4));
     handoffs.insert(eth.clone(), BoundedHandoff::new(4));
 
-    let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
+    let mut shard_runtime = ShardRuntime::new(execution_core, handoffs);
 
     assert_eq!(
-        runtime_loop.enqueue_inputs(vec![
+        shard_runtime.enqueue_inputs(vec![
             command_entry(1, btc.clone()),
             command_entry(2, eth.clone()),
         ]),
-        Err(RuntimeLoopError::UnregisteredHandoff(eth.clone()))
+        Err(ShardRuntimeError::UnregisteredHandoff(eth.clone()))
     );
-    assert_eq!(runtime_loop.pending_input_len(&btc), Some(0));
-    assert_eq!(runtime_loop.pending_input_len(&eth), Some(0));
+    assert_eq!(shard_runtime.pending_input_len(&btc), Some(0));
+    assert_eq!(shard_runtime.pending_input_len(&eth), Some(0));
 }
 
 #[test]
-fn runtime_loop_enqueue_inputs_rejects_batch_without_partial_enqueue_when_symbol_handoff_is_missing(
+fn shard_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue_when_symbol_handoff_is_missing(
 ) {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
 
-    manager.add_symbol(btc.clone());
-    manager.add_symbol(eth.clone());
+    execution_core.add_symbol(btc.clone());
+    execution_core.add_symbol(eth.clone());
     handoffs.insert(btc.clone(), BoundedHandoff::new(4));
 
-    let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
+    let mut shard_runtime = ShardRuntime::new(execution_core, handoffs);
 
     assert_eq!(
-        runtime_loop.enqueue_inputs(vec![
+        shard_runtime.enqueue_inputs(vec![
             command_entry(1, btc.clone()),
             command_entry(2, eth.clone()),
         ]),
-        Err(RuntimeLoopError::MissingHandoff(eth.clone()))
+        Err(ShardRuntimeError::MissingHandoff(eth.clone()))
     );
-    assert_eq!(runtime_loop.pending_input_len(&btc), Some(0));
+    assert_eq!(shard_runtime.pending_input_len(&btc), Some(0));
 }
 
 #[test]
-fn runtime_loop_enqueue_inputs_reports_full_handoff_in_deterministic_order() {
+fn shard_runtime_enqueue_inputs_reports_full_handoff_in_deterministic_order() {
     let ada = Symbol("ADA-USDT".to_string());
     let btc = Symbol("BTC-USDT".to_string());
-    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone(), ada.clone()], 1, 8);
+    let mut shard_runtime = ShardRuntime::new_for_symbols(vec![btc.clone(), ada.clone()], 1, 8);
 
     assert_eq!(
-        runtime_loop.enqueue_inputs(vec![
+        shard_runtime.enqueue_inputs(vec![
             command_entry(1, btc.clone()),
             command_entry(2, btc.clone()),
             command_entry(3, ada.clone()),
             command_entry(4, ada.clone()),
         ]),
-        Err(RuntimeLoopError::InputHandoffFull(ada.clone()))
+        Err(ShardRuntimeError::InputHandoffFull(ada.clone()))
     );
-    assert_eq!(runtime_loop.pending_input_len(&ada), Some(0));
-    assert_eq!(runtime_loop.pending_input_len(&btc), Some(0));
+    assert_eq!(shard_runtime.pending_input_len(&ada), Some(0));
+    assert_eq!(shard_runtime.pending_input_len(&btc), Some(0));
 }
 
 #[test]
-fn runtime_loop_can_be_created_with_registered_symbols_and_handoffs_together() {
+fn shard_runtime_can_be_created_with_registered_symbols_and_handoffs_together() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
-    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![eth.clone(), btc.clone()], 4, 8);
+    let mut shard_runtime = ShardRuntime::new_for_symbols(vec![eth.clone(), btc.clone()], 4, 8);
 
-    assert_eq!(runtime_loop.pending_input_len(&btc), Some(0));
-    assert_eq!(runtime_loop.pending_input_len(&eth), Some(0));
-    assert!(runtime_loop.symbol_status(&btc).is_some());
-    assert!(runtime_loop.symbol_status(&eth).is_some());
+    assert_eq!(shard_runtime.pending_input_len(&btc), Some(0));
+    assert_eq!(shard_runtime.pending_input_len(&eth), Some(0));
+    assert!(shard_runtime.symbol_status(&btc).is_some());
+    assert!(shard_runtime.symbol_status(&eth).is_some());
     assert_eq!(
-        runtime_loop.enqueue_inputs(vec![
+        shard_runtime.enqueue_inputs(vec![
             command_entry(1, btc.clone()),
             command_entry(1, eth.clone()),
         ]),
         Ok(2)
     );
 
-    let report = runtime_loop
+    let report = shard_runtime
         .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("assembled runtime loop should process registered symbols");
+        .expect("assembled shard runtime should process registered symbols");
     let report_symbols: Vec<Symbol> = report
         .symbol_reports
         .iter()
@@ -560,12 +561,18 @@ fn runtime_loop_can_be_created_with_registered_symbols_and_handoffs_together() {
         .collect();
 
     assert_eq!(report_symbols, vec![btc.clone(), eth.clone()]);
-    assert_eq!(runtime_loop.last_input_seq(&btc), Some(Some(JournalSeq(1))));
-    assert_eq!(runtime_loop.last_input_seq(&eth), Some(Some(JournalSeq(1))));
+    assert_eq!(
+        shard_runtime.last_input_seq(&btc),
+        Some(Some(JournalSeq(1)))
+    );
+    assert_eq!(
+        shard_runtime.last_input_seq(&eth),
+        Some(Some(JournalSeq(1)))
+    );
 }
 
 #[test]
-fn runtime_loop_live_path_matches_replay_output_checksum_and_safe_point_per_symbol() {
+fn shard_runtime_live_path_matches_replay_output_checksum_and_safe_point_per_symbol() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
     let entries = vec![
@@ -574,38 +581,38 @@ fn runtime_loop_live_path_matches_replay_output_checksum_and_safe_point_per_symb
         limit_entry(3, 11, 101, btc.clone(), Side::Buy, 100, 1),
         cancel_entry(4, 21, 200, eth.clone()),
     ];
-    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![eth.clone(), btc.clone()], 8, 8);
+    let mut shard_runtime = ShardRuntime::new_for_symbols(vec![eth.clone(), btc.clone()], 8, 8);
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
 
     assert_eq!(
-        runtime_loop.enqueue_inputs(entries.clone()),
+        shard_runtime.enqueue_inputs(entries.clone()),
         Ok(entries.len())
     );
 
-    let report = runtime_loop
+    let report = shard_runtime
         .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 8,
                 max_output_requests_per_symbol: 8,
             },
         )
-        .expect("runtime loop should process all queued inputs");
+        .expect("shard runtime should process all queued inputs");
 
     assert!(!report.has_work_remaining());
 
     for symbol in [btc, eth] {
-        let replay_journal = RuntimeLoopReplayJournal::for_symbol(&entries, &symbol);
+        let replay_journal = ShardRuntimeReplayJournal::for_symbol(&entries, &symbol);
         let replay_result = ReplayRunner::new(symbol.clone()).replay_result(&replay_journal);
         let live_result = ReplayResult {
-            checksum: runtime_loop
+            checksum: shard_runtime
                 .checksum(&symbol)
-                .expect("runtime loop should expose registered symbol checksum"),
-            last_replayed_seq: runtime_loop
+                .expect("shard runtime should expose registered symbol checksum"),
+            last_replayed_seq: shard_runtime
                 .last_input_seq(&symbol)
-                .expect("runtime loop should expose registered symbol safe point"),
+                .expect("shard runtime should expose registered symbol safe point"),
             output_entries: normalized_output_for_symbol(&output, &symbol),
         };
 
@@ -614,29 +621,29 @@ fn runtime_loop_live_path_matches_replay_output_checksum_and_safe_point_per_symb
 }
 
 #[test]
-fn runtime_loop_can_save_symbol_snapshot_to_store_after_safe_point_advances() {
+fn shard_runtime_can_save_symbol_snapshot_to_store_after_safe_point_advances() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone()], 4, 8);
+    let mut shard_runtime = ShardRuntime::new_for_symbols(vec![btc.clone()], 4, 8);
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
     let mut snapshot_store = InMemorySnapshotStore::new();
 
     assert_eq!(
-        runtime_loop.enqueue_input(command_entry(1, btc.clone())),
+        shard_runtime.enqueue_input(command_entry(1, btc.clone())),
         Ok(())
     );
-    runtime_loop
+    shard_runtime
         .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("runtime loop should advance a safe point");
+        .expect("shard runtime should advance a safe point");
 
-    let saved = runtime_loop
+    let saved = shard_runtime
         .save_symbol_snapshot(&btc, &mut snapshot_store)
         .expect("snapshot store should accept a runtime snapshot")
         .expect("safe point should produce a snapshot");
@@ -650,20 +657,20 @@ fn runtime_loop_can_save_symbol_snapshot_to_store_after_safe_point_advances() {
     assert_eq!(loaded.order_book_snapshot.last_input_seq, JournalSeq(1));
     assert_eq!(
         loaded.order_book_snapshot.checksum,
-        runtime_loop
+        shard_runtime
             .checksum(&loaded.order_book_snapshot.symbol)
-            .expect("runtime loop should expose checksum")
+            .expect("shard runtime should expose checksum")
     );
 }
 
 #[test]
-fn runtime_loop_returns_no_snapshot_before_symbol_safe_point_exists() {
+fn shard_runtime_returns_no_snapshot_before_symbol_safe_point_exists() {
     let btc = Symbol("BTC-USDT".to_string());
-    let runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone()], 4, 8);
+    let shard_runtime = ShardRuntime::new_for_symbols(vec![btc.clone()], 4, 8);
     let mut snapshot_store = InMemorySnapshotStore::new();
 
     assert_eq!(
-        runtime_loop
+        shard_runtime
             .save_symbol_snapshot(&btc, &mut snapshot_store)
             .expect("snapshot store should not be called without a snapshot"),
         None
@@ -672,7 +679,7 @@ fn runtime_loop_returns_no_snapshot_before_symbol_safe_point_exists() {
 }
 
 #[test]
-fn runtime_loop_can_be_restored_from_symbol_snapshot_store() {
+fn shard_runtime_can_be_restored_from_symbol_snapshot_store() {
     let btc = Symbol("BTC-USDT".to_string());
     let snapshot = SymbolRuntimeSnapshot {
         order_book_snapshot: OrderBookSnapshot {
@@ -698,7 +705,7 @@ fn runtime_loop_can_be_restored_from_symbol_snapshot_store() {
         .save_symbol_snapshot(&snapshot)
         .expect("snapshot should be saved");
 
-    let mut runtime_loop = RuntimeLoop::new_from_symbol_snapshots(
+    let mut shard_runtime = ShardRuntime::new_from_symbol_snapshots(
         vec![snapshot_store
             .load_latest_symbol_snapshot(&btc)
             .expect("stored snapshot should decode")
@@ -710,50 +717,50 @@ fn runtime_loop_can_be_restored_from_symbol_snapshot_store() {
     let mut output = AcceptingJournalOutputAppender::new();
 
     assert_eq!(
-        runtime_loop.enqueue_input(limit_entry(11, 11, 101, btc.clone(), Side::Buy, 100, 1,)),
+        shard_runtime.enqueue_input(limit_entry(11, 11, 101, btc.clone(), Side::Buy, 100, 1,)),
         Ok(())
     );
-    runtime_loop
+    shard_runtime
         .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("restored runtime loop should process the replay tail");
+        .expect("restored shard runtime should process the replay tail");
 
     assert_eq!(
-        runtime_loop.last_input_seq(&btc),
+        shard_runtime.last_input_seq(&btc),
         Some(Some(JournalSeq(11)))
     );
 }
 
 #[test]
-fn runtime_loop_can_restore_from_file_snapshot_store_after_process_restart() {
+fn shard_runtime_can_restore_from_file_snapshot_store_after_process_restart() {
     let btc = Symbol("BTC-USDT".to_string());
     let dir = temporary_snapshot_dir("runtime-loop-file-snapshot");
-    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone()], 4, 8);
+    let mut shard_runtime = ShardRuntime::new_for_symbols(vec![btc.clone()], 4, 8);
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
     let mut writer_store = FileSnapshotStore::new(dir.clone());
 
     assert_eq!(
-        runtime_loop.enqueue_input(limit_entry(1, 10, 100, btc.clone(), Side::Sell, 100, 1,)),
+        shard_runtime.enqueue_input(limit_entry(1, 10, 100, btc.clone(), Side::Sell, 100, 1,)),
         Ok(())
     );
-    runtime_loop
+    shard_runtime
         .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("runtime loop should advance a safe point");
-    runtime_loop
+        .expect("shard runtime should advance a safe point");
+    shard_runtime
         .save_symbol_snapshot(&btc, &mut writer_store)
         .expect("file snapshot store should accept runtime snapshot")
         .expect("safe point should produce a snapshot");
@@ -763,7 +770,7 @@ fn runtime_loop_can_restore_from_file_snapshot_store_after_process_restart() {
         .load_latest_symbol_snapshot(&btc)
         .expect("file snapshot should decode after restart")
         .expect("file snapshot should exist after restart");
-    let mut restored_loop = RuntimeLoop::new_from_symbol_snapshots(vec![loaded_snapshot], 4, 8);
+    let mut restored_loop = ShardRuntime::new_from_symbol_snapshots(vec![loaded_snapshot], 4, 8);
     let mut restored_journal_client = OutputJournalClient::new();
     let mut restored_output = AcceptingJournalOutputAppender::new();
 
@@ -775,12 +782,12 @@ fn runtime_loop_can_restore_from_file_snapshot_store_after_process_restart() {
         .run_once(
             &mut restored_journal_client,
             &mut restored_output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("restored runtime loop should process the replay tail");
+        .expect("restored shard runtime should process the replay tail");
 
     assert_eq!(
         restored_loop.last_input_seq(&btc),
@@ -791,29 +798,29 @@ fn runtime_loop_can_restore_from_file_snapshot_store_after_process_restart() {
 }
 
 #[test]
-fn runtime_loop_can_restore_from_older_file_snapshot_when_latest_is_corrupt() {
+fn shard_runtime_can_restore_from_older_file_snapshot_when_latest_is_corrupt() {
     let btc = Symbol("BTC-USDT".to_string());
     let dir = temporary_snapshot_dir("runtime-loop-file-snapshot-fallback");
-    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone()], 4, 8);
+    let mut shard_runtime = ShardRuntime::new_for_symbols(vec![btc.clone()], 4, 8);
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
     let mut writer_store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 2);
 
     assert_eq!(
-        runtime_loop.enqueue_input(limit_entry(1, 10, 100, btc.clone(), Side::Sell, 100, 1,)),
+        shard_runtime.enqueue_input(limit_entry(1, 10, 100, btc.clone(), Side::Sell, 100, 1,)),
         Ok(())
     );
-    runtime_loop
+    shard_runtime
         .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("runtime loop should advance a safe point");
-    let saved = runtime_loop
+        .expect("shard runtime should advance a safe point");
+    let saved = shard_runtime
         .save_symbol_snapshot(&btc, &mut writer_store)
         .expect("file snapshot store should accept runtime snapshot")
         .expect("safe point should produce a snapshot");
@@ -839,7 +846,7 @@ fn runtime_loop_can_restore_from_older_file_snapshot_when_latest_is_corrupt() {
     );
     assert_eq!(selection.rejected[0].record.safe_point, JournalSeq(2));
 
-    let mut restored_loop = RuntimeLoop::new_from_symbol_snapshots(
+    let mut restored_loop = ShardRuntime::new_from_symbol_snapshots(
         vec![selection
             .selected
             .expect("older valid snapshot should be selected")],
@@ -857,12 +864,12 @@ fn runtime_loop_can_restore_from_older_file_snapshot_when_latest_is_corrupt() {
         .run_once(
             &mut restored_journal_client,
             &mut restored_output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("restored runtime loop should process tail from older snapshot");
+        .expect("restored shard runtime should process tail from older snapshot");
 
     assert_eq!(
         restored_loop.last_input_seq(&btc),
@@ -873,29 +880,29 @@ fn runtime_loop_can_restore_from_older_file_snapshot_when_latest_is_corrupt() {
 }
 
 #[test]
-fn runtime_loop_can_restore_from_latest_verified_file_snapshot_when_newer_is_unverified() {
+fn shard_runtime_can_restore_from_latest_verified_file_snapshot_when_newer_is_unverified() {
     let btc = Symbol("BTC-USDT".to_string());
     let dir = temporary_snapshot_dir("runtime-loop-file-snapshot-verified");
-    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone()], 4, 8);
+    let mut shard_runtime = ShardRuntime::new_for_symbols(vec![btc.clone()], 4, 8);
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
     let mut writer_store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 2);
 
     assert_eq!(
-        runtime_loop.enqueue_input(limit_entry(1, 10, 100, btc.clone(), Side::Sell, 100, 1,)),
+        shard_runtime.enqueue_input(limit_entry(1, 10, 100, btc.clone(), Side::Sell, 100, 1,)),
         Ok(())
     );
-    runtime_loop
+    shard_runtime
         .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("runtime loop should advance the first safe point");
-    runtime_loop
+        .expect("shard runtime should advance the first safe point");
+    shard_runtime
         .save_symbol_snapshot(&btc, &mut writer_store)
         .expect("file snapshot store should accept first runtime snapshot")
         .expect("first safe point should produce a snapshot");
@@ -905,20 +912,20 @@ fn runtime_loop_can_restore_from_latest_verified_file_snapshot_when_newer_is_unv
         .expect("first snapshot should exist");
 
     assert_eq!(
-        runtime_loop.enqueue_input(limit_entry(2, 11, 101, btc.clone(), Side::Buy, 100, 1,)),
+        shard_runtime.enqueue_input(limit_entry(2, 11, 101, btc.clone(), Side::Buy, 100, 1,)),
         Ok(())
     );
-    runtime_loop
+    shard_runtime
         .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("runtime loop should advance the second safe point");
-    runtime_loop
+        .expect("shard runtime should advance the second safe point");
+    shard_runtime
         .save_symbol_snapshot(&btc, &mut writer_store)
         .expect("file snapshot store should accept second runtime snapshot")
         .expect("second safe point should produce an unverified snapshot");
@@ -945,7 +952,7 @@ fn runtime_loop_can_restore_from_latest_verified_file_snapshot_when_newer_is_unv
         vec![JournalSeq(2)]
     );
 
-    let mut restored_loop = RuntimeLoop::new_from_symbol_snapshots(
+    let mut restored_loop = ShardRuntime::new_from_symbol_snapshots(
         vec![selection
             .selected
             .expect("older verified snapshot should be selected")],
@@ -963,12 +970,12 @@ fn runtime_loop_can_restore_from_latest_verified_file_snapshot_when_newer_is_unv
         .run_once(
             &mut restored_journal_client,
             &mut restored_output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("restored runtime loop should process tail from verified snapshot");
+        .expect("restored shard runtime should process tail from verified snapshot");
 
     assert_eq!(
         restored_loop.last_input_seq(&btc),
@@ -979,31 +986,31 @@ fn runtime_loop_can_restore_from_latest_verified_file_snapshot_when_newer_is_unv
 }
 
 #[test]
-fn runtime_loop_can_validate_configuration_before_running_once() {
+fn shard_runtime_can_validate_configuration_before_running_once() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone(), eth.clone()], 4, 8);
+    let shard_runtime = ShardRuntime::new_for_symbols(vec![btc.clone(), eth.clone()], 4, 8);
 
-    assert_eq!(runtime_loop.validate_configuration(), Ok(()));
+    assert_eq!(shard_runtime.validate_configuration(), Ok(()));
 }
 
 #[test]
-fn runtime_loop_run_once_report_identifies_idle_run() {
+fn shard_runtime_run_once_report_identifies_idle_run() {
     let btc = Symbol("BTC-USDT".to_string());
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
-    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone()], 4, 8);
+    let mut shard_runtime = ShardRuntime::new_for_symbols(vec![btc.clone()], 4, 8);
 
-    let report = runtime_loop
+    let report = shard_runtime
         .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("empty runtime loop run_once should produce an idle report");
+        .expect("empty shard runtime run_once should produce an idle report");
     let btc_report = report
         .symbol_report(&btc)
         .expect("btc should have an idle run_once report");
@@ -1016,63 +1023,63 @@ fn runtime_loop_run_once_report_identifies_idle_run() {
     assert_eq!(btc_report.safe_point_advanced_count, 0);
     assert_eq!(btc_report.pending_input_len_after_run, 0);
     assert_eq!(btc_report.runtime_status_after_run.pending_output_len, 0);
-    assert_eq!(runtime_loop.last_input_seq(&btc), Some(None));
+    assert_eq!(shard_runtime.last_input_seq(&btc), Some(None));
     assert_eq!(output.read_all().len(), 0);
 }
 
 #[test]
-fn runtime_loop_validate_configuration_reports_missing_handoff_before_run_once() {
+fn shard_runtime_validate_configuration_reports_missing_handoff_before_run_once() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
 
-    manager.add_symbol(btc.clone());
-    manager.add_symbol(eth.clone());
+    execution_core.add_symbol(btc.clone());
+    execution_core.add_symbol(eth.clone());
     handoffs.insert(btc.clone(), BoundedHandoff::new(4));
 
-    let runtime_loop = RuntimeLoop::new(manager, handoffs);
+    let shard_runtime = ShardRuntime::new(execution_core, handoffs);
 
     assert_eq!(
-        runtime_loop.validate_configuration(),
-        Err(RuntimeLoopError::MissingHandoff(eth.clone()))
+        shard_runtime.validate_configuration(),
+        Err(ShardRuntimeError::MissingHandoff(eth.clone()))
     );
 }
 
 #[test]
-fn runtime_loop_validate_configuration_reports_unregistered_handoff_in_deterministic_order() {
+fn shard_runtime_validate_configuration_reports_unregistered_handoff_in_deterministic_order() {
     let ada = Symbol("ADA-USDT".to_string());
     let btc = Symbol("BTC-USDT".to_string());
     let sol = Symbol("SOL-USDT".to_string());
     let xrp = Symbol("XRP-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     handoffs.insert(btc.clone(), BoundedHandoff::new(4));
     handoffs.insert(xrp.clone(), BoundedHandoff::new(4));
     handoffs.insert(sol.clone(), BoundedHandoff::new(4));
     handoffs.insert(ada.clone(), BoundedHandoff::new(4));
 
-    let runtime_loop = RuntimeLoop::new(manager, handoffs);
+    let shard_runtime = ShardRuntime::new(execution_core, handoffs);
 
     assert_eq!(
-        runtime_loop.validate_configuration(),
-        Err(RuntimeLoopError::UnregisteredHandoff(ada.clone()))
+        shard_runtime.validate_configuration(),
+        Err(ShardRuntimeError::UnregisteredHandoff(ada.clone()))
     );
 }
 
 #[test]
-fn runtime_loop_run_once_keeps_unblocked_symbol_running_when_one_symbol_output_blocks() {
+fn shard_runtime_run_once_keeps_unblocked_symbol_running_when_one_symbol_output_blocks() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
 
-    manager.add_symbol(btc.clone());
-    manager.add_symbol(eth.clone());
+    execution_core.add_symbol(btc.clone());
+    execution_core.add_symbol(eth.clone());
     handoffs.insert(btc.clone(), BoundedHandoff::new(4));
     handoffs.insert(eth.clone(), BoundedHandoff::new(4));
     handoffs
@@ -1086,12 +1093,12 @@ fn runtime_loop_run_once_keeps_unblocked_symbol_running_when_one_symbol_output_b
         .enqueue(command_entry(1, eth.clone()))
         .expect("eth command should enqueue");
 
-    let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
-    let report = runtime_loop
+    let mut shard_runtime = ShardRuntime::new(execution_core, handoffs);
+    let report = shard_runtime
         .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -1127,9 +1134,12 @@ fn runtime_loop_run_once_keeps_unblocked_symbol_running_when_one_symbol_output_b
     assert_eq!(eth_report.input_processed_count, 1);
     assert_eq!(eth_report.safe_point_advanced_count, 1);
 
-    assert_eq!(runtime_loop.last_input_seq(&btc), Some(None));
-    assert_eq!(runtime_loop.last_input_seq(&eth), Some(Some(JournalSeq(1))));
-    let btc_status = runtime_loop
+    assert_eq!(shard_runtime.last_input_seq(&btc), Some(None));
+    assert_eq!(
+        shard_runtime.last_input_seq(&eth),
+        Some(Some(JournalSeq(1)))
+    );
+    let btc_status = shard_runtime
         .symbol_status(&btc)
         .expect("btc status should exist");
     assert_eq!(btc_status.pending_output_len, 1);
@@ -1138,19 +1148,19 @@ fn runtime_loop_run_once_keeps_unblocked_symbol_running_when_one_symbol_output_b
         btc_report.block_decision
     );
     assert!(btc_status.output_commit_blockage.is_some());
-    assert_eq!(runtime_loop.pending_input_len(&eth), Some(0));
+    assert_eq!(shard_runtime.pending_input_len(&eth), Some(0));
     assert_eq!(output.read_all().len(), 1);
 }
 
 #[test]
-fn runtime_loop_run_once_prioritizes_output_commit_when_pending_output_is_full() {
+fn shard_runtime_run_once_prioritizes_output_commit_when_pending_output_is_full() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new_with_pending_output_capacity(1);
+    let mut execution_core = ShardExecutionCore::new_with_pending_output_capacity(1);
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     handoffs.insert(btc.clone(), BoundedHandoff::new(4));
     handoffs
         .get_mut(&btc)
@@ -1158,12 +1168,12 @@ fn runtime_loop_run_once_prioritizes_output_commit_when_pending_output_is_full()
         .enqueue(command_entry(1, btc.clone()))
         .expect("first btc command should enqueue");
 
-    let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
-    let first_report = runtime_loop
+    let mut shard_runtime = ShardRuntime::new(execution_core, handoffs);
+    let first_report = shard_runtime
         .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 0,
             },
@@ -1178,9 +1188,9 @@ fn runtime_loop_run_once_prioritizes_output_commit_when_pending_output_is_full()
     assert!(!first_report.has_blocked_symbols());
     assert_eq!(first_btc_report.input_processed_count, 1);
     assert_eq!(first_btc_report.safe_point_advanced_count, 0);
-    assert_eq!(runtime_loop.last_input_seq(&btc), Some(None));
+    assert_eq!(shard_runtime.last_input_seq(&btc), Some(None));
     assert_eq!(
-        runtime_loop
+        shard_runtime
             .symbol_status(&btc)
             .expect("btc status should exist")
             .pending_output_len,
@@ -1188,15 +1198,15 @@ fn runtime_loop_run_once_prioritizes_output_commit_when_pending_output_is_full()
     );
     assert_eq!(output.read_all().len(), 0);
 
-    runtime_loop
+    shard_runtime
         .enqueue_input(command_entry(2, btc.clone()))
         .expect("second btc command should enqueue");
 
-    let second_report = runtime_loop
+    let second_report = shard_runtime
         .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -1229,10 +1239,13 @@ fn runtime_loop_run_once_prioritizes_output_commit_when_pending_output_is_full()
     assert_eq!(second_btc_report.pending_input_len_after_run, 1);
     assert_eq!(second_btc_report.pending_input_capacity, 4);
     assert!(!second_btc_report.pending_input_full);
-    assert_eq!(runtime_loop.last_input_seq(&btc), Some(Some(JournalSeq(1))));
-    assert_eq!(runtime_loop.pending_input_len(&btc), Some(1));
     assert_eq!(
-        runtime_loop
+        shard_runtime.last_input_seq(&btc),
+        Some(Some(JournalSeq(1)))
+    );
+    assert_eq!(shard_runtime.pending_input_len(&btc), Some(1));
+    assert_eq!(
+        shard_runtime
             .symbol_status(&btc)
             .expect("btc status should exist")
             .pending_output_len,
@@ -1242,14 +1255,14 @@ fn runtime_loop_run_once_prioritizes_output_commit_when_pending_output_is_full()
 }
 
 #[test]
-fn runtime_loop_cycle_reports_output_batch_identity_and_query_status() {
+fn shard_runtime_cycle_reports_output_batch_identity_and_query_status() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut output = DurableUnknownJournalOutputAppender::new();
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     handoffs.insert(btc.clone(), BoundedHandoff::new(4));
     handoffs
         .get_mut(&btc)
@@ -1257,12 +1270,12 @@ fn runtime_loop_cycle_reports_output_batch_identity_and_query_status() {
         .enqueue(command_entry(1, btc.clone()))
         .expect("btc command should enqueue");
 
-    let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
-    let report = runtime_loop
+    let mut shard_runtime = ShardRuntime::new(execution_core, handoffs);
+    let report = shard_runtime
         .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -1287,20 +1300,23 @@ fn runtime_loop_cycle_reports_output_batch_identity_and_query_status() {
     assert_eq!(btc_report.input_processed_count, 1);
     assert_eq!(btc_report.safe_point_advanced_count, 1);
     assert_eq!(btc_report.block_decision, None);
-    assert_eq!(runtime_loop.last_input_seq(&btc), Some(Some(JournalSeq(1))));
+    assert_eq!(
+        shard_runtime.last_input_seq(&btc),
+        Some(Some(JournalSeq(1)))
+    );
 }
 
 #[test]
-fn runtime_loop_run_once_fails_before_processing_when_a_registered_symbol_has_no_handoff() {
+fn shard_runtime_run_once_fails_before_processing_when_a_registered_symbol_has_no_handoff() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
 
-    manager.add_symbol(btc.clone());
-    manager.add_symbol(eth.clone());
+    execution_core.add_symbol(btc.clone());
+    execution_core.add_symbol(eth.clone());
     handoffs.insert(btc.clone(), BoundedHandoff::new(4));
     handoffs
         .get_mut(&btc)
@@ -1308,21 +1324,21 @@ fn runtime_loop_run_once_fails_before_processing_when_a_registered_symbol_has_no
         .enqueue(command_entry(1, btc.clone()))
         .expect("btc command should enqueue");
 
-    let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
-    let result = runtime_loop.run_once(
+    let mut shard_runtime = ShardRuntime::new(execution_core, handoffs);
+    let result = shard_runtime.run_once(
         &mut journal_client,
         &mut output,
-        RuntimeLoopRunOnceLimits {
+        ShardRuntimeRunOnceLimits {
             max_input_entries_per_symbol: 1,
             max_output_requests_per_symbol: 10,
         },
     );
 
-    assert_eq!(result, Err(RuntimeLoopError::MissingHandoff(eth.clone())));
+    assert_eq!(result, Err(ShardRuntimeError::MissingHandoff(eth.clone())));
     assert_eq!(output.read_all().len(), 0);
-    assert_eq!(runtime_loop.last_input_seq(&btc), Some(None));
+    assert_eq!(shard_runtime.last_input_seq(&btc), Some(None));
     assert_eq!(
-        runtime_loop
+        shard_runtime
             .symbol_status(&btc)
             .expect("btc status should exist")
             .pending_output_len,
@@ -1331,15 +1347,15 @@ fn runtime_loop_run_once_fails_before_processing_when_a_registered_symbol_has_no
 }
 
 #[test]
-fn runtime_loop_run_once_fails_before_processing_when_handoff_has_unregistered_symbol() {
+fn shard_runtime_run_once_fails_before_processing_when_handoff_has_unregistered_symbol() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     handoffs.insert(btc.clone(), BoundedHandoff::new(4));
     handoffs.insert(eth.clone(), BoundedHandoff::new(4));
     handoffs
@@ -1353,11 +1369,11 @@ fn runtime_loop_run_once_fails_before_processing_when_handoff_has_unregistered_s
         .enqueue(command_entry(1, eth.clone()))
         .expect("eth command should enqueue");
 
-    let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
-    let result = runtime_loop.run_once(
+    let mut shard_runtime = ShardRuntime::new(execution_core, handoffs);
+    let result = shard_runtime.run_once(
         &mut journal_client,
         &mut output,
-        RuntimeLoopRunOnceLimits {
+        ShardRuntimeRunOnceLimits {
             max_input_entries_per_symbol: 1,
             max_output_requests_per_symbol: 10,
         },
@@ -1365,12 +1381,12 @@ fn runtime_loop_run_once_fails_before_processing_when_handoff_has_unregistered_s
 
     assert_eq!(
         result,
-        Err(RuntimeLoopError::UnregisteredHandoff(eth.clone()))
+        Err(ShardRuntimeError::UnregisteredHandoff(eth.clone()))
     );
     assert_eq!(output.read_all().len(), 0);
-    assert_eq!(runtime_loop.last_input_seq(&btc), Some(None));
+    assert_eq!(shard_runtime.last_input_seq(&btc), Some(None));
     assert_eq!(
-        runtime_loop
+        shard_runtime
             .symbol_status(&btc)
             .expect("btc status should exist")
             .pending_output_len,
@@ -1379,16 +1395,16 @@ fn runtime_loop_run_once_fails_before_processing_when_handoff_has_unregistered_s
 }
 
 #[test]
-fn runtime_loop_run_once_keeps_unblocked_symbol_running_when_one_symbol_is_quarantined() {
+fn shard_runtime_run_once_keeps_unblocked_symbol_running_when_one_symbol_is_quarantined() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
 
-    manager.add_symbol(btc.clone());
-    manager.add_symbol(eth.clone());
+    execution_core.add_symbol(btc.clone());
+    execution_core.add_symbol(eth.clone());
     handoffs.insert(btc.clone(), BoundedHandoff::new(4));
     handoffs.insert(eth.clone(), BoundedHandoff::new(4));
     handoffs
@@ -1397,12 +1413,12 @@ fn runtime_loop_run_once_keeps_unblocked_symbol_running_when_one_symbol_is_quara
         .enqueue(command_entry(1, btc.clone()))
         .expect("btc command should enqueue");
 
-    let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
-    let first_report = runtime_loop
+    let mut shard_runtime = ShardRuntime::new(execution_core, handoffs);
+    let first_report = shard_runtime
         .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -1415,21 +1431,21 @@ fn runtime_loop_run_once_keeps_unblocked_symbol_running_when_one_symbol_is_quara
         .expect("btc should be escalated");
 
     assert_eq!(
-        runtime_loop.quarantine_symbol_output_commit_escalation(&btc),
+        shard_runtime.quarantine_symbol_output_commit_escalation(&btc),
         Ok(Some(btc_decision))
     );
-    runtime_loop
+    shard_runtime
         .enqueue_input(command_entry(2, btc.clone()))
         .expect("second btc command should enqueue");
-    runtime_loop
+    shard_runtime
         .enqueue_input(command_entry(1, eth.clone()))
         .expect("eth command should enqueue");
 
-    let second_report = runtime_loop
+    let second_report = shard_runtime
         .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -1447,11 +1463,14 @@ fn runtime_loop_run_once_keeps_unblocked_symbol_running_when_one_symbol_is_quara
     assert_eq!(paused_btc_report.block_decision, Some(btc_decision));
     assert_eq!(eth_report.input_processed_count, 1);
     assert_eq!(eth_report.safe_point_advanced_count, 1);
-    assert_eq!(runtime_loop.pending_input_len(&btc), Some(1));
-    assert_eq!(runtime_loop.pending_input_len(&eth), Some(0));
-    assert_eq!(runtime_loop.last_input_seq(&btc), Some(None));
-    assert_eq!(runtime_loop.last_input_seq(&eth), Some(Some(JournalSeq(1))));
-    assert!(runtime_loop
+    assert_eq!(shard_runtime.pending_input_len(&btc), Some(1));
+    assert_eq!(shard_runtime.pending_input_len(&eth), Some(0));
+    assert_eq!(shard_runtime.last_input_seq(&btc), Some(None));
+    assert_eq!(
+        shard_runtime.last_input_seq(&eth),
+        Some(Some(JournalSeq(1)))
+    );
+    assert!(shard_runtime
         .symbol_status(&btc)
         .expect("btc status should exist")
         .output_commit_quarantine
@@ -1459,14 +1478,14 @@ fn runtime_loop_run_once_keeps_unblocked_symbol_running_when_one_symbol_is_quara
 }
 
 #[test]
-fn runtime_loop_can_clear_quarantine_and_retry_pending_output() {
+fn shard_runtime_can_clear_quarantine_and_retry_pending_output() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut rejecting_output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     handoffs.insert(btc.clone(), BoundedHandoff::new(4));
     handoffs
         .get_mut(&btc)
@@ -1474,12 +1493,12 @@ fn runtime_loop_can_clear_quarantine_and_retry_pending_output() {
         .enqueue(command_entry(1, btc.clone()))
         .expect("btc command should enqueue");
 
-    let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
-    let blocked_report = runtime_loop
+    let mut shard_runtime = ShardRuntime::new(execution_core, handoffs);
+    let blocked_report = shard_runtime
         .run_once(
             &mut journal_client,
             &mut rejecting_output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -1492,20 +1511,20 @@ fn runtime_loop_can_clear_quarantine_and_retry_pending_output() {
         .expect("btc should be escalated");
 
     assert_eq!(
-        runtime_loop.quarantine_symbol_output_commit_escalation(&btc),
+        shard_runtime.quarantine_symbol_output_commit_escalation(&btc),
         Ok(Some(decision))
     );
     assert_eq!(
-        runtime_loop.clear_symbol_output_commit_quarantine(&btc),
+        shard_runtime.clear_symbol_output_commit_quarantine(&btc),
         Ok(Some(decision))
     );
 
     let mut accepting_output = AcceptingJournalOutputAppender::new();
-    let retry_report = runtime_loop
+    let retry_report = shard_runtime
         .run_once(
             &mut journal_client,
             &mut accepting_output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -1518,9 +1537,12 @@ fn runtime_loop_can_clear_quarantine_and_retry_pending_output() {
     assert_eq!(btc_report.input_processed_count, 0);
     assert_eq!(btc_report.safe_point_advanced_count, 1);
     assert_eq!(btc_report.block_decision, None);
-    assert_eq!(runtime_loop.last_input_seq(&btc), Some(Some(JournalSeq(1))));
     assert_eq!(
-        runtime_loop
+        shard_runtime.last_input_seq(&btc),
+        Some(Some(JournalSeq(1)))
+    );
+    assert_eq!(
+        shard_runtime
             .symbol_status(&btc)
             .expect("btc status should exist")
             .pending_output_len,
@@ -1530,14 +1552,14 @@ fn runtime_loop_can_clear_quarantine_and_retry_pending_output() {
 }
 
 #[test]
-fn runtime_loop_clear_quarantine_does_not_drop_pending_output_when_retry_fails() {
+fn shard_runtime_clear_quarantine_does_not_drop_pending_output_when_retry_fails() {
     let btc = Symbol("BTC-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut rejecting_output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
 
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(btc.clone());
     handoffs.insert(btc.clone(), BoundedHandoff::new(4));
     handoffs
         .get_mut(&btc)
@@ -1545,12 +1567,12 @@ fn runtime_loop_clear_quarantine_does_not_drop_pending_output_when_retry_fails()
         .enqueue(command_entry(1, btc.clone()))
         .expect("btc command should enqueue");
 
-    let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
-    let blocked_report = runtime_loop
+    let mut shard_runtime = ShardRuntime::new(execution_core, handoffs);
+    let blocked_report = shard_runtime
         .run_once(
             &mut journal_client,
             &mut rejecting_output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -1563,19 +1585,19 @@ fn runtime_loop_clear_quarantine_does_not_drop_pending_output_when_retry_fails()
         .expect("btc should be escalated");
 
     assert_eq!(
-        runtime_loop.quarantine_symbol_output_commit_escalation(&btc),
+        shard_runtime.quarantine_symbol_output_commit_escalation(&btc),
         Ok(Some(first_decision))
     );
     assert_eq!(
-        runtime_loop.clear_symbol_output_commit_quarantine(&btc),
+        shard_runtime.clear_symbol_output_commit_quarantine(&btc),
         Ok(Some(first_decision))
     );
 
-    let retry_report = runtime_loop
+    let retry_report = shard_runtime
         .run_once(
             &mut journal_client,
             &mut rejecting_output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -1594,15 +1616,15 @@ fn runtime_loop_clear_quarantine_does_not_drop_pending_output_when_retry_fails()
             .action,
         OutputCommitBlockAction::StopAndEscalate
     );
-    assert_eq!(runtime_loop.last_input_seq(&btc), Some(None));
+    assert_eq!(shard_runtime.last_input_seq(&btc), Some(None));
     assert_eq!(
-        runtime_loop
+        shard_runtime
             .symbol_status(&btc)
             .expect("btc status should exist")
             .pending_output_len,
         1
     );
-    assert!(runtime_loop
+    assert!(shard_runtime
         .symbol_status(&btc)
         .expect("btc status should exist")
         .output_commit_escalation
@@ -1610,16 +1632,16 @@ fn runtime_loop_clear_quarantine_does_not_drop_pending_output_when_retry_fails()
 }
 
 #[test]
-fn runtime_loop_cycle_reports_symbols_in_deterministic_order() {
+fn shard_runtime_cycle_reports_symbols_in_deterministic_order() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
-    let mut manager = ShardExecutionCore::new();
+    let mut execution_core = ShardExecutionCore::new();
     let mut handoffs = HashMap::new();
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
 
-    manager.add_symbol(eth.clone());
-    manager.add_symbol(btc.clone());
+    execution_core.add_symbol(eth.clone());
+    execution_core.add_symbol(btc.clone());
     handoffs.insert(eth.clone(), BoundedHandoff::new(4));
     handoffs.insert(btc.clone(), BoundedHandoff::new(4));
     handoffs
@@ -1633,12 +1655,12 @@ fn runtime_loop_cycle_reports_symbols_in_deterministic_order() {
         .enqueue(command_entry(1, btc.clone()))
         .expect("btc command should enqueue");
 
-    let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
-    let report = runtime_loop
+    let mut shard_runtime = ShardRuntime::new(execution_core, handoffs);
+    let report = shard_runtime
         .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -1655,78 +1677,87 @@ fn runtime_loop_cycle_reports_symbols_in_deterministic_order() {
     assert!(!report.has_work_remaining());
     assert!(!report.has_blocked_symbols());
     assert_eq!(report_symbols, vec![btc.clone(), eth.clone()]);
-    assert_eq!(runtime_loop.last_input_seq(&btc), Some(Some(JournalSeq(1))));
-    assert_eq!(runtime_loop.last_input_seq(&eth), Some(Some(JournalSeq(1))));
+    assert_eq!(
+        shard_runtime.last_input_seq(&btc),
+        Some(Some(JournalSeq(1)))
+    );
+    assert_eq!(
+        shard_runtime.last_input_seq(&eth),
+        Some(Some(JournalSeq(1)))
+    );
 }
 
 #[test]
-fn runtime_loop_run_limited_drains_work_until_idle() {
+fn shard_runtime_run_limited_drains_work_until_idle() {
     let btc = Symbol("BTC-USDT".to_string());
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
-    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone()], 4, 8);
+    let mut shard_runtime = ShardRuntime::new_for_symbols(vec![btc.clone()], 4, 8);
 
     assert_eq!(
-        runtime_loop.enqueue_inputs(vec![
+        shard_runtime.enqueue_inputs(vec![
             command_entry(1, btc.clone()),
             command_entry(2, btc.clone()),
         ]),
         Ok(2)
     );
 
-    let report = runtime_loop
+    let report = shard_runtime
         .run_limited(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
-            RuntimeLoopRunLimit { max_cycles: 4 },
+            ShardRuntimeRunLimit { max_cycles: 4 },
         )
         .expect("limited run should drain queued work");
 
-    assert_eq!(report.stop_reason, RuntimeLoopRunStopReason::Idle);
+    assert_eq!(report.stop_reason, ShardRuntimeRunStopReason::Idle);
     assert_eq!(report.cycle_count(), 2);
     assert!(report.made_progress);
     assert!(!report.has_work_remaining);
     assert!(!report.has_blocked_symbols);
     assert!(report.is_idle());
-    assert_eq!(runtime_loop.last_input_seq(&btc), Some(Some(JournalSeq(2))));
-    assert_eq!(runtime_loop.pending_input_len(&btc), Some(0));
+    assert_eq!(
+        shard_runtime.last_input_seq(&btc),
+        Some(Some(JournalSeq(2)))
+    );
+    assert_eq!(shard_runtime.pending_input_len(&btc), Some(0));
     assert_eq!(output.read_all().len(), 2);
 }
 
 #[test]
-fn runtime_loop_run_limited_reports_run_limit_exhaustion_with_remaining_work() {
+fn shard_runtime_run_limited_reports_run_limit_exhaustion_with_remaining_work() {
     let btc = Symbol("BTC-USDT".to_string());
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
-    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone()], 4, 8);
+    let mut shard_runtime = ShardRuntime::new_for_symbols(vec![btc.clone()], 4, 8);
 
     assert_eq!(
-        runtime_loop.enqueue_inputs(vec![
+        shard_runtime.enqueue_inputs(vec![
             command_entry(1, btc.clone()),
             command_entry(2, btc.clone()),
         ]),
         Ok(2)
     );
 
-    let report = runtime_loop
+    let report = shard_runtime
         .run_limited(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
-            RuntimeLoopRunLimit { max_cycles: 1 },
+            ShardRuntimeRunLimit { max_cycles: 1 },
         )
         .expect("limited run should stop when run limit is consumed");
 
     assert_eq!(
         report.stop_reason,
-        RuntimeLoopRunStopReason::RunLimitReached
+        ShardRuntimeRunStopReason::RunLimitReached
     );
     assert_eq!(report.cycle_count(), 1);
     assert!(report.made_progress);
@@ -1735,21 +1766,24 @@ fn runtime_loop_run_limited_reports_run_limit_exhaustion_with_remaining_work() {
     assert!(!report.is_idle());
     assert_eq!(report.symbols_with_remaining_work(), vec![btc.clone()]);
     assert_eq!(report.blocked_symbols(), Vec::<Symbol>::new());
-    assert_eq!(runtime_loop.last_input_seq(&btc), Some(Some(JournalSeq(1))));
-    assert_eq!(runtime_loop.pending_input_len(&btc), Some(1));
+    assert_eq!(
+        shard_runtime.last_input_seq(&btc),
+        Some(Some(JournalSeq(1)))
+    );
+    assert_eq!(shard_runtime.pending_input_len(&btc), Some(1));
     assert_eq!(output.read_all().len(), 1);
 }
 
 #[test]
-fn runtime_loop_run_limited_stops_after_unblocked_work_drains_when_symbol_is_blocked() {
+fn shard_runtime_run_limited_stops_after_unblocked_work_drains_when_symbol_is_blocked() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
     let mut journal_client = OutputJournalClient::new();
     let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
-    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone(), eth.clone()], 4, 8);
+    let mut shard_runtime = ShardRuntime::new_for_symbols(vec![btc.clone(), eth.clone()], 4, 8);
 
     assert_eq!(
-        runtime_loop.enqueue_inputs(vec![
+        shard_runtime.enqueue_inputs(vec![
             command_entry(1, btc.clone()),
             command_entry(1, eth.clone()),
             command_entry(2, eth.clone()),
@@ -1757,19 +1791,19 @@ fn runtime_loop_run_limited_stops_after_unblocked_work_drains_when_symbol_is_blo
         Ok(3)
     );
 
-    let report = runtime_loop
+    let report = shard_runtime
         .run_limited(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
-            RuntimeLoopRunLimit { max_cycles: 4 },
+            ShardRuntimeRunLimit { max_cycles: 4 },
         )
         .expect("limited run should stop once only blocked work remains");
 
-    assert_eq!(report.stop_reason, RuntimeLoopRunStopReason::Blocked);
+    assert_eq!(report.stop_reason, ShardRuntimeRunStopReason::Blocked);
     assert_eq!(report.cycle_count(), 3);
     assert!(report.made_progress);
     assert!(report.has_work_remaining);
@@ -1786,11 +1820,14 @@ fn runtime_loop_run_limited_stops_after_unblocked_work_drains_when_symbol_is_blo
     assert_eq!(btc_work_status.pending_input_len, 0);
     assert_eq!(btc_work_status.pending_output_len, 1);
     assert!(btc_work_status.output_commit_blocked);
-    assert_eq!(runtime_loop.last_input_seq(&btc), Some(None));
-    assert_eq!(runtime_loop.last_input_seq(&eth), Some(Some(JournalSeq(2))));
-    assert_eq!(runtime_loop.pending_input_len(&eth), Some(0));
+    assert_eq!(shard_runtime.last_input_seq(&btc), Some(None));
     assert_eq!(
-        runtime_loop
+        shard_runtime.last_input_seq(&eth),
+        Some(Some(JournalSeq(2)))
+    );
+    assert_eq!(shard_runtime.pending_input_len(&eth), Some(0));
+    assert_eq!(
+        shard_runtime
             .symbol_status(&btc)
             .expect("btc status should exist")
             .pending_output_len,
@@ -1800,36 +1837,36 @@ fn runtime_loop_run_limited_stops_after_unblocked_work_drains_when_symbol_is_blo
 }
 
 #[test]
-fn runtime_loop_run_limited_reports_initial_work_when_run_limit_is_zero() {
+fn shard_runtime_run_limited_reports_initial_work_when_run_limit_is_zero() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
-    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![eth.clone(), btc.clone()], 4, 8);
+    let mut shard_runtime = ShardRuntime::new_for_symbols(vec![eth.clone(), btc.clone()], 4, 8);
 
     assert_eq!(
-        runtime_loop.enqueue_inputs(vec![
+        shard_runtime.enqueue_inputs(vec![
             command_entry(1, eth.clone()),
             command_entry(1, btc.clone()),
         ]),
         Ok(2)
     );
 
-    let report = runtime_loop
+    let report = shard_runtime
         .run_limited(
             &mut journal_client,
             &mut output,
-            RuntimeLoopRunOnceLimits {
+            ShardRuntimeRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
-            RuntimeLoopRunLimit { max_cycles: 0 },
+            ShardRuntimeRunLimit { max_cycles: 0 },
         )
         .expect("zero limit should report initial work without running a run_once cycle");
 
     assert_eq!(
         report.stop_reason,
-        RuntimeLoopRunStopReason::RunLimitReached
+        ShardRuntimeRunStopReason::RunLimitReached
     );
     assert_eq!(report.cycle_count(), 0);
     assert!(!report.made_progress);
@@ -1847,7 +1884,7 @@ fn runtime_loop_run_limited_reports_initial_work_when_run_limit_is_zero() {
             .collect::<Vec<_>>(),
         vec![btc.clone(), eth.clone()]
     );
-    assert_eq!(runtime_loop.last_input_seq(&btc), Some(None));
-    assert_eq!(runtime_loop.last_input_seq(&eth), Some(None));
+    assert_eq!(shard_runtime.last_input_seq(&btc), Some(None));
+    assert_eq!(shard_runtime.last_input_seq(&eth), Some(None));
     assert_eq!(output.read_all().len(), 0);
 }
