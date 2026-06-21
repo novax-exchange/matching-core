@@ -467,8 +467,10 @@ fn matching_runtime_shutdown_closes_input_without_draining_pending_work() {
     );
     assert!(report.has_work_remaining());
     assert_eq!(report.shards_with_remaining_work(), vec![RuntimeShardId(0)]);
+    assert_eq!(report.symbols_with_remaining_work(), vec![btc.clone()]);
     assert!(!report.has_blocked_symbols());
     assert_eq!(report.blocked_shards(), Vec::<RuntimeShardId>::new());
+    assert_eq!(report.blocked_symbols(), Vec::<Symbol>::new());
     assert_eq!(runtime.input_state(), MatchingRuntimeInputState::Closed);
     assert_eq!(
         runtime.enqueue_input(command_entry(2, btc.clone())),
@@ -636,6 +638,8 @@ fn matching_runtime_drain_configured_reports_blocked_output() {
     assert!(report.has_blocked_symbols());
     assert_eq!(report.shards_with_remaining_work(), vec![RuntimeShardId(0)]);
     assert_eq!(report.blocked_shards(), vec![RuntimeShardId(0)]);
+    assert_eq!(report.symbols_with_remaining_work(), vec![btc.clone()]);
+    assert_eq!(report.blocked_symbols(), vec![btc.clone()]);
 }
 
 #[test]
@@ -745,6 +749,11 @@ fn matching_runtime_run_report_summarizes_mixed_shard_states() {
         vec![RuntimeShardId(0), RuntimeShardId(1)]
     );
     assert_eq!(report.blocked_shards(), vec![RuntimeShardId(0)]);
+    assert_eq!(
+        report.symbols_with_remaining_work(),
+        vec![btc.clone(), eth.clone()]
+    );
+    assert_eq!(report.blocked_symbols(), vec![btc.clone()]);
     assert_eq!(report.shards_reaching_run_limit(), vec![RuntimeShardId(1)]);
 }
 
@@ -778,6 +787,8 @@ fn matching_runtime_run_report_reports_blocked_when_no_shard_can_progress() {
     assert!(report.has_blocked_symbols());
     assert!(!report.needs_another_run());
     assert_eq!(report.blocked_shards(), vec![RuntimeShardId(0)]);
+    assert_eq!(report.symbols_with_remaining_work(), vec![btc.clone()]);
+    assert_eq!(report.blocked_symbols(), vec![btc.clone()]);
 }
 
 #[test]
@@ -934,6 +945,8 @@ fn matching_runtime_run_until_idle_stops_when_only_blocked_work_remains() {
     assert_eq!(report.configured_run_count(), 1);
     assert!(report.has_blocked_symbols());
     assert_eq!(report.blocked_shards(), vec![RuntimeShardId(0)]);
+    assert_eq!(report.symbols_with_remaining_work(), vec![btc.clone()]);
+    assert_eq!(report.blocked_symbols(), vec![btc.clone()]);
 }
 
 #[test]
@@ -988,6 +1001,8 @@ fn matching_runtime_status_reports_pending_input_without_running() {
     assert!(!status.is_idle());
     assert_eq!(status.shards_with_remaining_work(), vec![RuntimeShardId(1)]);
     assert_eq!(status.blocked_shards(), Vec::<RuntimeShardId>::new());
+    assert_eq!(status.symbols_with_remaining_work(), vec![eth.clone()]);
+    assert_eq!(status.blocked_symbols(), Vec::<Symbol>::new());
 
     let eth_status = status
         .shard_status(RuntimeShardId(1))
@@ -1044,6 +1059,8 @@ fn matching_runtime_status_reports_blocked_output_pressure() {
     assert!(!status.is_idle());
     assert!(status.has_blocked_symbols());
     assert_eq!(status.blocked_shards(), vec![RuntimeShardId(0)]);
+    assert_eq!(status.symbols_with_remaining_work(), vec![btc.clone()]);
+    assert_eq!(status.blocked_symbols(), vec![btc.clone()]);
 
     let btc_status = status
         .shard_status(RuntimeShardId(0))

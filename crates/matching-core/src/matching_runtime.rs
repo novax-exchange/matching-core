@@ -458,6 +458,20 @@ impl MatchingRuntimeStatus {
             .collect()
     }
 
+    pub fn symbols_with_remaining_work(&self) -> Vec<Symbol> {
+        self.shard_statuses
+            .iter()
+            .flat_map(MatchingRuntimeShardStatus::symbols_with_remaining_work)
+            .collect()
+    }
+
+    pub fn blocked_symbols(&self) -> Vec<Symbol> {
+        self.shard_statuses
+            .iter()
+            .flat_map(MatchingRuntimeShardStatus::blocked_symbols)
+            .collect()
+    }
+
     pub fn shards_with_full_input(&self) -> Vec<RuntimeShardId> {
         self.shard_statuses
             .iter()
@@ -518,6 +532,22 @@ impl MatchingRuntimeShardStatus {
         self.symbol_statuses
             .iter()
             .any(|status| status.pending_output_full)
+    }
+
+    pub fn symbols_with_remaining_work(&self) -> Vec<Symbol> {
+        self.symbol_statuses
+            .iter()
+            .filter(|status| status.has_work_remaining())
+            .map(|status| status.symbol.clone())
+            .collect()
+    }
+
+    pub fn blocked_symbols(&self) -> Vec<Symbol> {
+        self.symbol_statuses
+            .iter()
+            .filter(|status| status.output_commit_blocked)
+            .map(|status| status.symbol.clone())
+            .collect()
     }
 
     pub fn symbols_with_full_input(&self) -> Vec<Symbol> {
@@ -614,6 +644,20 @@ impl MatchingRuntimeRunReport {
             .collect()
     }
 
+    pub fn symbols_with_remaining_work(&self) -> Vec<Symbol> {
+        self.shard_reports
+            .iter()
+            .flat_map(|report| report.run_report.symbols_with_remaining_work())
+            .collect()
+    }
+
+    pub fn blocked_symbols(&self) -> Vec<Symbol> {
+        self.shard_reports
+            .iter()
+            .flat_map(|report| report.run_report.blocked_symbols())
+            .collect()
+    }
+
     pub fn shards_reaching_run_limit(&self) -> Vec<RuntimeShardId> {
         self.shard_reports
             .iter()
@@ -660,6 +704,14 @@ impl MatchingRuntimeRunUntilIdleReport {
     pub fn shards_with_remaining_work(&self) -> Vec<RuntimeShardId> {
         self.final_status.shards_with_remaining_work()
     }
+
+    pub fn symbols_with_remaining_work(&self) -> Vec<Symbol> {
+        self.final_status.symbols_with_remaining_work()
+    }
+
+    pub fn blocked_symbols(&self) -> Vec<Symbol> {
+        self.final_status.blocked_symbols()
+    }
 }
 
 impl MatchingRuntimeDrainReport {
@@ -686,6 +738,14 @@ impl MatchingRuntimeDrainReport {
     pub fn blocked_shards(&self) -> Vec<RuntimeShardId> {
         self.run_report.blocked_shards()
     }
+
+    pub fn symbols_with_remaining_work(&self) -> Vec<Symbol> {
+        self.run_report.symbols_with_remaining_work()
+    }
+
+    pub fn blocked_symbols(&self) -> Vec<Symbol> {
+        self.run_report.blocked_symbols()
+    }
 }
 
 impl MatchingRuntimeShutdownReport {
@@ -703,5 +763,13 @@ impl MatchingRuntimeShutdownReport {
 
     pub fn blocked_shards(&self) -> Vec<RuntimeShardId> {
         self.final_status.blocked_shards()
+    }
+
+    pub fn symbols_with_remaining_work(&self) -> Vec<Symbol> {
+        self.final_status.symbols_with_remaining_work()
+    }
+
+    pub fn blocked_symbols(&self) -> Vec<Symbol> {
+        self.final_status.blocked_symbols()
     }
 }
