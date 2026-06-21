@@ -431,7 +431,7 @@ fn runtime_loop_can_be_created_for_symbols_with_runtime_config() {
 #[test]
 fn runtime_loop_tick_limits_can_be_derived_from_runtime_config() {
     let mut config = MatchingRuntimeConfig::default();
-    config.execution_loop.max_input_entries_per_step = 7;
+    config.symbol_runtime.max_input_entries_per_step = 7;
     config.output_commit.max_output_requests_per_step = 9;
 
     let limits = RuntimeLoopTickLimits::from_config(&config);

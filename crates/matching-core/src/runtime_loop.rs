@@ -27,7 +27,7 @@ pub struct RuntimeLoopTickLimits {
 impl RuntimeLoopTickLimits {
     pub fn from_config(config: &MatchingRuntimeConfig) -> Self {
         Self {
-            max_input_entries_per_symbol: config.execution_loop.max_input_entries_per_step,
+            max_input_entries_per_symbol: config.symbol_runtime.max_input_entries_per_step,
             max_output_requests_per_symbol: config.output_commit.max_output_requests_per_step,
         }
     }

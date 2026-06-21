@@ -13,8 +13,9 @@ use matching_core::output_commit_boundary::{
     OutputCommitRequest, OutputJournalClient, PendingOutputBufferError, MATCHING_OUTPUT_VERSION,
 };
 use matching_core::runtime_config::{
-    ExecutionLoopConfig, HandoffConfig, InputConsumerConfig, MatchingRuntimeConfig,
-    OutputCommitConfig, SnapshotConfig, SnapshotVerificationConfig,
+    HandoffConfig, InputConsumerConfig, MatchingRuntimeConfig, OutputCommitConfig,
+    RuntimeHostConfig, RuntimeHostMode, RuntimeTopologyConfig, SnapshotConfig,
+    SnapshotVerificationConfig, SymbolAssignmentPolicy, SymbolRuntimeConfig,
 };
 use matching_core::runtime_manager::{
     OutputCommitBlockageKind, OutputCommitBlockageStatus, RuntimeManager, RuntimeManagerError,
@@ -397,6 +398,13 @@ fn runtime_manager_query_api_is_available_from_public_api() {
 fn runtime_manager_uses_runtime_config_for_output_policy_from_public_api() {
     let btc = Symbol("BTC-USDT".to_string());
     let config = MatchingRuntimeConfig {
+        topology: RuntimeTopologyConfig {
+            shard_count: 1,
+            assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
+        },
+        host: RuntimeHostConfig {
+            mode: RuntimeHostMode::Manual,
+        },
         output_commit: OutputCommitConfig {
             pending_output_capacity: 7,
             max_unavailable_attempts: 2,
@@ -406,7 +414,7 @@ fn runtime_manager_uses_runtime_config_for_output_policy_from_public_api() {
             max_batch_entries: 11,
         },
         handoff: HandoffConfig { capacity: 13 },
-        execution_loop: ExecutionLoopConfig {
+        symbol_runtime: SymbolRuntimeConfig {
             max_input_entries_per_step: 17,
         },
         snapshot: SnapshotConfig { retention_limit: 3 },

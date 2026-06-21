@@ -1,9 +1,13 @@
+use crate::types::Symbol;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchingRuntimeConfig {
+    pub topology: RuntimeTopologyConfig,
+    pub host: RuntimeHostConfig,
     pub output_commit: OutputCommitConfig,
     pub input_consumer: InputConsumerConfig,
     pub handoff: HandoffConfig,
-    pub execution_loop: ExecutionLoopConfig,
+    pub symbol_runtime: SymbolRuntimeConfig,
     pub snapshot: SnapshotConfig,
     pub snapshot_verification: SnapshotVerificationConfig,
 }
@@ -11,14 +15,69 @@ pub struct MatchingRuntimeConfig {
 impl Default for MatchingRuntimeConfig {
     fn default() -> Self {
         Self {
+            topology: RuntimeTopologyConfig::default(),
+            host: RuntimeHostConfig::default(),
             output_commit: OutputCommitConfig::default(),
             input_consumer: InputConsumerConfig::default(),
             handoff: HandoffConfig::default(),
-            execution_loop: ExecutionLoopConfig::default(),
+            symbol_runtime: SymbolRuntimeConfig::default(),
             snapshot: SnapshotConfig::default(),
             snapshot_verification: SnapshotVerificationConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeTopologyConfig {
+    pub shard_count: usize,
+    pub assignment_policy: SymbolAssignmentPolicy,
+}
+
+impl Default for RuntimeTopologyConfig {
+    fn default() -> Self {
+        Self {
+            shard_count: 1,
+            assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SymbolAssignmentPolicy {
+    DeclarationOrder,
+    StableHash,
+    ExplicitMap(Vec<SymbolShardAssignment>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymbolShardAssignment {
+    pub symbol: Symbol,
+    pub shard_id: RuntimeShardId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RuntimeShardId(pub usize);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeHostConfig {
+    pub mode: RuntimeHostMode,
+}
+
+impl Default for RuntimeHostConfig {
+    fn default() -> Self {
+        Self {
+            mode: RuntimeHostMode::Manual,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeHostMode {
+    Manual,
+    Inline,
+    ThreadPerShard,
+    AsyncTaskPerShard,
+    ProcessPerShard,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,11 +122,11 @@ impl Default for HandoffConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExecutionLoopConfig {
+pub struct SymbolRuntimeConfig {
     pub max_input_entries_per_step: usize,
 }
 
-impl Default for ExecutionLoopConfig {
+impl Default for SymbolRuntimeConfig {
     fn default() -> Self {
         Self {
             max_input_entries_per_step: 1024,
