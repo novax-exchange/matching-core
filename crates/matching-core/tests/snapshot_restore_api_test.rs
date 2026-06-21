@@ -4,8 +4,8 @@ use matching_core::order_book::OrderBook;
 use matching_core::per_symbol_execution_loop::SymbolRuntime;
 use matching_core::replay_runner::ReplayRunner;
 use matching_core::snapshot_restore::{
-    OrderBookSnapshot, SnapshotSerializationError, SnapshotVerificationOrchestrator,
-    SnapshotVerificationSchedulingOutcome, SymbolRuntimeSnapshot,
+    OrderBookSnapshot, SnapshotSerializationError, SnapshotVerificationMismatchDimension,
+    SnapshotVerificationOrchestrator, SnapshotVerificationSchedulingOutcome, SymbolRuntimeSnapshot,
 };
 use matching_core::snapshot_store::{
     FileSnapshotStore, InMemorySnapshotStore, SnapshotManifestSigner, SnapshotManifestVerifier,
@@ -676,6 +676,7 @@ fn snapshot_verification_orchestrator_run_once_signs_latest_unverified_candidate
         report.outcome,
         SnapshotVerificationSchedulingOutcome::Verified
     );
+    assert_eq!(report.failure_evidence, None);
     assert_eq!(report.skipped_already_verified_safe_points, Vec::new());
     assert!(report
         .verification
@@ -789,6 +790,7 @@ fn snapshot_verification_orchestrator_run_once_reports_no_candidate_from_public_
         report.outcome,
         SnapshotVerificationSchedulingOutcome::NoCandidate
     );
+    assert_eq!(report.failure_evidence, None);
     assert_eq!(report.candidate_safe_point, None);
     assert_eq!(report.skipped_already_verified_safe_points, Vec::new());
     assert_eq!(report.verification, None);
@@ -827,6 +829,7 @@ fn snapshot_verification_orchestrator_run_once_reports_mismatch_without_manifest
 
     let mut snapshot = snapshot_after_journal_prefix(&journal, 1);
     snapshot.next_market_seq += 1;
+    snapshot.order_book_snapshot.resting_orders[0].quantity = Quantity(4);
     store
         .save_symbol_snapshot(&snapshot)
         .expect("drifted snapshot should be written");
@@ -840,11 +843,46 @@ fn snapshot_verification_orchestrator_run_once_reports_mismatch_without_manifest
         report.outcome,
         SnapshotVerificationSchedulingOutcome::Mismatch
     );
+    let failure_evidence = report
+        .failure_evidence
+        .as_ref()
+        .expect("mismatch should produce evidence for Evidence Boundary");
+    assert_eq!(failure_evidence.symbol, symbol);
+    assert_eq!(failure_evidence.safe_point, JournalSeq(1));
+    assert_eq!(
+        failure_evidence.mismatched_dimensions,
+        vec![
+            SnapshotVerificationMismatchDimension::OutputEntries,
+            SnapshotVerificationMismatchDimension::Checksum,
+        ]
+    );
+    assert_eq!(failure_evidence.first_output_mismatch_index, Some(0));
+    assert_ne!(
+        failure_evidence.actual_output_digest,
+        failure_evidence.expected_output_digest
+    );
+    assert_ne!(
+        failure_evidence.actual_checksum,
+        failure_evidence.expected_checksum
+    );
+    assert_eq!(
+        failure_evidence.actual_last_replayed_seq,
+        failure_evidence.expected_last_replayed_seq
+    );
     assert!(
         !report
             .verification
+            .as_ref()
             .expect("mismatched candidate should still produce comparison evidence")
             .verified_manifest_written
+    );
+    assert_eq!(
+        report
+            .verification
+            .expect("mismatched candidate should still produce comparison evidence")
+            .failure_evidence
+            .expect("candidate verification should carry the same mismatch evidence"),
+        *failure_evidence
     );
     assert!(store
         .load_symbol_snapshot_verification_manifest(&symbol, JournalSeq(1))

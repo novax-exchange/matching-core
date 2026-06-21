@@ -1,6 +1,7 @@
 use crate::journal_adapter::JournalInputReader;
 use crate::order::Order;
 use crate::order_book::OrderBook;
+use crate::output_commit_boundary::OutputDigest;
 use crate::replay_runner::{ReplayComparisonResult, ReplayResult, ReplayRunner};
 use crate::snapshot_store::{FileSnapshotStore, SnapshotManifestSigner, SnapshotStoreError};
 use crate::types::*;
@@ -31,6 +32,28 @@ pub struct SnapshotVerificationReport {
     pub safe_point: JournalSeq,
     pub comparison: ReplayComparisonResult,
     pub verified_manifest_written: bool,
+    pub failure_evidence: Option<SnapshotVerificationFailureEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotVerificationFailureEvidence {
+    pub symbol: Symbol,
+    pub safe_point: JournalSeq,
+    pub mismatched_dimensions: Vec<SnapshotVerificationMismatchDimension>,
+    pub first_output_mismatch_index: Option<usize>,
+    pub actual_output_digest: OutputDigest,
+    pub expected_output_digest: OutputDigest,
+    pub actual_checksum: Checksum,
+    pub expected_checksum: Checksum,
+    pub actual_last_replayed_seq: Option<JournalSeq>,
+    pub expected_last_replayed_seq: Option<JournalSeq>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnapshotVerificationMismatchDimension {
+    OutputEntries,
+    Checksum,
+    SafePoint,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +63,7 @@ pub struct SnapshotVerificationSchedulingReport {
     pub candidate_safe_point: Option<JournalSeq>,
     pub skipped_already_verified_safe_points: Vec<JournalSeq>,
     pub verification: Option<SnapshotVerificationReport>,
+    pub failure_evidence: Option<SnapshotVerificationFailureEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +95,8 @@ impl SnapshotVerificationOrchestrator {
         let actual = ReplayRunner::new(self.symbol.clone())
             .replay_result_from_snapshot(snapshot.clone(), journal);
         let comparison = actual.compare_with(expected);
+        let failure_evidence =
+            snapshot_verification_failure_evidence(&self.symbol, safe_point, &comparison);
         let verified_manifest_written = if comparison.is_match() {
             snapshot_store
                 .mark_symbol_snapshot_verified_by(&self.symbol, safe_point, signer)?
@@ -84,6 +110,7 @@ impl SnapshotVerificationOrchestrator {
             safe_point,
             comparison,
             verified_manifest_written,
+            failure_evidence,
         })
     }
 
@@ -133,6 +160,7 @@ impl SnapshotVerificationOrchestrator {
                 outcome,
                 candidate_safe_point: Some(record.safe_point),
                 skipped_already_verified_safe_points,
+                failure_evidence: verification.failure_evidence.clone(),
                 verification: Some(verification),
             });
         }
@@ -143,8 +171,44 @@ impl SnapshotVerificationOrchestrator {
             candidate_safe_point: None,
             skipped_already_verified_safe_points,
             verification: None,
+            failure_evidence: None,
         })
     }
+}
+
+fn snapshot_verification_failure_evidence(
+    symbol: &Symbol,
+    safe_point: JournalSeq,
+    comparison: &ReplayComparisonResult,
+) -> Option<SnapshotVerificationFailureEvidence> {
+    if comparison.is_match() {
+        return None;
+    }
+
+    let mut mismatched_dimensions = Vec::new();
+
+    if !comparison.output_entries_match {
+        mismatched_dimensions.push(SnapshotVerificationMismatchDimension::OutputEntries);
+    }
+    if !comparison.checksum_match {
+        mismatched_dimensions.push(SnapshotVerificationMismatchDimension::Checksum);
+    }
+    if !comparison.last_replayed_seq_match {
+        mismatched_dimensions.push(SnapshotVerificationMismatchDimension::SafePoint);
+    }
+
+    Some(SnapshotVerificationFailureEvidence {
+        symbol: symbol.clone(),
+        safe_point,
+        mismatched_dimensions,
+        first_output_mismatch_index: comparison.first_output_mismatch_index,
+        actual_output_digest: comparison.actual_output_digest,
+        expected_output_digest: comparison.expected_output_digest,
+        actual_checksum: comparison.actual_checksum,
+        expected_checksum: comparison.expected_checksum,
+        actual_last_replayed_seq: comparison.actual_last_replayed_seq,
+        expected_last_replayed_seq: comparison.expected_last_replayed_seq,
+    })
 }
 
 fn expected_replay_tail_result_after_safe_point(
