@@ -15,23 +15,24 @@ use crate::runtime_topology::RuntimeTopologyError;
 use crate::types::Symbol;
 use std::collections::HashMap;
 
-pub trait RuntimeHostDriver {
-    fn shard_count(&self) -> usize;
-    fn shard_ids(&self) -> Vec<RuntimeShardId>;
-    fn symbols_for_shard(&self, shard_id: RuntimeShardId) -> Option<&[Symbol]>;
-    fn plan_enqueue_inputs(
+pub trait InputHandoffWriter {
+    fn plan_writes(
         &self,
         entries: &[JournalInputEntry],
-    ) -> Result<Vec<RuntimeHostDriverCommand>, RuntimeHostDriverError>;
-    fn enqueue_input(&mut self, entry: JournalInputEntry) -> Result<(), RuntimeHostDriverError>;
-    fn enqueue_inputs(
+    ) -> Result<Vec<InputHandoffWriteCommand>, RuntimeHostDriverError>;
+    fn write_input(&mut self, entry: JournalInputEntry) -> Result<(), RuntimeHostDriverError>;
+    fn write_inputs(
         &mut self,
         entries: Vec<JournalInputEntry>,
     ) -> Result<usize, RuntimeHostDriverError>;
-    fn can_enqueue_inputs(
-        &self,
-        entries: &[JournalInputEntry],
-    ) -> Result<(), RuntimeHostDriverError>;
+    fn can_write_inputs(&self, entries: &[JournalInputEntry])
+        -> Result<(), RuntimeHostDriverError>;
+}
+
+pub trait RuntimeHostDriver: InputHandoffWriter {
+    fn shard_count(&self) -> usize;
+    fn shard_ids(&self) -> Vec<RuntimeShardId>;
+    fn symbols_for_shard(&self, shard_id: RuntimeShardId) -> Option<&[Symbol]>;
     fn shard_statuses(&self) -> Result<Vec<RuntimeHostShardStatus>, RuntimeHostDriverError>;
     fn run_once_all(
         &mut self,
@@ -56,8 +57,8 @@ pub enum RuntimeHostDriverError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RuntimeHostDriverCommand {
-    EnqueueInputs {
+pub enum InputHandoffWriteCommand {
+    WriteInputs {
         shard_id: RuntimeShardId,
         entries: Vec<JournalInputEntry>,
     },
@@ -145,29 +146,11 @@ impl ManualRuntimeHostDriver {
     }
 }
 
-impl RuntimeHostDriver for ManualRuntimeHostDriver {
-    fn shard_count(&self) -> usize {
-        self.runners.len()
-    }
-
-    fn shard_ids(&self) -> Vec<RuntimeShardId> {
-        self.runners
-            .iter()
-            .map(RuntimeShardRunner::shard_id)
-            .collect()
-    }
-
-    fn symbols_for_shard(&self, shard_id: RuntimeShardId) -> Option<&[Symbol]> {
-        self.runners
-            .iter()
-            .find(|runner| runner.shard_id() == shard_id)
-            .map(RuntimeShardRunner::symbols)
-    }
-
-    fn plan_enqueue_inputs(
+impl InputHandoffWriter for ManualRuntimeHostDriver {
+    fn plan_writes(
         &self,
         entries: &[JournalInputEntry],
-    ) -> Result<Vec<RuntimeHostDriverCommand>, RuntimeHostDriverError> {
+    ) -> Result<Vec<InputHandoffWriteCommand>, RuntimeHostDriverError> {
         let owner_by_symbol = self.validate_enqueue_inputs(entries)?;
         let mut entries_by_runner: Vec<Vec<JournalInputEntry>> =
             (0..self.runners.len()).map(|_| Vec::new()).collect();
@@ -185,16 +168,14 @@ impl RuntimeHostDriver for ManualRuntimeHostDriver {
             .iter()
             .zip(entries_by_runner)
             .filter(|(_, entries)| !entries.is_empty())
-            .map(
-                |(runner, entries)| RuntimeHostDriverCommand::EnqueueInputs {
-                    shard_id: runner.shard_id(),
-                    entries,
-                },
-            )
+            .map(|(runner, entries)| InputHandoffWriteCommand::WriteInputs {
+                shard_id: runner.shard_id(),
+                entries,
+            })
             .collect())
     }
 
-    fn enqueue_input(&mut self, entry: JournalInputEntry) -> Result<(), RuntimeHostDriverError> {
+    fn write_input(&mut self, entry: JournalInputEntry) -> Result<(), RuntimeHostDriverError> {
         let symbol = entry.command.symbol().clone();
         let runner_index =
             self.runner_index_for_symbol(&symbol)
@@ -207,16 +188,16 @@ impl RuntimeHostDriver for ManualRuntimeHostDriver {
             .map_err(RuntimeHostDriverError::from)
     }
 
-    fn enqueue_inputs(
+    fn write_inputs(
         &mut self,
         entries: Vec<JournalInputEntry>,
     ) -> Result<usize, RuntimeHostDriverError> {
-        let enqueued_count = entries.len();
-        let commands = self.plan_enqueue_inputs(&entries)?;
+        let written_count = entries.len();
+        let commands = self.plan_writes(&entries)?;
 
         for command in commands {
             match command {
-                RuntimeHostDriverCommand::EnqueueInputs { shard_id, entries } => {
+                InputHandoffWriteCommand::WriteInputs { shard_id, entries } => {
                     let runner = self
                         .runners
                         .iter_mut()
@@ -229,14 +210,34 @@ impl RuntimeHostDriver for ManualRuntimeHostDriver {
             }
         }
 
-        Ok(enqueued_count)
+        Ok(written_count)
     }
 
-    fn can_enqueue_inputs(
+    fn can_write_inputs(
         &self,
         entries: &[JournalInputEntry],
     ) -> Result<(), RuntimeHostDriverError> {
         self.validate_enqueue_inputs(entries).map(|_| ())
+    }
+}
+
+impl RuntimeHostDriver for ManualRuntimeHostDriver {
+    fn shard_count(&self) -> usize {
+        self.runners.len()
+    }
+
+    fn shard_ids(&self) -> Vec<RuntimeShardId> {
+        self.runners
+            .iter()
+            .map(RuntimeShardRunner::shard_id)
+            .collect()
+    }
+
+    fn symbols_for_shard(&self, shard_id: RuntimeShardId) -> Option<&[Symbol]> {
+        self.runners
+            .iter()
+            .find(|runner| runner.shard_id() == shard_id)
+            .map(RuntimeShardRunner::symbols)
     }
 
     fn shard_statuses(&self) -> Result<Vec<RuntimeHostShardStatus>, RuntimeHostDriverError> {

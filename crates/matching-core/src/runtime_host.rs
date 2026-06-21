@@ -188,7 +188,7 @@ impl RuntimeHost {
         self.ensure_input_open()?;
 
         self.driver
-            .enqueue_input(entry)
+            .write_input(entry)
             .map_err(RuntimeHostError::from_driver_error)
     }
 
@@ -199,7 +199,7 @@ impl RuntimeHost {
         self.ensure_input_open()?;
 
         self.driver
-            .enqueue_inputs(entries)
+            .write_inputs(entries)
             .map_err(RuntimeHostError::from_driver_error)
     }
 
@@ -209,7 +209,7 @@ impl RuntimeHost {
     ) -> Result<(), RuntimeHostError> {
         self.ensure_input_open()?;
         self.driver
-            .can_enqueue_inputs(entries)
+            .can_write_inputs(entries)
             .map_err(RuntimeHostError::from_driver_error)
     }
 

@@ -2,7 +2,8 @@ use matching_core::runtime_config::{
     MatchingRuntimeConfig, RuntimeShardId, RuntimeTopologyConfig, SymbolAssignmentPolicy,
 };
 use matching_core::runtime_host_driver::{
-    ManualRuntimeHostDriver, RuntimeHostDriver, RuntimeHostDriverCommand, RuntimeHostDriverError,
+    InputHandoffWriteCommand, InputHandoffWriter, ManualRuntimeHostDriver, RuntimeHostDriver,
+    RuntimeHostDriverError,
 };
 use matching_core::runtime_loop::RuntimeLoopError;
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
@@ -72,7 +73,7 @@ fn manual_runtime_host_driver_wraps_runtime_loop_errors_from_public_api() {
     .expect("manual runtime host driver topology should resolve");
 
     assert_eq!(
-        driver.enqueue_input(command_entry(1, eth.clone())),
+        driver.write_input(command_entry(1, eth.clone())),
         Err(RuntimeHostDriverError::RuntimeLoop(
             RuntimeLoopError::UnregisteredHandoff(eth)
         ))
@@ -80,7 +81,7 @@ fn manual_runtime_host_driver_wraps_runtime_loop_errors_from_public_api() {
 }
 
 #[test]
-fn manual_runtime_host_driver_plans_enqueue_inputs_by_owning_shard_from_public_api() {
+fn manual_runtime_host_driver_plans_input_handoff_writes_by_owning_shard_from_public_api() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let sol = symbol("SOL-USDT");
@@ -99,17 +100,17 @@ fn manual_runtime_host_driver_plans_enqueue_inputs_by_owning_shard_from_public_a
     let sol_entry = command_entry(3, sol);
 
     let commands = driver
-        .plan_enqueue_inputs(&[btc_entry.clone(), eth_entry.clone(), sol_entry.clone()])
-        .expect("manual runtime host driver should plan enqueue commands");
+        .plan_writes(&[btc_entry.clone(), eth_entry.clone(), sol_entry.clone()])
+        .expect("manual runtime host driver should plan input handoff writes");
 
     assert_eq!(
         commands,
         vec![
-            RuntimeHostDriverCommand::EnqueueInputs {
+            InputHandoffWriteCommand::WriteInputs {
                 shard_id: RuntimeShardId(0),
                 entries: vec![btc_entry, sol_entry],
             },
-            RuntimeHostDriverCommand::EnqueueInputs {
+            InputHandoffWriteCommand::WriteInputs {
                 shard_id: RuntimeShardId(1),
                 entries: vec![eth_entry],
             },
