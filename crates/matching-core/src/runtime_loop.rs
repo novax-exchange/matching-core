@@ -7,6 +7,7 @@ use crate::output_commit_boundary::{
 use crate::runtime_manager::{
     RuntimeManager, RuntimeManagerError, RuntimeManagerRetryAwareStepReport, SymbolRuntimeStatus,
 };
+use crate::snapshot_restore::SymbolRuntimeSnapshot;
 use crate::snapshot_store::{SnapshotRecord, SnapshotStore, SnapshotStoreError};
 use crate::types::{Checksum, JournalSeq, Symbol};
 use std::collections::HashMap;
@@ -73,6 +74,24 @@ impl RuntimeLoop {
 
         for symbol in symbols {
             manager.add_symbol(symbol.clone());
+            handoffs.insert(symbol, BoundedHandoff::new(pending_input_capacity));
+        }
+
+        Self { manager, handoffs }
+    }
+
+    pub fn new_from_symbol_snapshots(
+        snapshots: Vec<SymbolRuntimeSnapshot>,
+        pending_input_capacity: usize,
+        pending_output_capacity: usize,
+    ) -> Self {
+        let mut manager = RuntimeManager::new_with_pending_output_capacity(pending_output_capacity);
+        let mut handoffs = HashMap::new();
+
+        for snapshot in snapshots {
+            let symbol = snapshot.order_book_snapshot.symbol.clone();
+
+            manager.restore_symbol_from_snapshot(snapshot);
             handoffs.insert(symbol, BoundedHandoff::new(pending_input_capacity));
         }
 

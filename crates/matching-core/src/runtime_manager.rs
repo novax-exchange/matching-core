@@ -134,6 +134,27 @@ impl RuntimeManager {
             });
     }
 
+    pub fn restore_symbol_from_snapshot(&mut self, snapshot: SymbolRuntimeSnapshot) {
+        let symbol = snapshot.order_book_snapshot.symbol.clone();
+
+        self.runtimes.insert(
+            symbol.clone(),
+            SymbolRuntime::restore_from_snapshot(snapshot),
+        );
+        self.pending_output_buffers.insert(
+            symbol.clone(),
+            PendingOutputBuffer::new(self.default_pending_output_capacity),
+        );
+        self.output_commit_retry_trackers.insert(
+            symbol.clone(),
+            OutputCommitRetryTracker::new(self.output_commit_max_unavailable_attempts),
+        );
+        self.output_commit_escalations.remove(&symbol);
+        self.output_commit_escalation_query_statuses.remove(&symbol);
+        self.output_commit_quarantines.remove(&symbol);
+        self.output_commit_quarantine_query_statuses.remove(&symbol);
+    }
+
     pub fn symbol_status(&self, symbol: &Symbol) -> Option<SymbolRuntimeStatus> {
         let runtime = self.runtimes.get(symbol)?;
         let pending_output_buffer = self.pending_output_buffers.get(symbol)?;

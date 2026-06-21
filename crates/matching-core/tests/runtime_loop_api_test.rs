@@ -11,6 +11,7 @@ use matching_core::output_commit_boundary::{
 use matching_core::replay_runner::{ReplayResult, ReplayRunner};
 use matching_core::runtime_loop::{RuntimeLoop, RuntimeLoopError, RuntimeLoopTickLimits};
 use matching_core::runtime_manager::RuntimeManager;
+use matching_core::snapshot_restore::{OrderBookSnapshot, SymbolRuntimeSnapshot};
 use matching_core::snapshot_store::{InMemorySnapshotStore, SnapshotStore};
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 use std::collections::HashMap;
@@ -618,6 +619,65 @@ fn runtime_loop_returns_no_snapshot_before_symbol_safe_point_exists() {
         None
     );
     assert_eq!(snapshot_store.load_latest_symbol_snapshot(&btc), Ok(None));
+}
+
+#[test]
+fn runtime_loop_can_be_restored_from_symbol_snapshot_store() {
+    let btc = Symbol("BTC-USDT".to_string());
+    let snapshot = SymbolRuntimeSnapshot {
+        order_book_snapshot: OrderBookSnapshot {
+            symbol: btc.clone(),
+            last_input_seq: JournalSeq(10),
+            checksum: matching_core::types::Checksum(0),
+            resting_orders: vec![Order {
+                order_id: OrderId(100),
+                symbol: btc.clone(),
+                side: Side::Sell,
+                price: Price(100),
+                quantity: Quantity(1),
+            }],
+        },
+        next_trade_seq: 1,
+        next_market_seq: 2,
+        seen_command_ids: vec![CommandId(10)],
+        seen_order_ids: vec![OrderId(100)],
+    };
+    let mut snapshot_store = InMemorySnapshotStore::new();
+
+    snapshot_store
+        .save_symbol_snapshot(&snapshot)
+        .expect("snapshot should be saved");
+
+    let mut runtime_loop = RuntimeLoop::new_from_symbol_snapshots(
+        vec![snapshot_store
+            .load_latest_symbol_snapshot(&btc)
+            .expect("stored snapshot should decode")
+            .expect("stored snapshot should exist")],
+        4,
+        8,
+    );
+    let mut journal_client = OutputJournalClient::new();
+    let mut output = AcceptingJournalOutputAppender::new();
+
+    assert_eq!(
+        runtime_loop.enqueue_input(limit_entry(11, 11, 101, btc.clone(), Side::Buy, 100, 1,)),
+        Ok(())
+    );
+    runtime_loop
+        .run_tick(
+            &mut journal_client,
+            &mut output,
+            RuntimeLoopTickLimits {
+                max_input_entries_per_symbol: 1,
+                max_output_requests_per_symbol: 10,
+            },
+        )
+        .expect("restored runtime loop should process the replay tail");
+
+    assert_eq!(
+        runtime_loop.last_input_seq(&btc),
+        Some(Some(JournalSeq(11)))
+    );
 }
 
 #[test]

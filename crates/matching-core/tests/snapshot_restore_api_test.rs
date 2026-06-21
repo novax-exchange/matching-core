@@ -53,6 +53,15 @@ fn symbol_runtime_snapshot() -> SymbolRuntimeSnapshot {
     }
 }
 
+fn symbol_runtime_snapshot_at_safe_point(safe_point: u64) -> SymbolRuntimeSnapshot {
+    let mut snapshot = symbol_runtime_snapshot();
+
+    snapshot.order_book_snapshot.last_input_seq = JournalSeq(safe_point);
+    snapshot.order_book_snapshot.checksum = Checksum(1000 + safe_point);
+
+    snapshot
+}
+
 #[test]
 fn symbol_runtime_snapshot_can_round_trip_through_canonical_bytes_from_public_api() {
     let snapshot = symbol_runtime_snapshot();
@@ -134,6 +143,37 @@ fn in_memory_snapshot_store_rejects_corrupt_snapshot_bytes_from_public_api() {
             SnapshotSerializationError::InvalidMagic
         ))
     );
+}
+
+#[test]
+fn in_memory_snapshot_store_retains_latest_symbol_snapshots_within_limit_from_public_api() {
+    let symbol = Symbol("BTC-USDT".to_string());
+    let mut store = InMemorySnapshotStore::new_with_retention_limit(2);
+
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(10))
+        .expect("first snapshot should be saved");
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(11))
+        .expect("second snapshot should be saved");
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(12))
+        .expect("third snapshot should be saved");
+
+    let records = store.symbol_snapshot_records(&symbol);
+    let loaded = store
+        .load_latest_symbol_snapshot(&symbol)
+        .expect("latest snapshot should decode")
+        .expect("latest snapshot should exist");
+
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.safe_point)
+            .collect::<Vec<_>>(),
+        vec![JournalSeq(11), JournalSeq(12)]
+    );
+    assert_eq!(loaded.order_book_snapshot.last_input_seq, JournalSeq(12));
 }
 
 struct TestJournalInputReader {

@@ -28,23 +28,38 @@ pub trait SnapshotStore {
 
 #[derive(Debug, Clone, Default)]
 pub struct InMemorySnapshotStore {
-    latest_by_symbol: HashMap<Symbol, SnapshotRecord>,
+    records_by_symbol: HashMap<Symbol, Vec<SnapshotRecord>>,
+    retention_limit: usize,
 }
 
 impl InMemorySnapshotStore {
     pub fn new() -> Self {
-        Self::default()
+        Self::new_with_retention_limit(1)
+    }
+
+    pub fn new_with_retention_limit(retention_limit: usize) -> Self {
+        Self {
+            records_by_symbol: HashMap::new(),
+            retention_limit: retention_limit.max(1),
+        }
     }
 
     pub fn write_raw_symbol_snapshot_bytes(&mut self, symbol: Symbol, bytes: Vec<u8>) {
-        self.latest_by_symbol.insert(
+        self.records_by_symbol.insert(
             symbol.clone(),
-            SnapshotRecord {
+            vec![SnapshotRecord {
                 symbol,
                 safe_point: JournalSeq(0),
                 bytes,
-            },
+            }],
         );
+    }
+
+    pub fn symbol_snapshot_records(&self, symbol: &Symbol) -> Vec<SnapshotRecord> {
+        self.records_by_symbol
+            .get(symbol)
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
@@ -59,8 +74,16 @@ impl SnapshotStore for InMemorySnapshotStore {
             bytes: snapshot.to_canonical_bytes(),
         };
 
-        self.latest_by_symbol
-            .insert(record.symbol.clone(), record.clone());
+        let records = self
+            .records_by_symbol
+            .entry(record.symbol.clone())
+            .or_default();
+        records.push(record.clone());
+
+        if records.len() > self.retention_limit {
+            let remove_count = records.len() - self.retention_limit;
+            records.drain(0..remove_count);
+        }
 
         Ok(record)
     }
@@ -69,7 +92,11 @@ impl SnapshotStore for InMemorySnapshotStore {
         &self,
         symbol: &Symbol,
     ) -> Result<Option<SymbolRuntimeSnapshot>, SnapshotStoreError> {
-        let Some(record) = self.latest_by_symbol.get(symbol) else {
+        let Some(record) = self
+            .records_by_symbol
+            .get(symbol)
+            .and_then(|records| records.last())
+        else {
             return Ok(None);
         };
 
