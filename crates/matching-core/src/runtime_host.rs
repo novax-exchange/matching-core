@@ -9,6 +9,7 @@ use crate::runtime_manager::RuntimeManagerError;
 use crate::runtime_shard_runner::RuntimeShardRunner;
 use crate::runtime_topology::RuntimeTopologyError;
 use crate::types::Symbol;
+use std::collections::HashMap;
 
 pub struct RuntimeHost {
     mode: RuntimeHostMode,
@@ -157,6 +158,78 @@ impl RuntimeHost {
         runner
             .enqueue_input(entry)
             .map_err(RuntimeHostError::RuntimeLoop)
+    }
+
+    pub fn enqueue_inputs(
+        &mut self,
+        entries: Vec<JournalInputEntry>,
+    ) -> Result<usize, RuntimeHostError> {
+        let mut requested_by_symbol: HashMap<Symbol, usize> = HashMap::new();
+        let mut owner_by_symbol: HashMap<Symbol, usize> = HashMap::new();
+
+        for entry in &entries {
+            let symbol = entry.command.symbol().clone();
+            let runner_index = self
+                .runners
+                .iter()
+                .position(|runner| runner.symbols().contains(&symbol))
+                .ok_or_else(|| {
+                    RuntimeHostError::RuntimeLoop(RuntimeLoopError::UnregisteredHandoff(
+                        symbol.clone(),
+                    ))
+                })?;
+
+            *requested_by_symbol.entry(symbol.clone()).or_insert(0) += 1;
+            owner_by_symbol.insert(symbol, runner_index);
+        }
+
+        let mut requested_symbols: Vec<Symbol> = requested_by_symbol.keys().cloned().collect();
+        requested_symbols.sort_by(|left, right| left.0.cmp(&right.0));
+
+        for symbol in requested_symbols {
+            let requested_count = requested_by_symbol
+                .get(&symbol)
+                .expect("requested symbol should have a requested count");
+            let runner_index = owner_by_symbol
+                .get(&symbol)
+                .expect("requested symbol should have an owning runner");
+            let pending_input_status = self.runners[*runner_index]
+                .pending_input_status(&symbol)
+                .ok_or_else(|| {
+                    RuntimeHostError::RuntimeLoop(RuntimeLoopError::MissingHandoff(symbol.clone()))
+                })?;
+            let available_capacity = pending_input_status
+                .capacity
+                .saturating_sub(pending_input_status.len);
+
+            if available_capacity < *requested_count {
+                return Err(RuntimeHostError::RuntimeLoop(
+                    RuntimeLoopError::InputHandoffFull(symbol),
+                ));
+            }
+        }
+
+        let enqueued_count = entries.len();
+        let mut entries_by_runner: Vec<Vec<JournalInputEntry>> =
+            (0..self.runners.len()).map(|_| Vec::new()).collect();
+
+        for entry in entries {
+            let symbol = entry.command.symbol().clone();
+            let runner_index = owner_by_symbol
+                .get(&symbol)
+                .expect("entry symbol should have an owning runner after validation");
+            entries_by_runner[*runner_index].push(entry);
+        }
+
+        for (runner, runner_entries) in self.runners.iter_mut().zip(entries_by_runner) {
+            if !runner_entries.is_empty() {
+                runner
+                    .enqueue_inputs(runner_entries)
+                    .map_err(RuntimeHostError::RuntimeLoop)?;
+            }
+        }
+
+        Ok(enqueued_count)
     }
 
     pub fn status(&self) -> Result<RuntimeHostStatus, RuntimeHostError> {

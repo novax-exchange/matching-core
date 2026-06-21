@@ -12,7 +12,7 @@ use matching_core::runtime_host::{
     RuntimeHost, RuntimeHostError, RuntimeHostRunUntilIdleLimit, RuntimeHostRunUntilIdleStopReason,
 };
 use matching_core::runtime_loop::{
-    RuntimeLoopRunLimit, RuntimeLoopRunOnceLimits, RuntimeLoopRunStopReason,
+    RuntimeLoopError, RuntimeLoopRunLimit, RuntimeLoopRunOnceLimits, RuntimeLoopRunStopReason,
 };
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
@@ -223,6 +223,106 @@ fn runtime_host_routes_input_to_owning_shard_and_runs_once_all() {
             .map(|item| item.input_processed_count),
         Some(1)
     );
+}
+
+#[test]
+fn runtime_host_enqueue_inputs_routes_batch_across_shards() {
+    let btc = symbol("BTC-USDT");
+    let eth = symbol("ETH-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.topology = RuntimeTopologyConfig {
+        shard_count: 2,
+        assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
+    };
+    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
+        .expect("manual runtime host should be supported");
+
+    assert_eq!(
+        host.enqueue_inputs(vec![
+            command_entry(1, btc.clone()),
+            command_entry(2, eth.clone()),
+            command_entry(3, btc.clone()),
+        ]),
+        Ok(3)
+    );
+
+    let status = host
+        .status()
+        .expect("manual runtime host should report status");
+    assert_eq!(
+        status
+            .shard_status(RuntimeShardId(0))
+            .and_then(|item| item.symbol_status(&btc))
+            .map(|item| item.pending_input_len),
+        Some(2)
+    );
+    assert_eq!(
+        status
+            .shard_status(RuntimeShardId(1))
+            .and_then(|item| item.symbol_status(&eth))
+            .map(|item| item.pending_input_len),
+        Some(1)
+    );
+}
+
+#[test]
+fn runtime_host_enqueue_inputs_rejects_batch_without_partial_enqueue_when_handoff_would_fill() {
+    let btc = symbol("BTC-USDT");
+    let eth = symbol("ETH-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.topology = RuntimeTopologyConfig {
+        shard_count: 2,
+        assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
+    };
+    config.handoff.capacity = 1;
+    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
+        .expect("manual runtime host should be supported");
+
+    assert_eq!(
+        host.enqueue_inputs(vec![
+            command_entry(1, btc.clone()),
+            command_entry(2, eth.clone()),
+            command_entry(3, eth.clone()),
+        ]),
+        Err(RuntimeHostError::RuntimeLoop(
+            RuntimeLoopError::InputHandoffFull(eth.clone())
+        ))
+    );
+
+    let status = host
+        .status()
+        .expect("manual runtime host should report status");
+    assert!(status.is_idle());
+    assert_eq!(
+        status.shards_with_remaining_work(),
+        Vec::<RuntimeShardId>::new()
+    );
+}
+
+#[test]
+fn runtime_host_enqueue_inputs_rejects_batch_without_partial_enqueue_when_symbol_is_unknown() {
+    let btc = symbol("BTC-USDT");
+    let sol = symbol("SOL-USDT");
+    let mut host = RuntimeHost::new_for_symbols_with_config(
+        vec![btc.clone()],
+        MatchingRuntimeConfig::default(),
+    )
+    .expect("manual runtime host should be supported");
+
+    assert_eq!(
+        host.enqueue_inputs(vec![
+            command_entry(1, btc.clone()),
+            command_entry(2, sol.clone())
+        ]),
+        Err(RuntimeHostError::RuntimeLoop(
+            RuntimeLoopError::UnregisteredHandoff(sol)
+        ))
+    );
+
+    let status = host
+        .status()
+        .expect("manual runtime host should report status");
+    assert!(status.is_idle());
 }
 
 #[test]
