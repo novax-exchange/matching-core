@@ -9,7 +9,8 @@ use matching_core::runtime_config::{
     RuntimeTopologyConfig, SymbolAssignmentPolicy,
 };
 use matching_core::runtime_host::{
-    RuntimeHost, RuntimeHostError, RuntimeHostRunUntilIdleLimit, RuntimeHostRunUntilIdleStopReason,
+    RuntimeHost, RuntimeHostDrainStopReason, RuntimeHostError, RuntimeHostInputState,
+    RuntimeHostRunUntilIdleLimit, RuntimeHostRunUntilIdleStopReason,
 };
 use matching_core::runtime_loop::{
     RuntimeLoopError, RuntimeLoopRunLimit, RuntimeLoopRunOnceLimits, RuntimeLoopRunStopReason,
@@ -380,6 +381,91 @@ fn runtime_host_enqueue_inputs_rejects_batch_without_partial_enqueue_when_symbol
         .status()
         .expect("manual runtime host should report status");
     assert!(status.is_idle());
+}
+
+#[test]
+fn runtime_host_close_input_rejects_new_single_and_batch_inputs() {
+    let btc = symbol("BTC-USDT");
+    let mut host = RuntimeHost::new_for_symbols_with_config(
+        vec![btc.clone()],
+        MatchingRuntimeConfig::default(),
+    )
+    .expect("manual runtime host should be supported");
+
+    assert_eq!(host.input_state(), RuntimeHostInputState::Open);
+    host.close_input();
+    assert_eq!(host.input_state(), RuntimeHostInputState::Closed);
+
+    assert_eq!(
+        host.enqueue_input(command_entry(1, btc.clone())),
+        Err(RuntimeHostError::InputClosed)
+    );
+    assert_eq!(
+        host.can_enqueue_inputs(&[command_entry(1, btc.clone())]),
+        Err(RuntimeHostError::InputClosed)
+    );
+    assert_eq!(
+        host.enqueue_inputs(vec![command_entry(1, btc.clone())]),
+        Err(RuntimeHostError::InputClosed)
+    );
+    assert!(host
+        .status()
+        .expect("host status should be available")
+        .is_idle());
+}
+
+#[test]
+fn runtime_host_drain_configured_closes_input_and_drains_existing_work() {
+    let btc = symbol("BTC-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.host.max_run_cycles_per_call = 1;
+    config.host.max_run_calls_per_until_idle = 4;
+    config.symbol_runtime.max_input_entries_per_step = 1;
+    config.output_commit.max_output_requests_per_step = 1;
+    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone()], config)
+        .expect("manual runtime host should be supported");
+    let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
+    let mut output = TestJournalOutputAppender::new();
+
+    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    assert_eq!(host.enqueue_input(command_entry(2, btc.clone())), Ok(()));
+
+    let report = host
+        .drain_configured(&mut journal_client, &mut output)
+        .expect("manual runtime host should drain with configured limits");
+
+    assert_eq!(host.input_state(), RuntimeHostInputState::Closed);
+    assert_eq!(report.stop_reason, RuntimeHostDrainStopReason::Drained);
+    assert!(report.is_drained());
+    assert_eq!(report.configured_run_count(), 2);
+    assert_eq!(output.read_all().len(), 2);
+    assert_eq!(
+        host.enqueue_input(command_entry(3, btc.clone())),
+        Err(RuntimeHostError::InputClosed)
+    );
+}
+
+#[test]
+fn runtime_host_drain_configured_reports_blocked_output() {
+    let btc = symbol("BTC-USDT");
+    let mut host = RuntimeHost::new_for_symbols_with_config(
+        vec![btc.clone()],
+        MatchingRuntimeConfig::default(),
+    )
+    .expect("manual runtime host should be supported");
+    let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
+    let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
+
+    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+
+    let report = host
+        .drain_configured(&mut journal_client, &mut output)
+        .expect("manual runtime host should report blocked drain");
+
+    assert_eq!(host.input_state(), RuntimeHostInputState::Closed);
+    assert_eq!(report.stop_reason, RuntimeHostDrainStopReason::Blocked);
+    assert!(report.has_blocked_symbols());
+    assert_eq!(report.blocked_shards(), vec![RuntimeShardId(0)]);
 }
 
 #[test]

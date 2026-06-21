@@ -17,13 +17,21 @@ pub struct RuntimeHost {
     run_once_limits: RuntimeLoopRunOnceLimits,
     run_limit: RuntimeLoopRunLimit,
     run_until_idle_limit: RuntimeHostRunUntilIdleLimit,
+    input_state: RuntimeHostInputState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeHostError {
+    InputClosed,
     UnsupportedMode(RuntimeHostMode),
     Topology(RuntimeTopologyError),
     RuntimeLoop(RuntimeLoopError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeHostInputState {
+    Open,
+    Closed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +68,19 @@ pub enum RuntimeHostRunUntilIdleStopReason {
 pub struct RuntimeHostRunUntilIdleReport {
     pub run_reports: Vec<RuntimeHostRunReport>,
     pub stop_reason: RuntimeHostRunUntilIdleStopReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeHostDrainStopReason {
+    Drained,
+    Blocked,
+    CallLimitReached,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeHostDrainReport {
+    pub run_report: RuntimeHostRunUntilIdleReport,
+    pub stop_reason: RuntimeHostDrainStopReason,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +138,7 @@ impl RuntimeHost {
                     run_once_limits,
                     run_limit,
                     run_until_idle_limit,
+                    input_state: RuntimeHostInputState::Open,
                 })
             }
             unsupported => Err(RuntimeHostError::UnsupportedMode(unsupported)),
@@ -145,7 +167,17 @@ impl RuntimeHost {
             .map(RuntimeShardRunner::symbols)
     }
 
+    pub fn input_state(&self) -> RuntimeHostInputState {
+        self.input_state
+    }
+
+    pub fn close_input(&mut self) {
+        self.input_state = RuntimeHostInputState::Closed;
+    }
+
     pub fn enqueue_input(&mut self, entry: JournalInputEntry) -> Result<(), RuntimeHostError> {
+        self.ensure_input_open()?;
+
         let symbol = entry.command.symbol().clone();
         let runner = self
             .runners
@@ -164,6 +196,8 @@ impl RuntimeHost {
         &mut self,
         entries: Vec<JournalInputEntry>,
     ) -> Result<usize, RuntimeHostError> {
+        self.ensure_input_open()?;
+
         let owner_by_symbol = self.validate_enqueue_inputs(&entries)?;
         let enqueued_count = entries.len();
         let mut entries_by_runner: Vec<Vec<JournalInputEntry>> =
@@ -192,7 +226,16 @@ impl RuntimeHost {
         &self,
         entries: &[JournalInputEntry],
     ) -> Result<(), RuntimeHostError> {
+        self.ensure_input_open()?;
         self.validate_enqueue_inputs(entries).map(|_| ())
+    }
+
+    fn ensure_input_open(&self) -> Result<(), RuntimeHostError> {
+        if self.input_state == RuntimeHostInputState::Closed {
+            return Err(RuntimeHostError::InputClosed);
+        }
+
+        Ok(())
     }
 
     fn validate_enqueue_inputs(
@@ -344,6 +387,28 @@ impl RuntimeHost {
         output: &mut dyn JournalOutputAppender,
     ) -> Result<RuntimeHostRunUntilIdleReport, RuntimeHostError> {
         self.run_until_idle(journal_client, output, self.run_until_idle_limit)
+    }
+
+    pub fn drain_configured(
+        &mut self,
+        journal_client: &mut OutputJournalClient,
+        output: &mut dyn JournalOutputAppender,
+    ) -> Result<RuntimeHostDrainReport, RuntimeHostError> {
+        self.close_input();
+
+        let run_report = self.run_until_idle_configured(journal_client, output)?;
+        let stop_reason = match run_report.stop_reason {
+            RuntimeHostRunUntilIdleStopReason::Idle => RuntimeHostDrainStopReason::Drained,
+            RuntimeHostRunUntilIdleStopReason::Blocked => RuntimeHostDrainStopReason::Blocked,
+            RuntimeHostRunUntilIdleStopReason::CallLimitReached => {
+                RuntimeHostDrainStopReason::CallLimitReached
+            }
+        };
+
+        Ok(RuntimeHostDrainReport {
+            run_report,
+            stop_reason,
+        })
     }
 
     pub fn run_until_idle(
@@ -616,5 +681,23 @@ impl RuntimeHostRunUntilIdleReport {
         self.last_run_report()
             .map(RuntimeHostRunReport::blocked_shards)
             .unwrap_or_default()
+    }
+}
+
+impl RuntimeHostDrainReport {
+    pub fn configured_run_count(&self) -> usize {
+        self.run_report.configured_run_count()
+    }
+
+    pub fn is_drained(&self) -> bool {
+        self.stop_reason == RuntimeHostDrainStopReason::Drained
+    }
+
+    pub fn has_blocked_symbols(&self) -> bool {
+        self.run_report.has_blocked_symbols()
+    }
+
+    pub fn blocked_shards(&self) -> Vec<RuntimeShardId> {
+        self.run_report.blocked_shards()
     }
 }
