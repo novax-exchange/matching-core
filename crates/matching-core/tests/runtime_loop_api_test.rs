@@ -9,6 +9,7 @@ use matching_core::output_commit_boundary::{
     OutputBatchQueryStatus, OutputCommitBlockAction, OutputCommitOutcome, OutputJournalClient,
 };
 use matching_core::replay_runner::{ReplayResult, ReplayRunner};
+use matching_core::runtime_config::MatchingRuntimeConfig;
 use matching_core::runtime_loop::{RuntimeLoop, RuntimeLoopError, RuntimeLoopTickLimits};
 use matching_core::runtime_manager::RuntimeManager;
 use matching_core::snapshot_restore::{OrderBookSnapshot, SymbolRuntimeSnapshot};
@@ -402,6 +403,38 @@ fn runtime_loop_enqueue_inputs_routes_batch_to_symbol_handoffs() {
     );
     assert_eq!(runtime_loop.pending_input_len(&btc), Some(2));
     assert_eq!(runtime_loop.pending_input_len(&eth), Some(1));
+}
+
+#[test]
+fn runtime_loop_can_be_created_for_symbols_with_runtime_config() {
+    let btc = Symbol("BTC-USDT".to_string());
+    let mut config = MatchingRuntimeConfig::default();
+    config.handoff.capacity = 3;
+    config.output_commit.pending_output_capacity = 5;
+
+    let runtime_loop = RuntimeLoop::new_for_symbols_with_config(vec![btc.clone()], config);
+
+    let input_status = runtime_loop
+        .pending_input_status(&btc)
+        .expect("configured symbol should have pending input status");
+    let runtime_status = runtime_loop
+        .symbol_status(&btc)
+        .expect("configured symbol should have runtime status");
+
+    assert_eq!(input_status.capacity, 3);
+    assert_eq!(runtime_status.pending_output_capacity, 5);
+}
+
+#[test]
+fn runtime_loop_tick_limits_can_be_derived_from_runtime_config() {
+    let mut config = MatchingRuntimeConfig::default();
+    config.execution_loop.max_input_entries_per_step = 7;
+    config.output_commit.max_output_requests_per_step = 9;
+
+    let limits = RuntimeLoopTickLimits::from_config(&config);
+
+    assert_eq!(limits.max_input_entries_per_symbol, 7);
+    assert_eq!(limits.max_output_requests_per_symbol, 9);
 }
 
 #[test]

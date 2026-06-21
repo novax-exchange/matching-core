@@ -4,6 +4,7 @@ use crate::output_commit_boundary::{
     OutputBatchIdentity, OutputBatchQueryStatus, OutputCommitBlockDecision, OutputCommitOutcome,
     OutputJournalClient,
 };
+use crate::runtime_config::MatchingRuntimeConfig;
 use crate::runtime_manager::{
     RuntimeManager, RuntimeManagerError, RuntimeManagerRetryAwareStepReport, SymbolRuntimeStatus,
 };
@@ -21,6 +22,15 @@ pub struct RuntimeLoop {
 pub struct RuntimeLoopTickLimits {
     pub max_input_entries_per_symbol: usize,
     pub max_output_requests_per_symbol: usize,
+}
+
+impl RuntimeLoopTickLimits {
+    pub fn from_config(config: &MatchingRuntimeConfig) -> Self {
+        Self {
+            max_input_entries_per_symbol: config.execution_loop.max_input_entries_per_step,
+            max_output_requests_per_symbol: config.output_commit.max_output_requests_per_step,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +90,21 @@ impl RuntimeLoop {
         Self { manager, handoffs }
     }
 
+    pub fn new_for_symbols_with_config(
+        symbols: Vec<Symbol>,
+        config: MatchingRuntimeConfig,
+    ) -> Self {
+        let mut manager = RuntimeManager::new_with_config(config.clone());
+        let mut handoffs = HashMap::new();
+
+        for symbol in symbols {
+            manager.add_symbol(symbol.clone());
+            handoffs.insert(symbol, BoundedHandoff::new(config.handoff.capacity));
+        }
+
+        Self { manager, handoffs }
+    }
+
     pub fn new_from_symbol_snapshots(
         snapshots: Vec<SymbolRuntimeSnapshot>,
         pending_input_capacity: usize,
@@ -93,6 +118,23 @@ impl RuntimeLoop {
 
             manager.restore_symbol_from_snapshot(snapshot);
             handoffs.insert(symbol, BoundedHandoff::new(pending_input_capacity));
+        }
+
+        Self { manager, handoffs }
+    }
+
+    pub fn new_from_symbol_snapshots_with_config(
+        snapshots: Vec<SymbolRuntimeSnapshot>,
+        config: MatchingRuntimeConfig,
+    ) -> Self {
+        let mut manager = RuntimeManager::new_with_config(config.clone());
+        let mut handoffs = HashMap::new();
+
+        for snapshot in snapshots {
+            let symbol = snapshot.order_book_snapshot.symbol.clone();
+
+            manager.restore_symbol_from_snapshot(snapshot);
+            handoffs.insert(symbol, BoundedHandoff::new(config.handoff.capacity));
         }
 
         Self { manager, handoffs }

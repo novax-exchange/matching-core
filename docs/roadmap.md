@@ -243,6 +243,7 @@ Progress so far:
 - `run_per_symbol_execution_loop_step_with_output_batch_commit()` and `RuntimeManager::run_symbol_retry_aware_step()` now also surface the attempted output batch identity;
 - `SymbolRuntimeStatus::output_commit_blockage` preserves output batch query evidence while a symbol is escalated or quarantined, so paused symbols still explain whether they are blocked by missing, incomplete, durable, or conflict evidence;
 - public API tests cover unresolved unknown, resolved-durable unknown, incomplete durable prefix, unavailable, rejected, and conflicting output outcomes in the middle of an output batch.
+- `MatchingRuntimeConfig` now centralizes runtime-policy knobs for handoff capacity, execution-loop step size, output commit capacity / retry / batch size, snapshot retention, and snapshot verification. Runtime Manager and Runtime Loop can now be constructed from that config surface instead of keeping separate default constants or loose constructor parameters only.
 
 Accepted mechanism:
 
