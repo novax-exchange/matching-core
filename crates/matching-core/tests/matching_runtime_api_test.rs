@@ -449,6 +449,14 @@ fn matching_runtime_shutdown_closes_input_without_draining_pending_work() {
 
     assert_eq!(report.input_state, MatchingRuntimeInputState::Closed);
     assert_eq!(report.driver_report.shard_ids, vec![RuntimeShardId(0)]);
+    assert_eq!(
+        report.final_status.input_state,
+        MatchingRuntimeInputState::Closed
+    );
+    assert!(report.has_work_remaining());
+    assert_eq!(report.shards_with_remaining_work(), vec![RuntimeShardId(0)]);
+    assert!(!report.has_blocked_symbols());
+    assert_eq!(report.blocked_shards(), Vec::<RuntimeShardId>::new());
     assert_eq!(runtime.input_state(), MatchingRuntimeInputState::Closed);
     assert_eq!(
         runtime.enqueue_input(command_entry(2, btc.clone())),

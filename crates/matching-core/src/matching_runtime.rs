@@ -98,6 +98,7 @@ pub struct MatchingRuntimeDrainReport {
 pub struct MatchingRuntimeShutdownReport {
     pub input_state: MatchingRuntimeInputState,
     pub driver_report: MatchingRuntimeDriverShutdownReport,
+    pub final_status: MatchingRuntimeStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -308,10 +309,12 @@ impl MatchingRuntime {
             .driver
             .shutdown()
             .map_err(MatchingRuntimeError::from_driver_error)?;
+        let final_status = self.status()?;
 
         Ok(MatchingRuntimeShutdownReport {
             input_state: self.input_state,
             driver_report,
+            final_status,
         })
     }
 
@@ -645,5 +648,23 @@ impl MatchingRuntimeDrainReport {
 
     pub fn blocked_shards(&self) -> Vec<RuntimeShardId> {
         self.run_report.blocked_shards()
+    }
+}
+
+impl MatchingRuntimeShutdownReport {
+    pub fn has_work_remaining(&self) -> bool {
+        self.final_status.has_work_remaining()
+    }
+
+    pub fn shards_with_remaining_work(&self) -> Vec<RuntimeShardId> {
+        self.final_status.shards_with_remaining_work()
+    }
+
+    pub fn has_blocked_symbols(&self) -> bool {
+        self.final_status.has_blocked_symbols()
+    }
+
+    pub fn blocked_shards(&self) -> Vec<RuntimeShardId> {
+        self.final_status.blocked_shards()
     }
 }
