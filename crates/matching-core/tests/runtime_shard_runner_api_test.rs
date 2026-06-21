@@ -7,7 +7,7 @@ use matching_core::runtime_config::{
     MatchingRuntimeConfig, RuntimeShardId, RuntimeTopologyConfig, SymbolAssignmentPolicy,
     SymbolShardAssignment,
 };
-use matching_core::runtime_loop::{RuntimeLoopError, RuntimeLoopTickLimits};
+use matching_core::runtime_loop::{RuntimeLoopError, RuntimeLoopRunOnceLimits};
 use matching_core::runtime_shard_runner::RuntimeShardRunner;
 use matching_core::runtime_topology::RuntimeTopologyError;
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
@@ -129,7 +129,7 @@ fn runtime_shard_runner_rejects_inputs_for_symbols_owned_by_other_shards() {
 }
 
 #[test]
-fn runtime_shard_runner_delegates_tick_execution_to_underlying_runtime_loop() {
+fn runtime_shard_runner_delegates_run_once_execution_to_underlying_runtime_loop() {
     let btc = symbol("BTC-USDT");
     let mut runners = RuntimeShardRunner::from_symbols_with_config(
         vec![btc.clone()],
@@ -144,15 +144,15 @@ fn runtime_shard_runner_delegates_tick_execution_to_underlying_runtime_loop() {
         Ok(())
     );
     let report = runners[0]
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 1,
             },
         )
-        .expect("runner tick should execute");
+        .expect("runner run_once should execute");
 
     assert_eq!(
         report

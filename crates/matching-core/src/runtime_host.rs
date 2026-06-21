@@ -2,8 +2,8 @@ use crate::journal_adapter::{JournalInputEntry, JournalOutputAppender};
 use crate::output_commit_boundary::OutputJournalClient;
 use crate::runtime_config::{MatchingRuntimeConfig, RuntimeHostMode, RuntimeShardId};
 use crate::runtime_loop::{
-    RuntimeLoopError, RuntimeLoopRunLimit, RuntimeLoopRunReport, RuntimeLoopTickLimits,
-    RuntimeLoopTickReport,
+    RuntimeLoopError, RuntimeLoopRunLimit, RuntimeLoopRunOnceLimits, RuntimeLoopRunOnceReport,
+    RuntimeLoopRunReport,
 };
 use crate::runtime_shard_runner::RuntimeShardRunner;
 use crate::runtime_topology::RuntimeTopologyError;
@@ -22,8 +22,8 @@ pub enum RuntimeHostError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeHostTickReport {
-    pub shard_reports: Vec<RuntimeHostShardTickReport>,
+pub struct RuntimeHostRunOnceReport {
+    pub shard_reports: Vec<RuntimeHostShardRunOnceReport>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,9 +32,9 @@ pub struct RuntimeHostRunReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeHostShardTickReport {
+pub struct RuntimeHostShardRunOnceReport {
     pub shard_id: RuntimeShardId,
-    pub tick_report: RuntimeLoopTickReport,
+    pub run_once_report: RuntimeLoopRunOnceReport,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,32 +97,32 @@ impl RuntimeHost {
             .map_err(RuntimeHostError::RuntimeLoop)
     }
 
-    pub fn run_tick_all(
+    pub fn run_once_all(
         &mut self,
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
-        limits: RuntimeLoopTickLimits,
-    ) -> Result<RuntimeHostTickReport, RuntimeHostError> {
+        limits: RuntimeLoopRunOnceLimits,
+    ) -> Result<RuntimeHostRunOnceReport, RuntimeHostError> {
         let mut shard_reports = Vec::new();
 
         for runner in &mut self.runners {
-            let tick_report = runner
-                .run_tick(journal_client, output, limits)
+            let run_once_report = runner
+                .run_once(journal_client, output, limits)
                 .map_err(RuntimeHostError::RuntimeLoop)?;
-            shard_reports.push(RuntimeHostShardTickReport {
+            shard_reports.push(RuntimeHostShardRunOnceReport {
                 shard_id: runner.shard_id(),
-                tick_report,
+                run_once_report,
             });
         }
 
-        Ok(RuntimeHostTickReport { shard_reports })
+        Ok(RuntimeHostRunOnceReport { shard_reports })
     }
 
     pub fn run_limited_all(
         &mut self,
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
-        limits: RuntimeLoopTickLimits,
+        limits: RuntimeLoopRunOnceLimits,
         limit: RuntimeLoopRunLimit,
     ) -> Result<RuntimeHostRunReport, RuntimeHostError> {
         let mut shard_reports = Vec::new();
@@ -141,8 +141,8 @@ impl RuntimeHost {
     }
 }
 
-impl RuntimeHostTickReport {
-    pub fn shard_report(&self, shard_id: RuntimeShardId) -> Option<&RuntimeHostShardTickReport> {
+impl RuntimeHostRunOnceReport {
+    pub fn shard_report(&self, shard_id: RuntimeShardId) -> Option<&RuntimeHostShardRunOnceReport> {
         self.shard_reports
             .iter()
             .find(|report| report.shard_id == shard_id)

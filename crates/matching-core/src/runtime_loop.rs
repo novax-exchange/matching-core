@@ -19,12 +19,12 @@ pub struct RuntimeLoop {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuntimeLoopTickLimits {
+pub struct RuntimeLoopRunOnceLimits {
     pub max_input_entries_per_symbol: usize,
     pub max_output_requests_per_symbol: usize,
 }
 
-impl RuntimeLoopTickLimits {
+impl RuntimeLoopRunOnceLimits {
     pub fn from_config(config: &MatchingRuntimeConfig) -> Self {
         Self {
             max_input_entries_per_symbol: config.symbol_runtime.max_input_entries_per_step,
@@ -42,13 +42,13 @@ pub enum RuntimeLoopError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeLoopTickReport {
-    pub symbol_reports: Vec<RuntimeLoopSymbolTickReport>,
+pub struct RuntimeLoopRunOnceReport {
+    pub symbol_reports: Vec<RuntimeLoopSymbolRunOnceReport>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeLoopRunLimit {
-    pub max_ticks: usize,
+    pub max_cycles: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +60,7 @@ pub enum RuntimeLoopRunStopReason {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeLoopRunReport {
-    pub tick_reports: Vec<RuntimeLoopTickReport>,
+    pub cycle_reports: Vec<RuntimeLoopRunOnceReport>,
     pub stop_reason: RuntimeLoopRunStopReason,
     pub made_progress: bool,
     pub has_work_remaining: bool,
@@ -93,7 +93,7 @@ pub struct RuntimeLoopInputStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeLoopSymbolTickReport {
+pub struct RuntimeLoopSymbolRunOnceReport {
     pub symbol: Symbol,
     pub input_processed_count: usize,
     pub safe_point_advanced_count: usize,
@@ -102,8 +102,8 @@ pub struct RuntimeLoopSymbolTickReport {
     pub blocking_seq: Option<JournalSeq>,
     pub blocking_outcome: Option<OutputCommitOutcome>,
     pub block_decision: Option<OutputCommitBlockDecision>,
-    pub runtime_status_after_tick: SymbolRuntimeStatus,
-    pub pending_input_len_after_tick: usize,
+    pub runtime_status_after_run: SymbolRuntimeStatus,
+    pub pending_input_len_after_run: usize,
     pub pending_input_capacity: usize,
     pub pending_input_full: bool,
 }
@@ -179,12 +179,12 @@ impl RuntimeLoop {
         Self { manager, handoffs }
     }
 
-    pub fn run_tick(
+    pub fn run_once(
         &mut self,
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
-        limits: RuntimeLoopTickLimits,
-    ) -> Result<RuntimeLoopTickReport, RuntimeLoopError> {
+        limits: RuntimeLoopRunOnceLimits,
+    ) -> Result<RuntimeLoopRunOnceReport, RuntimeLoopError> {
         self.validate_configuration()?;
 
         let mut symbols = self.manager.symbols();
@@ -208,41 +208,41 @@ impl RuntimeLoop {
                     limits.max_output_requests_per_symbol,
                 )
                 .map_err(RuntimeLoopError::RuntimeManager)?;
-            let pending_input_len_after_tick = handoff.len();
+            let pending_input_len_after_run = handoff.len();
             let pending_input_capacity = handoff.capacity();
             let pending_input_full = handoff.is_full();
-            let runtime_status_after_tick =
+            let runtime_status_after_run =
                 self.manager
                     .symbol_status(&symbol)
                     .ok_or(RuntimeLoopError::RuntimeManager(
                         RuntimeManagerError::UnknownSymbol,
                     ))?;
 
-            symbol_reports.push(RuntimeLoopSymbolTickReport::from_retry_aware_report(
+            symbol_reports.push(RuntimeLoopSymbolRunOnceReport::from_retry_aware_report(
                 symbol,
                 report,
-                runtime_status_after_tick,
-                pending_input_len_after_tick,
+                runtime_status_after_run,
+                pending_input_len_after_run,
                 pending_input_capacity,
                 pending_input_full,
             ));
         }
 
-        Ok(RuntimeLoopTickReport { symbol_reports })
+        Ok(RuntimeLoopRunOnceReport { symbol_reports })
     }
 
     pub fn run_limited(
         &mut self,
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
-        limits: RuntimeLoopTickLimits,
+        limits: RuntimeLoopRunOnceLimits,
         limit: RuntimeLoopRunLimit,
     ) -> Result<RuntimeLoopRunReport, RuntimeLoopError> {
         let initial_state = self.current_work_state()?;
 
         if !initial_state.has_work_remaining() && !initial_state.has_blocked_symbols() {
             return Ok(RuntimeLoopRunReport {
-                tick_reports: Vec::new(),
+                cycle_reports: Vec::new(),
                 stop_reason: RuntimeLoopRunStopReason::Idle,
                 made_progress: false,
                 has_work_remaining: false,
@@ -251,9 +251,9 @@ impl RuntimeLoop {
             });
         }
 
-        if limit.max_ticks == 0 {
+        if limit.max_cycles == 0 {
             return Ok(RuntimeLoopRunReport {
-                tick_reports: Vec::new(),
+                cycle_reports: Vec::new(),
                 stop_reason: RuntimeLoopRunStopReason::RunLimitReached,
                 made_progress: false,
                 has_work_remaining: initial_state.has_work_remaining(),
@@ -262,32 +262,32 @@ impl RuntimeLoop {
             });
         }
 
-        let mut tick_reports = Vec::new();
+        let mut cycle_reports = Vec::new();
         let mut made_progress = false;
 
-        for _ in 0..limit.max_ticks {
-            let tick_report = self.run_tick(journal_client, output, limits)?;
-            let tick_made_progress = tick_report.made_progress();
+        for _ in 0..limit.max_cycles {
+            let run_once_report = self.run_once(journal_client, output, limits)?;
+            let cycle_made_progress = run_once_report.made_progress();
 
-            made_progress |= tick_made_progress;
-            let has_work_remaining = tick_report.has_work_remaining();
-            let has_blocked_symbols = tick_report.has_blocked_symbols();
+            made_progress |= cycle_made_progress;
+            let has_work_remaining = run_once_report.has_work_remaining();
+            let has_blocked_symbols = run_once_report.has_blocked_symbols();
 
             let stop_reason = if !has_work_remaining && !has_blocked_symbols {
                 Some(RuntimeLoopRunStopReason::Idle)
-            } else if has_blocked_symbols && !tick_made_progress {
+            } else if has_blocked_symbols && !cycle_made_progress {
                 Some(RuntimeLoopRunStopReason::Blocked)
             } else {
                 None
             };
 
-            tick_reports.push(tick_report);
+            cycle_reports.push(run_once_report);
 
             if let Some(stop_reason) = stop_reason {
                 let final_state = self.current_work_state()?;
 
                 return Ok(RuntimeLoopRunReport {
-                    tick_reports,
+                    cycle_reports,
                     stop_reason,
                     made_progress,
                     has_work_remaining: final_state.has_work_remaining(),
@@ -300,7 +300,7 @@ impl RuntimeLoop {
         let final_state = self.current_work_state()?;
 
         Ok(RuntimeLoopRunReport {
-            tick_reports,
+            cycle_reports,
             stop_reason: RuntimeLoopRunStopReason::RunLimitReached,
             made_progress,
             has_work_remaining: final_state.has_work_remaining(),
@@ -485,8 +485,8 @@ impl RuntimeLoop {
     }
 }
 
-impl RuntimeLoopTickReport {
-    pub fn symbol_report(&self, symbol: &Symbol) -> Option<&RuntimeLoopSymbolTickReport> {
+impl RuntimeLoopRunOnceReport {
+    pub fn symbol_report(&self, symbol: &Symbol) -> Option<&RuntimeLoopSymbolRunOnceReport> {
         self.symbol_reports
             .iter()
             .find(|report| report.symbol == *symbol)
@@ -500,10 +500,10 @@ impl RuntimeLoopTickReport {
 
     pub fn has_work_remaining(&self) -> bool {
         self.symbol_reports.iter().any(|report| {
-            report.pending_input_len_after_tick > 0
-                || report.runtime_status_after_tick.pending_output_len > 0
+            report.pending_input_len_after_run > 0
+                || report.runtime_status_after_run.pending_output_len > 0
                 || report
-                    .runtime_status_after_tick
+                    .runtime_status_after_run
                     .output_commit_blockage
                     .is_some()
         })
@@ -513,7 +513,7 @@ impl RuntimeLoopTickReport {
         self.symbol_reports.iter().any(|report| {
             report.block_decision.is_some()
                 || report
-                    .runtime_status_after_tick
+                    .runtime_status_after_run
                     .output_commit_blockage
                     .is_some()
         })
@@ -525,12 +525,12 @@ impl RuntimeLoopTickReport {
 }
 
 impl RuntimeLoopRunReport {
-    pub fn tick_count(&self) -> usize {
-        self.tick_reports.len()
+    pub fn cycle_count(&self) -> usize {
+        self.cycle_reports.len()
     }
 
-    pub fn last_tick_report(&self) -> Option<&RuntimeLoopTickReport> {
-        self.tick_reports.last()
+    pub fn last_run_once_report(&self) -> Option<&RuntimeLoopRunOnceReport> {
+        self.cycle_reports.last()
     }
 
     pub fn is_idle(&self) -> bool {
@@ -576,12 +576,12 @@ impl RuntimeLoopWorkState {
     }
 }
 
-impl RuntimeLoopSymbolTickReport {
+impl RuntimeLoopSymbolRunOnceReport {
     fn from_retry_aware_report(
         symbol: Symbol,
         report: RuntimeManagerRetryAwareStepReport,
-        runtime_status_after_tick: SymbolRuntimeStatus,
-        pending_input_len_after_tick: usize,
+        runtime_status_after_run: SymbolRuntimeStatus,
+        pending_input_len_after_run: usize,
         pending_input_capacity: usize,
         pending_input_full: bool,
     ) -> Self {
@@ -594,8 +594,8 @@ impl RuntimeLoopSymbolTickReport {
             blocking_seq: report.output_commit_report.blocking_seq,
             blocking_outcome: report.output_commit_report.blocking_outcome,
             block_decision: report.block_decision,
-            runtime_status_after_tick,
-            pending_input_len_after_tick,
+            runtime_status_after_run,
+            pending_input_len_after_run,
             pending_input_capacity,
             pending_input_full,
         }

@@ -3,7 +3,7 @@ use crate::output_commit_boundary::{OutputCommitBlockDecision, OutputJournalClie
 use crate::runtime_config::{MatchingRuntimeConfig, RuntimeShardId, RuntimeTopologyConfig};
 use crate::runtime_loop::{
     RuntimeLoop, RuntimeLoopError, RuntimeLoopInputStatus, RuntimeLoopRunLimit,
-    RuntimeLoopRunReport, RuntimeLoopTickLimits, RuntimeLoopTickReport,
+    RuntimeLoopRunOnceLimits, RuntimeLoopRunOnceReport, RuntimeLoopRunReport,
 };
 use crate::runtime_manager::{RuntimeManagerError, SymbolRuntimeStatus};
 use crate::runtime_topology::{RuntimeTopology, RuntimeTopologyError};
@@ -47,20 +47,20 @@ impl RuntimeShardRunner {
         &self.symbols
     }
 
-    pub fn run_tick(
+    pub fn run_once(
         &mut self,
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
-        limits: RuntimeLoopTickLimits,
-    ) -> Result<RuntimeLoopTickReport, RuntimeLoopError> {
-        self.runtime_loop.run_tick(journal_client, output, limits)
+        limits: RuntimeLoopRunOnceLimits,
+    ) -> Result<RuntimeLoopRunOnceReport, RuntimeLoopError> {
+        self.runtime_loop.run_once(journal_client, output, limits)
     }
 
     pub fn run_limited(
         &mut self,
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
-        limits: RuntimeLoopTickLimits,
+        limits: RuntimeLoopRunOnceLimits,
         limit: RuntimeLoopRunLimit,
     ) -> Result<RuntimeLoopRunReport, RuntimeLoopError> {
         self.runtime_loop

@@ -11,8 +11,8 @@ use matching_core::output_commit_boundary::{
 use matching_core::replay_runner::{ReplayResult, ReplayRunner};
 use matching_core::runtime_config::MatchingRuntimeConfig;
 use matching_core::runtime_loop::{
-    RuntimeLoop, RuntimeLoopError, RuntimeLoopRunLimit, RuntimeLoopRunStopReason,
-    RuntimeLoopTickLimits,
+    RuntimeLoop, RuntimeLoopError, RuntimeLoopRunLimit, RuntimeLoopRunOnceLimits,
+    RuntimeLoopRunStopReason,
 };
 use matching_core::runtime_manager::RuntimeManager;
 use matching_core::snapshot_restore::{OrderBookSnapshot, SymbolRuntimeSnapshot};
@@ -429,12 +429,12 @@ fn runtime_loop_can_be_created_for_symbols_with_runtime_config() {
 }
 
 #[test]
-fn runtime_loop_tick_limits_can_be_derived_from_runtime_config() {
+fn runtime_loop_run_once_limits_can_be_derived_from_runtime_config() {
     let mut config = MatchingRuntimeConfig::default();
     config.symbol_runtime.max_input_entries_per_step = 7;
     config.output_commit.max_output_requests_per_step = 9;
 
-    let limits = RuntimeLoopTickLimits::from_config(&config);
+    let limits = RuntimeLoopRunOnceLimits::from_config(&config);
 
     assert_eq!(limits.max_input_entries_per_symbol, 7);
     assert_eq!(limits.max_output_requests_per_symbol, 9);
@@ -544,10 +544,10 @@ fn runtime_loop_can_be_created_with_registered_symbols_and_handoffs_together() {
     );
 
     let report = runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -584,10 +584,10 @@ fn runtime_loop_live_path_matches_replay_output_checksum_and_safe_point_per_symb
     );
 
     let report = runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 8,
                 max_output_requests_per_symbol: 8,
             },
@@ -626,10 +626,10 @@ fn runtime_loop_can_save_symbol_snapshot_to_store_after_safe_point_advances() {
         Ok(())
     );
     runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -714,10 +714,10 @@ fn runtime_loop_can_be_restored_from_symbol_snapshot_store() {
         Ok(())
     );
     runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -744,10 +744,10 @@ fn runtime_loop_can_restore_from_file_snapshot_store_after_process_restart() {
         Ok(())
     );
     runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -772,10 +772,10 @@ fn runtime_loop_can_restore_from_file_snapshot_store_after_process_restart() {
         Ok(())
     );
     restored_loop
-        .run_tick(
+        .run_once(
             &mut restored_journal_client,
             &mut restored_output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -804,10 +804,10 @@ fn runtime_loop_can_restore_from_older_file_snapshot_when_latest_is_corrupt() {
         Ok(())
     );
     runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -854,10 +854,10 @@ fn runtime_loop_can_restore_from_older_file_snapshot_when_latest_is_corrupt() {
         Ok(())
     );
     restored_loop
-        .run_tick(
+        .run_once(
             &mut restored_journal_client,
             &mut restored_output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -886,10 +886,10 @@ fn runtime_loop_can_restore_from_latest_verified_file_snapshot_when_newer_is_unv
         Ok(())
     );
     runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -909,10 +909,10 @@ fn runtime_loop_can_restore_from_latest_verified_file_snapshot_when_newer_is_unv
         Ok(())
     );
     runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -960,10 +960,10 @@ fn runtime_loop_can_restore_from_latest_verified_file_snapshot_when_newer_is_unv
         Ok(())
     );
     restored_loop
-        .run_tick(
+        .run_once(
             &mut restored_journal_client,
             &mut restored_output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -979,7 +979,7 @@ fn runtime_loop_can_restore_from_latest_verified_file_snapshot_when_newer_is_unv
 }
 
 #[test]
-fn runtime_loop_can_validate_configuration_before_running_tick() {
+fn runtime_loop_can_validate_configuration_before_running_once() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
     let runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone(), eth.clone()], 4, 8);
@@ -988,25 +988,25 @@ fn runtime_loop_can_validate_configuration_before_running_tick() {
 }
 
 #[test]
-fn runtime_loop_tick_report_identifies_idle_tick() {
+fn runtime_loop_run_once_report_identifies_idle_run() {
     let btc = Symbol("BTC-USDT".to_string());
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
     let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone()], 4, 8);
 
     let report = runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("empty runtime loop tick should produce an idle report");
+        .expect("empty runtime loop run_once should produce an idle report");
     let btc_report = report
         .symbol_report(&btc)
-        .expect("btc should have an idle tick report");
+        .expect("btc should have an idle run_once report");
 
     assert!(!report.made_progress());
     assert!(!report.has_work_remaining());
@@ -1014,14 +1014,14 @@ fn runtime_loop_tick_report_identifies_idle_tick() {
     assert!(report.is_idle());
     assert_eq!(btc_report.input_processed_count, 0);
     assert_eq!(btc_report.safe_point_advanced_count, 0);
-    assert_eq!(btc_report.pending_input_len_after_tick, 0);
-    assert_eq!(btc_report.runtime_status_after_tick.pending_output_len, 0);
+    assert_eq!(btc_report.pending_input_len_after_run, 0);
+    assert_eq!(btc_report.runtime_status_after_run.pending_output_len, 0);
     assert_eq!(runtime_loop.last_input_seq(&btc), Some(None));
     assert_eq!(output.read_all().len(), 0);
 }
 
 #[test]
-fn runtime_loop_validate_configuration_reports_missing_handoff_before_tick() {
+fn runtime_loop_validate_configuration_reports_missing_handoff_before_run_once() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
     let mut manager = RuntimeManager::new();
@@ -1063,7 +1063,7 @@ fn runtime_loop_validate_configuration_reports_unregistered_handoff_in_determini
 }
 
 #[test]
-fn runtime_loop_tick_keeps_unblocked_symbol_running_when_one_symbol_output_blocks() {
+fn runtime_loop_run_once_keeps_unblocked_symbol_running_when_one_symbol_output_blocks() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
     let mut manager = RuntimeManager::new();
@@ -1088,24 +1088,24 @@ fn runtime_loop_tick_keeps_unblocked_symbol_running_when_one_symbol_output_block
 
     let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
     let report = runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
         .expect(
-            "runtime tick should report symbol-local output blockage without stopping all symbols",
+            "runtime run_once should report symbol-local output blockage without stopping all symbols",
         );
 
     let btc_report = report
         .symbol_report(&btc)
-        .expect("btc should have a tick report");
+        .expect("btc should have a run_once report");
     let eth_report = report
         .symbol_report(&eth)
-        .expect("eth should have a tick report");
+        .expect("eth should have a run_once report");
 
     assert!(report.made_progress());
     assert!(report.has_work_remaining());
@@ -1143,7 +1143,7 @@ fn runtime_loop_tick_keeps_unblocked_symbol_running_when_one_symbol_output_block
 }
 
 #[test]
-fn runtime_loop_tick_prioritizes_output_commit_when_pending_output_is_full() {
+fn runtime_loop_run_once_prioritizes_output_commit_when_pending_output_is_full() {
     let btc = Symbol("BTC-USDT".to_string());
     let mut manager = RuntimeManager::new_with_pending_output_capacity(1);
     let mut handoffs = HashMap::new();
@@ -1160,18 +1160,18 @@ fn runtime_loop_tick_prioritizes_output_commit_when_pending_output_is_full() {
 
     let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
     let first_report = runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 0,
             },
         )
-        .expect("first tick should fill pending output without committing it");
+        .expect("first run_once should fill pending output without committing it");
     let first_btc_report = first_report
         .symbol_report(&btc)
-        .expect("btc should have a first tick report");
+        .expect("btc should have a first run_once report");
 
     assert!(first_report.made_progress());
     assert!(first_report.has_work_remaining());
@@ -1193,18 +1193,18 @@ fn runtime_loop_tick_prioritizes_output_commit_when_pending_output_is_full() {
         .expect("second btc command should enqueue");
 
     let second_report = runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("second tick should commit full pending output before draining new input");
+        .expect("second run_once should commit full pending output before draining new input");
     let second_btc_report = second_report
         .symbol_report(&btc)
-        .expect("btc should have a second tick report");
+        .expect("btc should have a second run_once report");
 
     assert!(second_report.made_progress());
     assert!(second_report.has_work_remaining());
@@ -1212,21 +1212,21 @@ fn runtime_loop_tick_prioritizes_output_commit_when_pending_output_is_full() {
     assert_eq!(second_btc_report.input_processed_count, 0);
     assert_eq!(second_btc_report.safe_point_advanced_count, 1);
     assert_eq!(
-        second_btc_report.runtime_status_after_tick.last_input_seq,
+        second_btc_report.runtime_status_after_run.last_input_seq,
         Some(JournalSeq(1))
     );
     assert_eq!(
         second_btc_report
-            .runtime_status_after_tick
+            .runtime_status_after_run
             .pending_output_len,
         0
     );
     assert!(
         !second_btc_report
-            .runtime_status_after_tick
+            .runtime_status_after_run
             .pending_output_full
     );
-    assert_eq!(second_btc_report.pending_input_len_after_tick, 1);
+    assert_eq!(second_btc_report.pending_input_len_after_run, 1);
     assert_eq!(second_btc_report.pending_input_capacity, 4);
     assert!(!second_btc_report.pending_input_full);
     assert_eq!(runtime_loop.last_input_seq(&btc), Some(Some(JournalSeq(1))));
@@ -1242,7 +1242,7 @@ fn runtime_loop_tick_prioritizes_output_commit_when_pending_output_is_full() {
 }
 
 #[test]
-fn runtime_loop_tick_reports_output_batch_identity_and_query_status() {
+fn runtime_loop_cycle_reports_output_batch_identity_and_query_status() {
     let btc = Symbol("BTC-USDT".to_string());
     let mut manager = RuntimeManager::new();
     let mut handoffs = HashMap::new();
@@ -1259,22 +1259,22 @@ fn runtime_loop_tick_reports_output_batch_identity_and_query_status() {
 
     let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
     let report = runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("runtime tick should report durable output batch status");
+        .expect("runtime run_once should report durable output batch status");
     let btc_report = report
         .symbol_report(&btc)
-        .expect("btc should have a tick report");
+        .expect("btc should have a run_once report");
     let output_batch_identity = btc_report
         .output_batch_identity
         .as_ref()
-        .expect("runtime tick should expose attempted output batch identity");
+        .expect("runtime run_once should expose attempted output batch identity");
 
     assert_eq!(output_batch_identity.symbol, btc.clone());
     assert_eq!(output_batch_identity.input_seq_start, JournalSeq(1));
@@ -1291,7 +1291,7 @@ fn runtime_loop_tick_reports_output_batch_identity_and_query_status() {
 }
 
 #[test]
-fn runtime_loop_tick_fails_before_processing_when_a_registered_symbol_has_no_handoff() {
+fn runtime_loop_run_once_fails_before_processing_when_a_registered_symbol_has_no_handoff() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
     let mut manager = RuntimeManager::new();
@@ -1309,10 +1309,10 @@ fn runtime_loop_tick_fails_before_processing_when_a_registered_symbol_has_no_han
         .expect("btc command should enqueue");
 
     let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
-    let result = runtime_loop.run_tick(
+    let result = runtime_loop.run_once(
         &mut journal_client,
         &mut output,
-        RuntimeLoopTickLimits {
+        RuntimeLoopRunOnceLimits {
             max_input_entries_per_symbol: 1,
             max_output_requests_per_symbol: 10,
         },
@@ -1331,7 +1331,7 @@ fn runtime_loop_tick_fails_before_processing_when_a_registered_symbol_has_no_han
 }
 
 #[test]
-fn runtime_loop_tick_fails_before_processing_when_handoff_has_unregistered_symbol() {
+fn runtime_loop_run_once_fails_before_processing_when_handoff_has_unregistered_symbol() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
     let mut manager = RuntimeManager::new();
@@ -1354,10 +1354,10 @@ fn runtime_loop_tick_fails_before_processing_when_handoff_has_unregistered_symbo
         .expect("eth command should enqueue");
 
     let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
-    let result = runtime_loop.run_tick(
+    let result = runtime_loop.run_once(
         &mut journal_client,
         &mut output,
-        RuntimeLoopTickLimits {
+        RuntimeLoopRunOnceLimits {
             max_input_entries_per_symbol: 1,
             max_output_requests_per_symbol: 10,
         },
@@ -1379,7 +1379,7 @@ fn runtime_loop_tick_fails_before_processing_when_handoff_has_unregistered_symbo
 }
 
 #[test]
-fn runtime_loop_tick_keeps_unblocked_symbol_running_when_one_symbol_is_quarantined() {
+fn runtime_loop_run_once_keeps_unblocked_symbol_running_when_one_symbol_is_quarantined() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
     let mut manager = RuntimeManager::new();
@@ -1399,18 +1399,18 @@ fn runtime_loop_tick_keeps_unblocked_symbol_running_when_one_symbol_is_quarantin
 
     let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
     let first_report = runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("first tick should create a btc escalation");
+        .expect("first run_once should create a btc escalation");
     let btc_decision = first_report
         .symbol_report(&btc)
-        .expect("btc should have a first tick report")
+        .expect("btc should have a first run_once report")
         .block_decision
         .expect("btc should be escalated");
 
@@ -1426,21 +1426,21 @@ fn runtime_loop_tick_keeps_unblocked_symbol_running_when_one_symbol_is_quarantin
         .expect("eth command should enqueue");
 
     let second_report = runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("second tick should keep quarantined btc paused and continue eth");
+        .expect("second run_once should keep quarantined btc paused and continue eth");
     let paused_btc_report = second_report
         .symbol_report(&btc)
-        .expect("btc should have a paused tick report");
+        .expect("btc should have a paused run_once report");
     let eth_report = second_report
         .symbol_report(&eth)
-        .expect("eth should have a tick report");
+        .expect("eth should have a run_once report");
 
     assert_eq!(paused_btc_report.input_processed_count, 0);
     assert_eq!(paused_btc_report.safe_point_advanced_count, 0);
@@ -1476,15 +1476,15 @@ fn runtime_loop_can_clear_quarantine_and_retry_pending_output() {
 
     let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
     let blocked_report = runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut rejecting_output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("first tick should create a btc escalation");
+        .expect("first run_once should create a btc escalation");
     let decision = blocked_report
         .symbol_report(&btc)
         .expect("btc should have a blocked report")
@@ -1502,10 +1502,10 @@ fn runtime_loop_can_clear_quarantine_and_retry_pending_output() {
 
     let mut accepting_output = AcceptingJournalOutputAppender::new();
     let retry_report = runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut accepting_output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -1547,15 +1547,15 @@ fn runtime_loop_clear_quarantine_does_not_drop_pending_output_when_retry_fails()
 
     let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
     let blocked_report = runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut rejecting_output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("first tick should create a btc escalation");
+        .expect("first run_once should create a btc escalation");
     let first_decision = blocked_report
         .symbol_report(&btc)
         .expect("btc should have a blocked report")
@@ -1572,10 +1572,10 @@ fn runtime_loop_clear_quarantine_does_not_drop_pending_output_when_retry_fails()
     );
 
     let retry_report = runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut rejecting_output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
@@ -1610,7 +1610,7 @@ fn runtime_loop_clear_quarantine_does_not_drop_pending_output_when_retry_fails()
 }
 
 #[test]
-fn runtime_loop_tick_reports_symbols_in_deterministic_order() {
+fn runtime_loop_cycle_reports_symbols_in_deterministic_order() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
     let mut manager = RuntimeManager::new();
@@ -1635,15 +1635,15 @@ fn runtime_loop_tick_reports_symbols_in_deterministic_order() {
 
     let mut runtime_loop = RuntimeLoop::new(manager, handoffs);
     let report = runtime_loop
-        .run_tick(
+        .run_once(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("runtime tick should process registered symbols");
+        .expect("runtime run_once should process registered symbols");
 
     let report_symbols: Vec<Symbol> = report
         .symbol_reports
@@ -1678,16 +1678,16 @@ fn runtime_loop_run_limited_drains_work_until_idle() {
         .run_limited(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
-            RuntimeLoopRunLimit { max_ticks: 4 },
+            RuntimeLoopRunLimit { max_cycles: 4 },
         )
         .expect("limited run should drain queued work");
 
     assert_eq!(report.stop_reason, RuntimeLoopRunStopReason::Idle);
-    assert_eq!(report.tick_count(), 2);
+    assert_eq!(report.cycle_count(), 2);
     assert!(report.made_progress);
     assert!(!report.has_work_remaining);
     assert!(!report.has_blocked_symbols);
@@ -1716,11 +1716,11 @@ fn runtime_loop_run_limited_reports_run_limit_exhaustion_with_remaining_work() {
         .run_limited(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
-            RuntimeLoopRunLimit { max_ticks: 1 },
+            RuntimeLoopRunLimit { max_cycles: 1 },
         )
         .expect("limited run should stop when run limit is consumed");
 
@@ -1728,7 +1728,7 @@ fn runtime_loop_run_limited_reports_run_limit_exhaustion_with_remaining_work() {
         report.stop_reason,
         RuntimeLoopRunStopReason::RunLimitReached
     );
-    assert_eq!(report.tick_count(), 1);
+    assert_eq!(report.cycle_count(), 1);
     assert!(report.made_progress);
     assert!(report.has_work_remaining);
     assert!(!report.has_blocked_symbols);
@@ -1761,16 +1761,16 @@ fn runtime_loop_run_limited_stops_after_unblocked_work_drains_when_symbol_is_blo
         .run_limited(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
-            RuntimeLoopRunLimit { max_ticks: 4 },
+            RuntimeLoopRunLimit { max_cycles: 4 },
         )
         .expect("limited run should stop once only blocked work remains");
 
     assert_eq!(report.stop_reason, RuntimeLoopRunStopReason::Blocked);
-    assert_eq!(report.tick_count(), 3);
+    assert_eq!(report.cycle_count(), 3);
     assert!(report.made_progress);
     assert!(report.has_work_remaining);
     assert!(report.has_blocked_symbols);
@@ -1819,19 +1819,19 @@ fn runtime_loop_run_limited_reports_initial_work_when_run_limit_is_zero() {
         .run_limited(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
-            RuntimeLoopRunLimit { max_ticks: 0 },
+            RuntimeLoopRunLimit { max_cycles: 0 },
         )
-        .expect("zero limit should report initial work without running a tick");
+        .expect("zero limit should report initial work without running a run_once cycle");
 
     assert_eq!(
         report.stop_reason,
         RuntimeLoopRunStopReason::RunLimitReached
     );
-    assert_eq!(report.tick_count(), 0);
+    assert_eq!(report.cycle_count(), 0);
     assert!(!report.made_progress);
     assert!(report.has_work_remaining);
     assert_eq!(

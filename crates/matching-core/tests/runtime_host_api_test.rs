@@ -9,7 +9,7 @@ use matching_core::runtime_config::{
 };
 use matching_core::runtime_host::{RuntimeHost, RuntimeHostError};
 use matching_core::runtime_loop::{
-    RuntimeLoopRunLimit, RuntimeLoopRunStopReason, RuntimeLoopTickLimits,
+    RuntimeLoopRunLimit, RuntimeLoopRunOnceLimits, RuntimeLoopRunStopReason,
 };
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
@@ -123,7 +123,7 @@ fn runtime_host_rejects_unsupported_host_modes_from_public_api() {
 }
 
 #[test]
-fn runtime_host_routes_input_to_owning_shard_and_runs_all_ticks() {
+fn runtime_host_routes_input_to_owning_shard_and_runs_once_all() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -139,21 +139,21 @@ fn runtime_host_routes_input_to_owning_shard_and_runs_all_ticks() {
     assert_eq!(host.enqueue_input(command_entry(1, eth.clone())), Ok(()));
 
     let report = host
-        .run_tick_all(
+        .run_once_all(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 1,
             },
         )
-        .expect("manual runtime host should run all shard ticks");
+        .expect("manual runtime host should run all shard run_once cycles");
 
     assert_eq!(report.shard_reports.len(), 2);
     assert_eq!(
         report
             .shard_report(RuntimeShardId(1))
-            .and_then(|item| item.tick_report.symbol_report(&eth))
+            .and_then(|item| item.run_once_report.symbol_report(&eth))
             .map(|item| item.input_processed_count),
         Some(1)
     );
@@ -180,11 +180,11 @@ fn runtime_host_run_limited_all_drives_all_shards_until_idle() {
         .run_limited_all(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 1,
             },
-            RuntimeLoopRunLimit { max_ticks: 2 },
+            RuntimeLoopRunLimit { max_cycles: 2 },
         )
         .expect("manual runtime host should run all shard run limits");
 
@@ -222,11 +222,11 @@ fn runtime_host_run_limited_all_reports_remaining_work_when_limit_is_reached() {
         .run_limited_all(
             &mut journal_client,
             &mut output,
-            RuntimeLoopTickLimits {
+            RuntimeLoopRunOnceLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 1,
             },
-            RuntimeLoopRunLimit { max_ticks: 1 },
+            RuntimeLoopRunLimit { max_cycles: 1 },
         )
         .expect("manual runtime host should run all shard run limits");
 
