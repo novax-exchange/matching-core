@@ -137,6 +137,7 @@ fn runtime_host_builds_manual_host_from_public_api() {
     config.host = RuntimeHostConfig {
         mode: RuntimeHostMode::Manual,
         max_run_cycles_per_call: 1024,
+        max_run_calls_per_until_idle: 1024,
     };
 
     let host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
@@ -156,6 +157,7 @@ fn runtime_host_rejects_inline_until_inline_scheduling_exists_from_public_api() 
     config.host = RuntimeHostConfig {
         mode: RuntimeHostMode::Inline,
         max_run_cycles_per_call: 1024,
+        max_run_calls_per_until_idle: 1024,
     };
 
     let result = RuntimeHost::new_for_symbols_with_config(vec![btc], config);
@@ -173,6 +175,7 @@ fn runtime_host_rejects_unsupported_host_modes_from_public_api() {
     config.host = RuntimeHostConfig {
         mode: RuntimeHostMode::ThreadPerShard,
         max_run_cycles_per_call: 1024,
+        max_run_calls_per_until_idle: 1024,
     };
 
     let result = RuntimeHost::new_for_symbols_with_config(vec![btc], config);
@@ -369,9 +372,7 @@ fn runtime_host_run_until_idle_repeats_configured_runs_until_idle() {
         .run_until_idle(
             &mut journal_client,
             &mut output,
-            RuntimeHostRunUntilIdleLimit {
-                max_configured_runs: 4,
-            },
+            RuntimeHostRunUntilIdleLimit { max_run_calls: 4 },
         )
         .expect("manual runtime host should run configured calls until idle");
 
@@ -401,9 +402,7 @@ fn runtime_host_run_until_idle_reports_call_limit_before_idle() {
         .run_until_idle(
             &mut journal_client,
             &mut output,
-            RuntimeHostRunUntilIdleLimit {
-                max_configured_runs: 2,
-            },
+            RuntimeHostRunUntilIdleLimit { max_run_calls: 2 },
         )
         .expect("manual runtime host should stop at outer call limit");
 
@@ -434,9 +433,7 @@ fn runtime_host_run_until_idle_stops_when_only_blocked_work_remains() {
         .run_until_idle(
             &mut journal_client,
             &mut output,
-            RuntimeHostRunUntilIdleLimit {
-                max_configured_runs: 3,
-            },
+            RuntimeHostRunUntilIdleLimit { max_run_calls: 3 },
         )
         .expect("manual runtime host should stop when output remains blocked");
 
@@ -447,6 +444,35 @@ fn runtime_host_run_until_idle_stops_when_only_blocked_work_remains() {
     assert_eq!(report.configured_run_count(), 1);
     assert!(report.has_blocked_symbols());
     assert_eq!(report.blocked_shards(), vec![RuntimeShardId(0)]);
+}
+
+#[test]
+fn runtime_host_run_until_idle_configured_uses_runtime_config_limit() {
+    let btc = symbol("BTC-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.host.max_run_cycles_per_call = 1;
+    config.host.max_run_calls_per_until_idle = 2;
+    config.symbol_runtime.max_input_entries_per_step = 1;
+    config.output_commit.max_output_requests_per_step = 1;
+    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone()], config)
+        .expect("manual runtime host should be supported");
+    let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
+    let mut output = TestJournalOutputAppender::new();
+
+    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    assert_eq!(host.enqueue_input(command_entry(2, btc.clone())), Ok(()));
+    assert_eq!(host.enqueue_input(command_entry(3, btc.clone())), Ok(()));
+
+    let report = host
+        .run_until_idle_configured(&mut journal_client, &mut output)
+        .expect("manual runtime host should run until idle with configured limit");
+
+    assert_eq!(
+        report.stop_reason,
+        RuntimeHostRunUntilIdleStopReason::CallLimitReached
+    );
+    assert_eq!(report.configured_run_count(), 2);
+    assert_eq!(output.read_all().len(), 2);
 }
 
 #[test]

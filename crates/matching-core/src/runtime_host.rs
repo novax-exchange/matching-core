@@ -14,6 +14,7 @@ pub struct RuntimeHost {
     runners: Vec<RuntimeShardRunner>,
     run_once_limits: RuntimeLoopRunOnceLimits,
     run_limit: RuntimeLoopRunLimit,
+    run_until_idle_limit: RuntimeHostRunUntilIdleLimit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,7 +36,15 @@ pub struct RuntimeHostRunReport {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeHostRunUntilIdleLimit {
-    pub max_configured_runs: usize,
+    pub max_run_calls: usize,
+}
+
+impl RuntimeHostRunUntilIdleLimit {
+    pub fn from_config(config: &MatchingRuntimeConfig) -> Self {
+        Self {
+            max_run_calls: config.host.max_run_calls_per_until_idle,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +82,7 @@ impl RuntimeHost {
                 let mode = config.host.mode;
                 let run_once_limits = RuntimeLoopRunOnceLimits::from_config(&config);
                 let run_limit = RuntimeLoopRunLimit::from_config(&config);
+                let run_until_idle_limit = RuntimeHostRunUntilIdleLimit::from_config(&config);
                 let runners = RuntimeShardRunner::from_symbols_with_config(symbols, config)
                     .map_err(RuntimeHostError::Topology)?;
 
@@ -81,6 +91,7 @@ impl RuntimeHost {
                     runners,
                     run_once_limits,
                     run_limit,
+                    run_until_idle_limit,
                 })
             }
             unsupported => Err(RuntimeHostError::UnsupportedMode(unsupported)),
@@ -175,6 +186,14 @@ impl RuntimeHost {
         self.run_limited_all(journal_client, output, self.run_once_limits, self.run_limit)
     }
 
+    pub fn run_until_idle_configured(
+        &mut self,
+        journal_client: &mut OutputJournalClient,
+        output: &mut dyn JournalOutputAppender,
+    ) -> Result<RuntimeHostRunUntilIdleReport, RuntimeHostError> {
+        self.run_until_idle(journal_client, output, self.run_until_idle_limit)
+    }
+
     pub fn run_until_idle(
         &mut self,
         journal_client: &mut OutputJournalClient,
@@ -183,7 +202,7 @@ impl RuntimeHost {
     ) -> Result<RuntimeHostRunUntilIdleReport, RuntimeHostError> {
         let mut run_reports = Vec::new();
 
-        for _ in 0..limit.max_configured_runs {
+        for _ in 0..limit.max_run_calls {
             let run_report = self.run_configured_all(journal_client, output)?;
 
             let stop_reason = if run_report.is_idle() {

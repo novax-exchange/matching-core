@@ -62,6 +62,7 @@ pub struct RuntimeShardId(pub usize);
 pub struct RuntimeHostConfig {
     pub mode: RuntimeHostMode,
     pub max_run_cycles_per_call: usize,
+    pub max_run_calls_per_until_idle: usize,
 }
 
 impl Default for RuntimeHostConfig {
@@ -69,6 +70,7 @@ impl Default for RuntimeHostConfig {
         Self {
             mode: RuntimeHostMode::Manual,
             max_run_cycles_per_call: 1024,
+            max_run_calls_per_until_idle: 1024,
         }
     }
 }
