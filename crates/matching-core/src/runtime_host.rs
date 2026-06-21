@@ -1,7 +1,10 @@
 use crate::journal_adapter::{JournalInputEntry, JournalOutputAppender};
 use crate::output_commit_boundary::OutputJournalClient;
 use crate::runtime_config::{MatchingRuntimeConfig, RuntimeHostMode, RuntimeShardId};
-use crate::runtime_loop::{RuntimeLoopError, RuntimeLoopTickLimits, RuntimeLoopTickReport};
+use crate::runtime_loop::{
+    RuntimeLoopError, RuntimeLoopRunBudget, RuntimeLoopRunReport, RuntimeLoopTickLimits,
+    RuntimeLoopTickReport,
+};
 use crate::runtime_shard_runner::RuntimeShardRunner;
 use crate::runtime_topology::RuntimeTopologyError;
 use crate::types::Symbol;
@@ -24,9 +27,20 @@ pub struct RuntimeHostTickReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeHostRunReport {
+    pub shard_reports: Vec<RuntimeHostShardRunReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeHostShardTickReport {
     pub shard_id: RuntimeShardId,
     pub tick_report: RuntimeLoopTickReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeHostShardRunReport {
+    pub shard_id: RuntimeShardId,
+    pub run_report: RuntimeLoopRunReport,
 }
 
 impl RuntimeHost {
@@ -103,6 +117,28 @@ impl RuntimeHost {
 
         Ok(RuntimeHostTickReport { shard_reports })
     }
+
+    pub fn run_budgeted_all(
+        &mut self,
+        journal_client: &mut OutputJournalClient,
+        output: &mut dyn JournalOutputAppender,
+        limits: RuntimeLoopTickLimits,
+        budget: RuntimeLoopRunBudget,
+    ) -> Result<RuntimeHostRunReport, RuntimeHostError> {
+        let mut shard_reports = Vec::new();
+
+        for runner in &mut self.runners {
+            let run_report = runner
+                .run_budgeted(journal_client, output, limits, budget)
+                .map_err(RuntimeHostError::RuntimeLoop)?;
+            shard_reports.push(RuntimeHostShardRunReport {
+                shard_id: runner.shard_id(),
+                run_report,
+            });
+        }
+
+        Ok(RuntimeHostRunReport { shard_reports })
+    }
 }
 
 impl RuntimeHostTickReport {
@@ -110,5 +146,37 @@ impl RuntimeHostTickReport {
         self.shard_reports
             .iter()
             .find(|report| report.shard_id == shard_id)
+    }
+}
+
+impl RuntimeHostRunReport {
+    pub fn shard_report(&self, shard_id: RuntimeShardId) -> Option<&RuntimeHostShardRunReport> {
+        self.shard_reports
+            .iter()
+            .find(|report| report.shard_id == shard_id)
+    }
+
+    pub fn made_progress(&self) -> bool {
+        self.shard_reports
+            .iter()
+            .any(|report| report.run_report.made_progress)
+    }
+
+    pub fn has_work_remaining(&self) -> bool {
+        self.shard_reports
+            .iter()
+            .any(|report| report.run_report.has_work_remaining)
+    }
+
+    pub fn has_blocked_symbols(&self) -> bool {
+        self.shard_reports
+            .iter()
+            .any(|report| report.run_report.has_blocked_symbols)
+    }
+
+    pub fn is_idle(&self) -> bool {
+        self.shard_reports
+            .iter()
+            .all(|report| report.run_report.is_idle())
     }
 }
