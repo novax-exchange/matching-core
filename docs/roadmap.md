@@ -31,8 +31,8 @@ Each phase should:
 | Item | Status |
 | --- | --- |
 | Completed phases | Phase 0-25 |
-| Current milestone | Determinism proof layers |
-| Current phase | Phase 26: Internal runtime concurrency and pressure |
+| Current milestone | Runtime execution and pressure |
+| Current phase | Phase 26: Runtime execution modes and pressure |
 | Verification command | `cargo test -p matching-core` |
 
 The project has completed the single-process matching core path:
@@ -51,7 +51,7 @@ Journal Adapter input reader
 
 The asynchronous output commit discipline is now established at the learning-project level. The matching execution path generates deterministic output requests and enqueues them locally; the output commit path batches and durably appends those requests to Journal; safe-point advancement consumes only confirmed durable prefixes, not attempted remote calls or generated output.
 
-The next major shift is turning those explicit steps into long-running internal shard runtimes with pressure, scheduling, shutdown, and multi-symbol isolation tests.
+The next major shift is turning those explicit steps into runtime execution-mode contracts with pressure, scheduling, shutdown, and multi-symbol isolation tests. Manual execution is the reference contract; threaded or async execution modes should only be added after the manual contract is precise enough to preserve the same ownership and safe-point rules.
 
 ## Phase Roadmap
 
@@ -75,7 +75,7 @@ The next major shift is turning those explicit steps into long-running internal 
 | 15 | Completed | Shard execution core | BTC/ETH runtimes remain isolated |
 | 16 | Completed | Symbol routing | Entries route by symbol |
 | 17 | Completed | Bounded handoff | Full queue, ordered consumption, and watermarks |
-| 18 | Completed | Symbol runtime worker | Journal reader and runtime separation shape |
+| 18 | Completed | Symbol runtime step boundary | Journal reader and runtime separation shape |
 | 19 | Completed | Output isolation | Runtime can enqueue output requests before commit confirmation |
 | 20 | Completed | Confirmed input consumer | Read confirmed input through Journal Adapter and route to symbol handoffs |
 | 21 | Completed | SymbolRuntime output determinism | Two fresh runtimes process the same input sequence and produce identical output entries and safe point |
@@ -83,21 +83,23 @@ The next major shift is turning those explicit steps into long-running internal 
 | 23 | Completed | Replay output equivalence | Live path and replay path produce comparable output sequence, state, checksum, and safe point |
 | 24 | Completed | Snapshot restore output determinism | Snapshot restore plus replay tail equals full replay for state, output identity, and safe point |
 | 25 | Completed | Output commit ambiguity and safe-point discipline | Missing / incomplete / durable / conflict output commit evidence is surfaced through ShardExecutionCore; unknown / failed output commit does not advance safe point beyond the confirmed durable prefix or consume future deterministic identity |
-| 26 | Planned | Internal runtime concurrency and pressure | Long-running worker, bounded output commit pressure, queue pressure, retry, and safe-point tests |
-| 27 | Planned | Multi-symbol concurrency and hot-symbol isolation | Slow or saturated symbol does not corrupt or block unrelated symbols |
-| 28 | Planned | Output commit pressure | Slow or failing output commit does not create ambiguous safe-point progress |
-| 29 | Planned | Runtime state view boundary | Cursor, checksum, queue, and deterministic status queries |
-| 30 | Planned | Observability | Tracing and metrics visibility |
-| 31 | Planned | Benchmarks | Single-symbol and multi-symbol baselines |
-| 32 | Planned | Order book data structure evolution | Benchmark comparison |
-| 33 | Planned | RingBuffer-style handoff optimization | Queue benchmark improvements |
-| 34 | Planned | CPU stability optimization | p99 jitter comparison |
-| 35 | Planned | Sharding and hot-symbol placement | Symbol ownership and migration tests |
-| 36 | Planned | Standby replay | Standby checksum catches up |
-| 37 | Planned | Leader lease and fencing | Lost lease stops processing |
-| 38 | Planned | Failover drill | Promoted standby state is consistent |
-| 39 | Planned | Zero-downtime upgrade validation | Old/new versions replay consistently |
-| 40 | Planned | Final acceptance | Tests, benchmarks, drills, and docs |
+| 26 | In progress | Runtime execution modes and pressure | MatchingRuntime manual execution remains the reference contract; input preflight, close, drain, shutdown, pressure, remaining work, and blocked-symbol semantics are explicit before threaded or async execution is implemented |
+| 27 | Planned | Thread-per-shard execution mode | Threaded execution preserves the same shard ownership, input close, drain, shutdown, pressure, and safe-point semantics as manual execution |
+| 28 | Planned | Async-task-per-shard execution mode | Async execution preserves deterministic ownership and bounded pressure without introducing a second writer for a symbol |
+| 29 | Planned | Multi-symbol concurrency and hot-symbol isolation | Slow or saturated symbol does not corrupt or block unrelated symbols beyond the chosen shard-level policy |
+| 30 | Planned | Output commit pressure | Slow or failing output commit does not create ambiguous safe-point progress |
+| 31 | Planned | Runtime state view boundary | Cursor, checksum, queue, pressure, blocked-symbol, and deterministic status queries |
+| 32 | Planned | Observability | Tracing and metrics visibility |
+| 33 | Planned | Benchmarks | Single-symbol, multi-symbol, and shard execution baselines |
+| 34 | Planned | Order book data structure evolution | Benchmark comparison |
+| 35 | Planned | RingBuffer-style handoff optimization | Queue benchmark improvements |
+| 36 | Planned | CPU stability optimization | p99 jitter comparison |
+| 37 | Planned | Sharding and hot-symbol placement | Symbol ownership and migration tests |
+| 38 | Planned | Standby replay | Standby checksum catches up |
+| 39 | Planned | Leader lease and fencing | Lost lease stops processing |
+| 40 | Planned | Failover drill | Promoted standby state is consistent |
+| 41 | Planned | Zero-downtime upgrade validation | Old/new versions replay consistently |
+| 42 | Planned | Final acceptance | Tests, benchmarks, drills, and docs |
 
 ## Module Progress
 
@@ -109,8 +111,8 @@ The next major shift is turning those explicit steps into long-running internal 
 | Journal adapter contract | Completed for current stage | `journal_adapter.rs`; input reader and output appender contracts exist |
 | Replay runner | Partial | `replay_runner.rs`; checksum replay exists, and replay result now regenerates comparable output entries for the current live-vs-replay proof |
 | Snapshot restore | Partial | `snapshot_restore.rs`; in-memory order-book snapshot/restore exists, and `SymbolRuntimeSnapshot` now captures runtime identity state for restore |
-| Symbol runtime | Completed for current stage | `symbol_runtime.rs`, `symbol_runtime/runtime.rs`; deterministic output generation, bounded input draining, retry requeue, pending output handoff, rollback, safe-point advancement, and one-shot worker support are covered for the current layer |
-| Matching runtime | Completed for current stage | `matching_runtime.rs`, `matching_runtime_driver.rs`; configured execution mode, input close / drain / shutdown boundaries, shard status, and manual multi-shard execution are covered for the current layer |
+| Symbol runtime | Completed for current stage | `symbol_runtime.rs`, `symbol_runtime/runtime.rs`; deterministic output generation, bounded input draining, retry requeue, pending output handoff, rollback, safe-point advancement, and one-shot execution support are covered for the current layer |
+| Matching runtime | Completed for current stage | `matching_runtime.rs`, `matching_runtime_driver.rs`; configured execution mode, input preflight, input close / drain / shutdown boundaries, shard status, and manual multi-shard execution are covered for the current layer |
 | Shard runtime | Completed for current stage | `shard_runtime.rs`; bounded input handoff, shard ownership, run-once / run-limited execution, topology construction, remaining-work reporting, and blocked-symbol reporting are covered for the current layer |
 | Shard execution core | Completed for current stage | `shard_execution_core.rs` |
 | Symbol routing | Completed | `symbol_routing.rs` |
@@ -249,7 +251,7 @@ Progress so far:
 Accepted mechanism:
 
 - `SymbolRuntime` should produce deterministic output requests and place them into bounded pending output state.
-- Output commit should run as a separate step or worker that drains pending output in batches and talks to Journal.
+- Output commit should run as a separate step, thread, or async task that drains pending output in batches and talks to Journal.
 - Remote Journal latency should affect safe-point lag and pending-output pressure, not force each matching command to synchronously wait for a remote append.
 - If pending output grows beyond the configured bound, matching intake or execution must be throttled rather than allowing unbounded memory growth or unsafe safe-point advancement.
 - Safe point is the largest continuous Journal input sequence whose output has been confirmed durable.
@@ -257,7 +259,7 @@ Accepted mechanism:
 Completion boundary:
 
 - Phase 25 is complete for the learning-project contract: output commit ambiguity is represented explicitly, durable prefixes advance safe point conservatively, unresolved tails remain pending, batch identity and digest conflict are detected, and ShardExecutionCore exposes the evidence needed to pause, clear, quarantine, or retry a symbol.
-- Long-running workers, production shutdown behavior, standby promotion, operational automation, and cross-symbol scheduling pressure move to Phase 26 and later phases.
+- Threaded / async execution modes, production shutdown behavior, standby promotion, operational automation, and cross-symbol scheduling pressure move to Phase 26 and later phases.
 
 ## Difficulty Backlog
 
@@ -267,9 +269,9 @@ This backlog records hard problems discovered or expected during scenario-driven
 | --- | --- | --- |
 | Determinism | Same confirmed input must produce the same output events, order book state, checksums, and safe points across live execution and replay | Partially covered; replay can now regenerate output entries and match live output / checksum / safe point across representative command outcomes |
 | Architecture extraction | Code should reflect responsibilities, state ownership, contracts, boundary rules, flows, failure modes, and validation from the architecture docs | Needs explicit inventory |
-| Single writer | Each symbol order book must have exactly one mutation owner even when runtimes run concurrently | Basic symbol isolation exists; long-running worker model is next |
+| Single writer | Each symbol order book must have exactly one mutation owner even when runtimes run concurrently | Basic symbol isolation exists; MatchingRuntime, ShardRuntime, ShardExecutionCore, and SymbolRuntime are now named as separate runtime ownership layers. Threaded and async execution modes must preserve this model |
 | Backpressure | Bounded handoff and pending output buffer saturation must stop unsafe progress without unbounded memory growth | Basic bounded transfer buffers exist; MatchingRuntime status exposes pending-output pressure, output-only commit can relieve pressure before more input is consumed, and pressure-aware scheduling now does that automatically when pending output is full. Escalated symbols are paused without stopping unrelated symbols. Slow Journal scheduling is partially covered; production pacing still needs study |
-| Output commit | Matching output must become durable before the runtime advances safe progress | Phase 25 learning contract complete. Output results are classified into explicit commit outcomes; exact durable unknowns can be resolved; incomplete batches advance only the confirmed prefix; conflicts are surfaced as deterministic output evidence; ShardExecutionCore preserves blockage evidence across escalation and quarantine. The adopted production direction is async batch Journal commit with bounded pending output and backpressure; long-running worker pressure, shutdown, and operational automation move to Phase 26+ |
+| Output commit | Matching output must become durable before the runtime advances safe progress | Phase 25 learning contract complete. Output results are classified into explicit commit outcomes; exact durable unknowns can be resolved; incomplete batches advance only the confirmed prefix; conflicts are surfaced as deterministic output evidence; ShardExecutionCore preserves blockage evidence across escalation and quarantine. The adopted production direction is async batch Journal commit with bounded pending output and backpressure; threaded / async execution pressure, shutdown, and operational automation move to Phase 26+ |
 | Output identity | Output batches need stable identity so retry does not duplicate or drift | Basic trade and market-sequence identity covered for trade outputs. Output commit attempts have `OutputBatchIdentity` metadata with symbol, input sequence range, entry count, matching-output version, and deterministic output digest. Batch id is separated from digest: same batch id with a different digest is treated as a conflict and rejected by the output journal client. `OutputCommitMetadataIndex` is a rebuildable lookup layer over durable Journal output metadata, and `OutputJournalClient` keeps a recent cache that can be warmed or rebuilt without becoming the source of truth |
 | Market sequence | Per-symbol market sequence should be distinct from global journal sequence | Trade outputs carry `market_seq`; resting-order, cancel, and book-delta market events are not yet modeled |
 | Control state | Matching-affecting config must enter at deterministic sequence positions | Not yet modeled |
