@@ -2,8 +2,8 @@ use crate::journal_adapter::{JournalInputReader, JournalOutputEntry};
 use crate::order::Command;
 use crate::order_book::OrderBook;
 use crate::output_commit_boundary::{digest_journal_output_entries, OutputDigest};
-use crate::per_symbol_execution_loop::SymbolRuntime;
 use crate::snapshot_restore::SymbolRuntimeSnapshot;
+use crate::symbol_runtime::SymbolRuntime;
 use crate::types::{Checksum, JournalSeq, Symbol};
 
 pub struct ReplayRunner {
@@ -217,9 +217,7 @@ mod tests {
     use crate::output_commit_boundary::{
         run_output_batch_commit_step_report, OutputJournalClient, PendingOutputBuffer,
     };
-    use crate::per_symbol_execution_loop::{
-        advance_runtime_safe_point_from_output_commit, SymbolRuntime,
-    };
+    use crate::symbol_runtime::{advance_runtime_safe_point_from_output_commit, SymbolRuntime};
     use crate::types::{Checksum, CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
     struct InMemoryJournalInputReader {

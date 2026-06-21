@@ -1,9 +1,9 @@
 use matching_core::journal_adapter::{JournalInputEntry, JournalInputReader, JournalOutputEntry};
 use matching_core::matching_engine::{EngineEvent, OrderAck, RejectReason};
 use matching_core::order::{Command, Order};
-use matching_core::per_symbol_execution_loop::SymbolRuntime;
 use matching_core::replay_runner::{ReplayComparisonResult, ReplayRunner};
 use matching_core::snapshot_restore::{OrderBookSnapshot, SymbolRuntimeSnapshot};
+use matching_core::symbol_runtime::SymbolRuntime;
 use matching_core::types::{
     Checksum, CommandId, JournalSeq, MarketSeq, OrderId, Price, Quantity, Side, Symbol, TradeId,
 };

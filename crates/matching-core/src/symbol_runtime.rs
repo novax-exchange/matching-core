@@ -1,6 +1,6 @@
-mod symbol_runtime;
+mod runtime;
 
-pub use symbol_runtime::{SafePointError, SymbolRuntime};
+pub use runtime::{SafePointError, SymbolRuntime};
 
 use crate::{
     bounded_handoff::BoundedHandoff,
@@ -13,7 +13,7 @@ use crate::{
 };
 use std::thread::{self, JoinHandle};
 
-pub type PerSymbolExecutionLoopWorkerResult<O> = (
+pub type SymbolRuntimeWorkerResult<O> = (
     SymbolRuntime,
     BoundedHandoff,
     O,
@@ -21,7 +21,7 @@ pub type PerSymbolExecutionLoopWorkerResult<O> = (
 );
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PerSymbolExecutionLoopOutputCommitStepReport {
+pub struct SymbolRuntimeOutputCommitStepReport {
     pub input_processed_count: usize,
     pub safe_point_advanced_count: usize,
     pub output_batch_identity: Option<OutputBatchIdentity>,
@@ -30,29 +30,28 @@ pub struct PerSymbolExecutionLoopOutputCommitStepReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PerSymbolExecutionLoopOutputCommitStepError {
+pub enum SymbolRuntimeOutputCommitStepError {
     PendingOutputBuffer(PendingOutputBufferError),
     SafePoint(SafePointError),
 }
 
-pub fn spawn_per_symbol_execution_loop_once<O>(
+pub fn spawn_symbol_runtime_once<O>(
     mut runtime: SymbolRuntime,
     mut queue: BoundedHandoff,
     mut output: O,
     max_entries: usize,
-) -> JoinHandle<PerSymbolExecutionLoopWorkerResult<O>>
+) -> JoinHandle<SymbolRuntimeWorkerResult<O>>
 where
     O: JournalOutputAppender + Send + 'static,
 {
     thread::spawn(move || {
-        let result =
-            run_per_symbol_execution_loop_step(&mut runtime, &mut queue, &mut output, max_entries);
+        let result = run_symbol_runtime_step(&mut runtime, &mut queue, &mut output, max_entries);
 
         (runtime, queue, output, result)
     })
 }
 
-pub fn run_per_symbol_execution_loop_step(
+pub fn run_symbol_runtime_step(
     runtime: &mut SymbolRuntime,
     queue: &mut BoundedHandoff,
     output: &mut dyn JournalOutputAppender,
@@ -77,7 +76,7 @@ pub fn run_per_symbol_execution_loop_step(
     Ok(processed)
 }
 
-pub fn run_per_symbol_execution_loop_step_to_pending_output_buffer(
+pub fn run_symbol_runtime_step_to_pending_output_buffer(
     runtime: &mut SymbolRuntime,
     handoff: &mut BoundedHandoff,
     pending_output_buffer: &mut PendingOutputBuffer,
@@ -117,7 +116,7 @@ pub fn advance_runtime_safe_point_from_output_commit(
     Ok(advanced)
 }
 
-pub fn run_per_symbol_execution_loop_step_with_output_batch_commit(
+pub fn run_symbol_runtime_step_with_output_batch_commit(
     runtime: &mut SymbolRuntime,
     handoff: &mut BoundedHandoff,
     pending_output_buffer: &mut PendingOutputBuffer,
@@ -125,15 +124,14 @@ pub fn run_per_symbol_execution_loop_step_with_output_batch_commit(
     output: &mut dyn JournalOutputAppender,
     max_input_entries: usize,
     max_output_requests: usize,
-) -> Result<PerSymbolExecutionLoopOutputCommitStepReport, PerSymbolExecutionLoopOutputCommitStepError>
-{
-    let input_processed_count = run_per_symbol_execution_loop_step_to_pending_output_buffer(
+) -> Result<SymbolRuntimeOutputCommitStepReport, SymbolRuntimeOutputCommitStepError> {
+    let input_processed_count = run_symbol_runtime_step_to_pending_output_buffer(
         runtime,
         handoff,
         pending_output_buffer,
         max_input_entries,
     )
-    .map_err(PerSymbolExecutionLoopOutputCommitStepError::PendingOutputBuffer)?;
+    .map_err(SymbolRuntimeOutputCommitStepError::PendingOutputBuffer)?;
 
     let output_commit_report_with_identity = run_output_batch_commit_step_report_with_identity(
         runtime.symbol(),
@@ -145,9 +143,9 @@ pub fn run_per_symbol_execution_loop_step_with_output_batch_commit(
     let output_commit_report = output_commit_report_with_identity.commit_report;
     let safe_point_advanced_count =
         advance_runtime_safe_point_from_output_commit(runtime, &output_commit_report.commit_result)
-            .map_err(PerSymbolExecutionLoopOutputCommitStepError::SafePoint)?;
+            .map_err(SymbolRuntimeOutputCommitStepError::SafePoint)?;
 
-    Ok(PerSymbolExecutionLoopOutputCommitStepReport {
+    Ok(SymbolRuntimeOutputCommitStepReport {
         input_processed_count,
         safe_point_advanced_count,
         output_batch_identity: output_commit_report_with_identity.batch_identity,
@@ -169,7 +167,7 @@ mod tests {
     use crate::order::{Command, Order};
     use crate::output_commit_boundary::OutputBatchCommitResult;
     use crate::output_commit_boundary::{PendingOutputBuffer, PendingOutputBufferError};
-    use crate::per_symbol_execution_loop::{SafePointError, SymbolRuntime};
+    use crate::symbol_runtime::{SafePointError, SymbolRuntime};
     use crate::types::{CommandId, JournalSeq, MarketSeq, OrderId, Price, Quantity, Side, Symbol};
 
     struct InMemoryJournalOutputAppender {
@@ -224,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn per_symbol_execution_loop_step_drains_queue_and_processes_entries() {
+    fn symbol_runtime_step_drains_queue_and_processes_entries() {
         let mut queue = BoundedHandoff::new(4);
         let mut runtime = SymbolRuntime::new(symbol());
         let mut output = InMemoryJournalOutputAppender::new();
@@ -232,8 +230,7 @@ mod tests {
         assert_eq!(queue.enqueue(input_entry(1, 10, 100)), Ok(()));
         assert_eq!(queue.enqueue(input_entry(2, 11, 101)), Ok(()));
 
-        let processed =
-            run_per_symbol_execution_loop_step(&mut runtime, &mut queue, &mut output, 10);
+        let processed = run_symbol_runtime_step(&mut runtime, &mut queue, &mut output, 10);
 
         assert_eq!(processed, Ok(2));
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(2)));
@@ -313,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn per_symbol_execution_loop_step_keeps_unprocessed_entries_when_batch_fails() {
+    fn symbol_runtime_step_keeps_unprocessed_entries_when_batch_fails() {
         let mut queue = BoundedHandoff::new(4);
         let mut runtime = SymbolRuntime::new(symbol());
         let mut output = FailOnSecondAppendJournalOutputAppender::new();
@@ -322,7 +319,7 @@ mod tests {
         assert_eq!(queue.enqueue(input_entry(2, 11, 101)), Ok(()));
         assert_eq!(queue.enqueue(input_entry(3, 12, 102)), Ok(()));
 
-        let result = run_per_symbol_execution_loop_step(&mut runtime, &mut queue, &mut output, 10);
+        let result = run_symbol_runtime_step(&mut runtime, &mut queue, &mut output, 10);
 
         assert_eq!(result, Err(JournalAdapterError::AppendFailed));
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
@@ -334,7 +331,7 @@ mod tests {
     }
 
     #[test]
-    fn per_symbol_execution_loop_worker_thread_processes_one_batch_and_returns_state() {
+    fn symbol_runtime_worker_thread_processes_one_batch_and_returns_state() {
         let mut queue = BoundedHandoff::new(4);
         let runtime = SymbolRuntime::new(symbol());
         let output = InMemoryJournalOutputAppender::new();
@@ -342,7 +339,7 @@ mod tests {
         assert_eq!(queue.enqueue(input_entry(1, 10, 100)), Ok(()));
         assert_eq!(queue.enqueue(input_entry(2, 11, 101)), Ok(()));
 
-        let handle = spawn_per_symbol_execution_loop_once(runtime, queue, output, 10);
+        let handle = spawn_symbol_runtime_once(runtime, queue, output, 10);
 
         let (runtime, queue, output, result) = handle
             .join()
@@ -355,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn per_symbol_execution_loop_step_can_enqueue_output_requests_without_advancing_safe_point() {
+    fn symbol_runtime_step_can_enqueue_output_requests_without_advancing_safe_point() {
         let mut handoff = BoundedHandoff::new(4);
         let mut pending_output_buffer = PendingOutputBuffer::new(4);
         let mut runtime = SymbolRuntime::new(symbol());
@@ -363,7 +360,7 @@ mod tests {
         assert_eq!(handoff.enqueue(input_entry(1, 10, 100)), Ok(()));
         assert_eq!(handoff.enqueue(input_entry(2, 11, 101)), Ok(()));
 
-        let processed = run_per_symbol_execution_loop_step_to_pending_output_buffer(
+        let processed = run_symbol_runtime_step_to_pending_output_buffer(
             &mut runtime,
             &mut handoff,
             &mut pending_output_buffer,
@@ -381,8 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn per_symbol_execution_loop_step_requeues_unprocessed_input_when_pending_output_buffer_is_full(
-    ) {
+    fn symbol_runtime_step_requeues_unprocessed_input_when_pending_output_buffer_is_full() {
         let mut handoff = BoundedHandoff::new(4);
         let mut pending_output_buffer = PendingOutputBuffer::new(1);
         let mut runtime = SymbolRuntime::new(symbol());
@@ -391,7 +387,7 @@ mod tests {
         assert_eq!(handoff.enqueue(input_entry(2, 11, 101)), Ok(()));
         assert_eq!(handoff.enqueue(input_entry(3, 12, 102)), Ok(()));
 
-        let result = run_per_symbol_execution_loop_step_to_pending_output_buffer(
+        let result = run_symbol_runtime_step_to_pending_output_buffer(
             &mut runtime,
             &mut handoff,
             &mut pending_output_buffer,

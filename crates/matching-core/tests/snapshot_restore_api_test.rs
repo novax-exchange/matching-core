@@ -1,7 +1,6 @@
 use matching_core::journal_adapter::{JournalInputEntry, JournalInputReader};
 use matching_core::order::{Command, Order};
 use matching_core::order_book::OrderBook;
-use matching_core::per_symbol_execution_loop::SymbolRuntime;
 use matching_core::replay_runner::ReplayRunner;
 use matching_core::runtime_config::SnapshotVerificationConfig;
 use matching_core::snapshot_restore::{
@@ -14,6 +13,7 @@ use matching_core::snapshot_store::{
     FileSnapshotStore, InMemorySnapshotStore, SnapshotManifestSigner, SnapshotManifestVerifier,
     SnapshotStore, SnapshotStoreError, SnapshotVerificationError,
 };
+use matching_core::symbol_runtime::SymbolRuntime;
 use matching_core::types::*;
 use std::fs;
 use std::path::PathBuf;

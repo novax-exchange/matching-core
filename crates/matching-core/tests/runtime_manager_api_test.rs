@@ -12,7 +12,6 @@ use matching_core::output_commit_boundary::{
     OutputCommitBlockAction, OutputCommitMetadataIndexError, OutputCommitOutcome,
     OutputCommitRequest, OutputJournalClient, PendingOutputBufferError, MATCHING_OUTPUT_VERSION,
 };
-use matching_core::per_symbol_execution_loop::PerSymbolExecutionLoopOutputCommitStepError;
 use matching_core::runtime_config::{
     ExecutionLoopConfig, HandoffConfig, InputConsumerConfig, MatchingRuntimeConfig,
     OutputCommitConfig, SnapshotConfig, SnapshotVerificationConfig,
@@ -21,6 +20,7 @@ use matching_core::runtime_manager::{
     OutputCommitBlockageKind, OutputCommitBlockageStatus, RuntimeManager, RuntimeManagerError,
     SymbolRuntimeStatus,
 };
+use matching_core::symbol_runtime::SymbolRuntimeOutputCommitStepError;
 use matching_core::types::{
     CommandId, JournalSeq, MarketSeq, OrderId, Price, Quantity, Side, Symbol,
 };
@@ -499,7 +499,7 @@ fn runtime_manager_can_commit_pending_output_without_draining_new_input_from_pub
             0,
         ),
         Err(RuntimeManagerError::OutputCommitStepFailed(
-            PerSymbolExecutionLoopOutputCommitStepError::PendingOutputBuffer(
+            SymbolRuntimeOutputCommitStepError::PendingOutputBuffer(
                 PendingOutputBufferError::BufferFull,
             )
         ))

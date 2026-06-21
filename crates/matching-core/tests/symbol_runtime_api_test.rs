@@ -7,12 +7,11 @@ use matching_core::order::{Command, Order};
 use matching_core::output_commit_boundary::{
     run_output_batch_commit_step_report, OutputJournalClient, PendingOutputBuffer,
 };
-use matching_core::per_symbol_execution_loop::SymbolRuntime;
-use matching_core::per_symbol_execution_loop::{
-    advance_runtime_safe_point_from_output_commit, run_per_symbol_execution_loop_step,
-    run_per_symbol_execution_loop_step_to_pending_output_buffer,
-    run_per_symbol_execution_loop_step_with_output_batch_commit,
-    spawn_per_symbol_execution_loop_once,
+use matching_core::symbol_runtime::SymbolRuntime;
+use matching_core::symbol_runtime::{
+    advance_runtime_safe_point_from_output_commit, run_symbol_runtime_step,
+    run_symbol_runtime_step_to_pending_output_buffer,
+    run_symbol_runtime_step_with_output_batch_commit, spawn_symbol_runtime_once,
 };
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
@@ -111,7 +110,7 @@ fn command_entry(seq: u64) -> JournalInputEntry {
 }
 
 #[test]
-fn per_symbol_execution_loop_step_is_available_from_public_api() {
+fn symbol_runtime_step_is_available_from_public_api() {
     let mut queue = BoundedHandoff::new(4);
     let mut runtime = SymbolRuntime::new(symbol());
     let mut output = TestJournalOutputAppender::new();
@@ -120,7 +119,7 @@ fn per_symbol_execution_loop_step_is_available_from_public_api() {
     assert_eq!(queue.enqueue(command_entry(2)), Ok(()));
 
     assert_eq!(
-        run_per_symbol_execution_loop_step(&mut runtime, &mut queue, &mut output, 10),
+        run_symbol_runtime_step(&mut runtime, &mut queue, &mut output, 10),
         Ok(2)
     );
 
@@ -130,7 +129,7 @@ fn per_symbol_execution_loop_step_is_available_from_public_api() {
 }
 
 #[test]
-fn per_symbol_execution_loop_step_to_pending_output_buffer_is_available_from_public_api() {
+fn symbol_runtime_step_to_pending_output_buffer_is_available_from_public_api() {
     let mut handoff = BoundedHandoff::new(4);
     let mut pending_output_buffer = PendingOutputBuffer::new(4);
     let mut runtime = SymbolRuntime::new(symbol());
@@ -139,7 +138,7 @@ fn per_symbol_execution_loop_step_to_pending_output_buffer_is_available_from_pub
     assert_eq!(handoff.enqueue(command_entry(2)), Ok(()));
 
     assert_eq!(
-        run_per_symbol_execution_loop_step_to_pending_output_buffer(
+        run_symbol_runtime_step_to_pending_output_buffer(
             &mut runtime,
             &mut handoff,
             &mut pending_output_buffer,
@@ -168,7 +167,7 @@ fn output_commit_report_advances_safe_point_only_for_confirmed_prefix() {
     assert_eq!(handoff.enqueue(command_entry(3)), Ok(()));
 
     assert_eq!(
-        run_per_symbol_execution_loop_step_to_pending_output_buffer(
+        run_symbol_runtime_step_to_pending_output_buffer(
             &mut runtime,
             &mut handoff,
             &mut pending_output_buffer,
@@ -199,7 +198,7 @@ fn output_commit_report_advances_safe_point_only_for_confirmed_prefix() {
 }
 
 #[test]
-fn per_symbol_execution_loop_step_with_output_batch_commit_is_available_from_public_api() {
+fn symbol_runtime_step_with_output_batch_commit_is_available_from_public_api() {
     let mut handoff = BoundedHandoff::new(4);
     let mut pending_output_buffer = PendingOutputBuffer::new(4);
     let mut runtime = SymbolRuntime::new(symbol());
@@ -209,7 +208,7 @@ fn per_symbol_execution_loop_step_with_output_batch_commit_is_available_from_pub
     assert_eq!(handoff.enqueue(command_entry(1)), Ok(()));
     assert_eq!(handoff.enqueue(command_entry(2)), Ok(()));
 
-    let result = run_per_symbol_execution_loop_step_with_output_batch_commit(
+    let result = run_symbol_runtime_step_with_output_batch_commit(
         &mut runtime,
         &mut handoff,
         &mut pending_output_buffer,
@@ -231,7 +230,7 @@ fn per_symbol_execution_loop_step_with_output_batch_commit_is_available_from_pub
 }
 
 #[test]
-fn per_symbol_execution_loop_step_with_output_batch_commit_preserves_blocked_tail() {
+fn symbol_runtime_step_with_output_batch_commit_preserves_blocked_tail() {
     let mut handoff = BoundedHandoff::new(4);
     let mut pending_output_buffer = PendingOutputBuffer::new(4);
     let mut runtime = SymbolRuntime::new(symbol());
@@ -242,7 +241,7 @@ fn per_symbol_execution_loop_step_with_output_batch_commit_preserves_blocked_tai
     assert_eq!(handoff.enqueue(command_entry(2)), Ok(()));
     assert_eq!(handoff.enqueue(command_entry(3)), Ok(()));
 
-    let report = run_per_symbol_execution_loop_step_with_output_batch_commit(
+    let report = run_symbol_runtime_step_with_output_batch_commit(
         &mut runtime,
         &mut handoff,
         &mut pending_output_buffer,
@@ -269,7 +268,7 @@ fn per_symbol_execution_loop_step_with_output_batch_commit_preserves_blocked_tai
 }
 
 #[test]
-fn one_shot_per_symbol_execution_loop_worker_is_available_from_public_api() {
+fn one_shot_symbol_runtime_worker_is_available_from_public_api() {
     let mut queue = BoundedHandoff::new(4);
     let runtime = SymbolRuntime::new(symbol());
     let output = TestJournalOutputAppender::new();
@@ -277,7 +276,7 @@ fn one_shot_per_symbol_execution_loop_worker_is_available_from_public_api() {
     assert_eq!(queue.enqueue(command_entry(1)), Ok(()));
     assert_eq!(queue.enqueue(command_entry(2)), Ok(()));
 
-    let handle = spawn_per_symbol_execution_loop_once(runtime, queue, output, 10);
+    let handle = spawn_symbol_runtime_once(runtime, queue, output, 10);
 
     let (runtime, queue, output, result) = handle
         .join()

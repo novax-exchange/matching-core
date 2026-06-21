@@ -5,4 +5,4 @@
 //! price-band, reduce-only, and fencing control events are not implemented yet.
 //!
 //! TODO: consume versioned control facts through the Journal path and expose
-//! deterministic local control state to the per-symbol execution loop.
+//! deterministic local control state to the symbol runtime.

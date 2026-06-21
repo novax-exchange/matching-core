@@ -6,14 +6,13 @@ use crate::output_commit_boundary::{
     OutputCommitBlockAction, OutputCommitBlockDecision, OutputCommitRetryTracker,
     OutputJournalClient, PendingOutputBuffer,
 };
-use crate::per_symbol_execution_loop::{
-    advance_runtime_safe_point_from_output_commit,
-    run_per_symbol_execution_loop_step_with_output_batch_commit,
-    PerSymbolExecutionLoopOutputCommitStepError, PerSymbolExecutionLoopOutputCommitStepReport,
-    SymbolRuntime,
-};
 use crate::runtime_config::MatchingRuntimeConfig;
 use crate::snapshot_restore::SymbolRuntimeSnapshot;
+use crate::symbol_runtime::{
+    advance_runtime_safe_point_from_output_commit,
+    run_symbol_runtime_step_with_output_batch_commit, SymbolRuntime,
+    SymbolRuntimeOutputCommitStepError, SymbolRuntimeOutputCommitStepReport,
+};
 use crate::types::{Checksum, JournalSeq, Symbol};
 use std::collections::HashMap;
 
@@ -33,7 +32,7 @@ pub struct RuntimeManager {
 pub enum RuntimeManagerError {
     UnknownSymbol,
     OutputAppendFailed,
-    OutputCommitStepFailed(PerSymbolExecutionLoopOutputCommitStepError),
+    OutputCommitStepFailed(SymbolRuntimeOutputCommitStepError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -301,7 +300,7 @@ impl RuntimeManager {
         output: &mut dyn JournalOutputAppender,
         max_input_entries: usize,
         max_output_requests: usize,
-    ) -> Result<PerSymbolExecutionLoopOutputCommitStepReport, RuntimeManagerError> {
+    ) -> Result<SymbolRuntimeOutputCommitStepReport, RuntimeManagerError> {
         let runtime = self
             .runtimes
             .get_mut(symbol)
@@ -311,7 +310,7 @@ impl RuntimeManager {
             .get_mut(symbol)
             .ok_or(RuntimeManagerError::UnknownSymbol)?;
 
-        run_per_symbol_execution_loop_step_with_output_batch_commit(
+        run_symbol_runtime_step_with_output_batch_commit(
             runtime,
             handoff,
             pending_output_buffer,
@@ -353,7 +352,7 @@ impl RuntimeManager {
         )
         .map_err(|error| {
             RuntimeManagerError::OutputCommitStepFailed(
-                PerSymbolExecutionLoopOutputCommitStepError::SafePoint(error),
+                SymbolRuntimeOutputCommitStepError::SafePoint(error),
             )
         })?;
 
@@ -373,7 +372,7 @@ impl RuntimeManager {
         output: &mut dyn JournalOutputAppender,
         max_input_entries: usize,
         max_output_requests: usize,
-    ) -> Result<PerSymbolExecutionLoopOutputCommitStepReport, RuntimeManagerError> {
+    ) -> Result<SymbolRuntimeOutputCommitStepReport, RuntimeManagerError> {
         let pending_output_full = self
             .pending_output_buffers
             .get(symbol)
@@ -388,7 +387,7 @@ impl RuntimeManager {
                 max_output_requests,
             )?;
 
-            return Ok(PerSymbolExecutionLoopOutputCommitStepReport {
+            return Ok(SymbolRuntimeOutputCommitStepReport {
                 input_processed_count: 0,
                 safe_point_advanced_count: output_only_report.safe_point_advanced_count,
                 output_batch_identity: output_only_report.output_batch_identity,

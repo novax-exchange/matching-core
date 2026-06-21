@@ -95,7 +95,7 @@ flowchart TB
 
     subgraph Execution["Execution"]
         Manager["Runtime Manager"]
-        Loops["Per-Symbol Execution Loops\n(BTC-USDT, ETH-USDT, ...)"]
+        Loops["Symbol Runtimes\n(BTC-USDT, ETH-USDT, ...)"]
         Engine["Matching Engine"]
         Book["Order Book"]
     end
@@ -153,7 +153,7 @@ flowchart TB
     Replay --> Loops
 ```
 
-`Per-Symbol Execution Loops` represents many runtime instances, usually one per symbol or symbol group. Snapshot bytes and verified manifests are stored recovery artifacts, not live runtime components.
+`Symbol Runtimes` represents many runtime instances, usually one per symbol. Snapshot bytes and verified manifests are stored recovery artifacts, not live runtime components.
 
 ## Current State
 

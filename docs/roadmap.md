@@ -41,8 +41,8 @@ The project has completed the single-process matching core path:
 Journal Adapter input reader
   -> SymbolRouting
   -> BoundedHandoff
-  -> PerSymbolExecutionLoop
   -> SymbolRuntime
+  -> MatchingEngine
   -> OrderBook
   -> PendingOutputBuffer
   -> OutputCommitBoundary
@@ -75,7 +75,7 @@ The next major shift is turning those explicit steps into long-running internal 
 | 15 | Completed | Runtime manager | BTC/ETH runtimes remain isolated |
 | 16 | Completed | Symbol routing | Entries route by symbol |
 | 17 | Completed | Bounded handoff | Full queue, ordered consumption, and watermarks |
-| 18 | Completed | Per-symbol execution loop worker | Journal reader and runtime separation shape |
+| 18 | Completed | Symbol runtime worker | Journal reader and runtime separation shape |
 | 19 | Completed | Output isolation | Runtime can enqueue output requests before commit confirmation |
 | 20 | Completed | Confirmed input consumer | Read confirmed input through Journal Adapter and route to symbol handoffs |
 | 21 | Completed | SymbolRuntime output determinism | Two fresh runtimes process the same input sequence and produce identical output entries and safe point |
@@ -109,8 +109,7 @@ The next major shift is turning those explicit steps into long-running internal 
 | Journal adapter contract | Completed for current stage | `journal_adapter.rs`; input reader and output appender contracts exist |
 | Replay runner | Partial | `replay_runner.rs`; checksum replay exists, and replay result now regenerates comparable output entries for the current live-vs-replay proof |
 | Snapshot restore | Partial | `snapshot_restore.rs`; in-memory order-book snapshot/restore exists, and `SymbolRuntimeSnapshot` now captures runtime identity state for restore |
-| Per-symbol execution loop | Completed for current stage | `per_symbol_execution_loop.rs`; bounded input draining, retry requeue, pending output handoff, and one-shot worker exist |
-| Symbol runtime | Completed for current stage | `per_symbol_execution_loop/symbol_runtime.rs`; deterministic output generation, rollback, and safe-point advancement are covered for the current layer |
+| Symbol runtime | Completed for current stage | `symbol_runtime.rs`, `symbol_runtime/runtime.rs`; deterministic output generation, bounded input draining, retry requeue, pending output handoff, rollback, safe-point advancement, and one-shot worker support are covered for the current layer |
 | Runtime manager | Completed for current stage | `runtime_manager.rs` |
 | Symbol routing | Completed | `symbol_routing.rs` |
 | Bounded handoff | Completed | `bounded_handoff.rs` |
@@ -217,7 +216,7 @@ Progress so far:
 - the safe-point controller can advance from that confirmed prefix without advancing into the blocked request;
 - `OutputCommitRetryTracker` turns blocked output reports into explicit actions: retry later for short `Unavailable`, resolve for `Unknown`, and stop / escalate for `Rejected` or repeated `Unavailable`;
 - the main SymbolRuntime and ReplayRunner determinism tests now use the pending-output plus commit-report path for live execution evidence, rather than treating direct output append as the production commit model;
-- `run_per_symbol_execution_loop_step_with_output_batch_commit()` now provides the first integrated step shape for execution, pending output, Output Batch Coordinator commit, confirmed-prefix safe-point advancement, and blocked-tail retention;
+- `run_symbol_runtime_step_with_output_batch_commit()` now provides the first integrated step shape for execution, pending output, Output Batch Coordinator commit, confirmed-prefix safe-point advancement, and blocked-tail retention;
 - `RuntimeManager::run_symbol_step_with_output_batch_commit()` exposes that integrated step at the symbol runtime boundary, with one pending output buffer per registered symbol;
 - Runtime Manager tests now cover a blocked output tail across two iterations: the first step advances only the confirmed prefix, and the next step retries the pending tail before advancing the safe point;
 - `RuntimeManager::run_symbol_output_batch_commit_step()` can commit pending output without draining new input, which gives the long-running loop a clear way to relieve pending-output pressure before consuming more commands;
@@ -240,7 +239,7 @@ Progress so far:
 - `OutputJournalClient` maintains a rebuildable recent output metadata cache that can be warmed by successful metadata appends or rebuilt from Journal output; failed conflict rebuilds do not replace the previous usable cache;
 - missing, incomplete, durable, and conflict query statuses are surfaced through output-only, integrated, pressure-aware, and retry-aware runtime reports when they explain output commit progress or blockage;
 - `RuntimeManager::run_symbol_output_batch_commit_step()` now exposes that output batch identity for output-only commit attempts;
-- `run_per_symbol_execution_loop_step_with_output_batch_commit()` and `RuntimeManager::run_symbol_retry_aware_step()` now also surface the attempted output batch identity;
+- `run_symbol_runtime_step_with_output_batch_commit()` and `RuntimeManager::run_symbol_retry_aware_step()` now also surface the attempted output batch identity;
 - `SymbolRuntimeStatus::output_commit_blockage` preserves output batch query evidence while a symbol is escalated or quarantined, so paused symbols still explain whether they are blocked by missing, incomplete, durable, or conflict evidence;
 - public API tests cover unresolved unknown, resolved-durable unknown, incomplete durable prefix, unavailable, rejected, and conflicting output outcomes in the middle of an output batch.
 - `MatchingRuntimeConfig` now centralizes runtime-policy knobs for handoff capacity, execution-loop step size, output commit capacity / retry / batch size, snapshot retention, and snapshot verification. Runtime Manager and Runtime Loop can now be constructed from that config surface instead of keeping separate default constants or loose constructor parameters only.
