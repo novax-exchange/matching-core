@@ -85,6 +85,7 @@ pub struct RuntimeHostDrainReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeHostStatus {
+    pub input_state: RuntimeHostInputState,
     pub shard_statuses: Vec<RuntimeHostShardStatus>,
 }
 
@@ -327,7 +328,10 @@ impl RuntimeHost {
             });
         }
 
-        Ok(RuntimeHostStatus { shard_statuses })
+        Ok(RuntimeHostStatus {
+            input_state: self.input_state,
+            shard_statuses,
+        })
     }
 
     pub fn run_once_all(

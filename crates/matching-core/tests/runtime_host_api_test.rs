@@ -736,6 +736,7 @@ fn runtime_host_status_reports_pending_input_without_running() {
         .status()
         .expect("manual runtime host should report status");
 
+    assert_eq!(status.input_state, RuntimeHostInputState::Open);
     assert!(!status.is_idle());
     assert_eq!(status.shards_with_remaining_work(), vec![RuntimeShardId(1)]);
     assert_eq!(status.blocked_shards(), Vec::<RuntimeShardId>::new());
@@ -747,6 +748,23 @@ fn runtime_host_status_reports_pending_input_without_running() {
     assert_eq!(eth_status.pending_input_len, 1);
     assert_eq!(eth_status.pending_output_len, 0);
     assert!(!eth_status.output_commit_blocked);
+}
+
+#[test]
+fn runtime_host_status_reports_closed_input_state() {
+    let btc = symbol("BTC-USDT");
+    let mut host =
+        RuntimeHost::new_for_symbols_with_config(vec![btc], MatchingRuntimeConfig::default())
+            .expect("manual runtime host should be supported");
+
+    host.close_input();
+
+    let status = host
+        .status()
+        .expect("manual runtime host should report status");
+
+    assert_eq!(status.input_state, RuntimeHostInputState::Closed);
+    assert!(status.is_idle());
 }
 
 #[test]
