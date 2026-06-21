@@ -5,7 +5,7 @@ use matching_core::journal_adapter::{
 use matching_core::matching_engine::EngineEvent;
 use matching_core::matching_runtime::{
     MatchingRuntime, MatchingRuntimeDrainStopReason, MatchingRuntimeError,
-    MatchingRuntimeInputState, MatchingRuntimeRunUntilIdleLimit,
+    MatchingRuntimeInputState, MatchingRuntimeRunStopReason, MatchingRuntimeRunUntilIdleLimit,
     MatchingRuntimeRunUntilIdleStopReason,
 };
 use matching_core::order::{Command, Order};
@@ -551,6 +551,7 @@ fn matching_runtime_run_limited_all_drives_all_shards_until_idle() {
 
     assert_eq!(report.shard_reports.len(), 2);
     assert!(report.is_idle());
+    assert_eq!(report.stop_reason(), MatchingRuntimeRunStopReason::Idle);
     assert_eq!(
         report.idle_shards(),
         vec![RuntimeShardId(0), RuntimeShardId(1)]
@@ -612,6 +613,10 @@ fn matching_runtime_run_report_summarizes_mixed_shard_states() {
         .expect("manual matching runtime should summarize shard run states");
 
     assert!(!report.is_idle());
+    assert_eq!(
+        report.stop_reason(),
+        MatchingRuntimeRunStopReason::RunLimitReached
+    );
     assert!(report.has_work_remaining());
     assert!(report.has_blocked_symbols());
     assert!(report.needs_another_run());
@@ -622,6 +627,38 @@ fn matching_runtime_run_report_summarizes_mixed_shard_states() {
     );
     assert_eq!(report.blocked_shards(), vec![RuntimeShardId(0)]);
     assert_eq!(report.shards_reaching_run_limit(), vec![RuntimeShardId(1)]);
+}
+
+#[test]
+fn matching_runtime_run_report_reports_blocked_when_no_shard_can_progress() {
+    let btc = symbol("BTC-USDT");
+    let mut runtime = MatchingRuntime::new_for_symbols_with_config(
+        vec![btc.clone()],
+        MatchingRuntimeConfig::default(),
+    )
+    .expect("manual matching runtime should be supported");
+    let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
+    let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
+
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+
+    let report = runtime
+        .run_limited_all(
+            &mut journal_client,
+            &mut output,
+            ShardRuntimeRunOnceLimits {
+                max_input_entries_per_symbol: 1,
+                max_output_requests_per_symbol: 1,
+            },
+            ShardRuntimeRunLimit { max_cycles: 2 },
+        )
+        .expect("manual matching runtime should report blocked shard execution");
+
+    assert_eq!(report.stop_reason(), MatchingRuntimeRunStopReason::Blocked);
+    assert!(report.has_work_remaining());
+    assert!(report.has_blocked_symbols());
+    assert!(!report.needs_another_run());
+    assert_eq!(report.blocked_shards(), vec![RuntimeShardId(0)]);
 }
 
 #[test]
@@ -922,6 +959,10 @@ fn matching_runtime_run_limited_all_reports_remaining_work_when_limit_is_reached
         .expect("manual matching runtime should run all shard run limits");
 
     assert!(!report.is_idle());
+    assert_eq!(
+        report.stop_reason(),
+        MatchingRuntimeRunStopReason::RunLimitReached
+    );
     assert!(report.has_work_remaining());
     assert_eq!(
         report

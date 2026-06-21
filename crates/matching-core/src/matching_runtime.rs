@@ -48,6 +48,13 @@ pub struct MatchingRuntimeRunReport {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchingRuntimeRunStopReason {
+    Idle,
+    Blocked,
+    RunLimitReached,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MatchingRuntimeRunUntilIdleLimit {
     pub max_run_calls: usize,
 }
@@ -318,12 +325,14 @@ impl MatchingRuntime {
         for _ in 0..limit.max_run_calls {
             let run_report = self.run_configured_all(journal_client, output)?;
 
-            let stop_reason = if run_report.is_idle() {
-                Some(MatchingRuntimeRunUntilIdleStopReason::Idle)
-            } else if run_report.has_blocked_symbols() && !run_report.needs_another_run() {
-                Some(MatchingRuntimeRunUntilIdleStopReason::Blocked)
-            } else {
-                None
+            let stop_reason = match run_report.stop_reason() {
+                MatchingRuntimeRunStopReason::Idle => {
+                    Some(MatchingRuntimeRunUntilIdleStopReason::Idle)
+                }
+                MatchingRuntimeRunStopReason::Blocked => {
+                    Some(MatchingRuntimeRunUntilIdleStopReason::Blocked)
+                }
+                MatchingRuntimeRunStopReason::RunLimitReached => None,
             };
 
             run_reports.push(run_report);
@@ -492,6 +501,22 @@ impl MatchingRuntimeRunReport {
         self.shard_reports
             .iter()
             .find(|report| report.shard_id == shard_id)
+    }
+
+    pub fn stop_reason(&self) -> MatchingRuntimeRunStopReason {
+        if self.is_idle() {
+            return MatchingRuntimeRunStopReason::Idle;
+        }
+
+        if self.needs_another_run() {
+            return MatchingRuntimeRunStopReason::RunLimitReached;
+        }
+
+        if self.has_blocked_symbols() {
+            return MatchingRuntimeRunStopReason::Blocked;
+        }
+
+        MatchingRuntimeRunStopReason::RunLimitReached
     }
 
     pub fn made_progress(&self) -> bool {
