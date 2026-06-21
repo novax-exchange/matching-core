@@ -340,6 +340,36 @@ impl RuntimeHostStatus {
             .map(|status| status.shard_id)
             .collect()
     }
+
+    pub fn shards_with_full_input(&self) -> Vec<RuntimeShardId> {
+        self.shard_statuses
+            .iter()
+            .filter(|status| status.has_full_input())
+            .map(|status| status.shard_id)
+            .collect()
+    }
+
+    pub fn shards_with_full_output(&self) -> Vec<RuntimeShardId> {
+        self.shard_statuses
+            .iter()
+            .filter(|status| status.has_full_output())
+            .map(|status| status.shard_id)
+            .collect()
+    }
+
+    pub fn symbols_with_full_input(&self) -> Vec<Symbol> {
+        self.shard_statuses
+            .iter()
+            .flat_map(RuntimeHostShardStatus::symbols_with_full_input)
+            .collect()
+    }
+
+    pub fn symbols_with_full_output(&self) -> Vec<Symbol> {
+        self.shard_statuses
+            .iter()
+            .flat_map(RuntimeHostShardStatus::symbols_with_full_output)
+            .collect()
+    }
 }
 
 impl RuntimeHostShardStatus {
@@ -359,6 +389,34 @@ impl RuntimeHostShardStatus {
         self.symbol_statuses
             .iter()
             .any(|status| status.output_commit_blocked)
+    }
+
+    pub fn has_full_input(&self) -> bool {
+        self.symbol_statuses
+            .iter()
+            .any(|status| status.pending_input_full)
+    }
+
+    pub fn has_full_output(&self) -> bool {
+        self.symbol_statuses
+            .iter()
+            .any(|status| status.pending_output_full)
+    }
+
+    pub fn symbols_with_full_input(&self) -> Vec<Symbol> {
+        self.symbol_statuses
+            .iter()
+            .filter(|status| status.pending_input_full)
+            .map(|status| status.symbol.clone())
+            .collect()
+    }
+
+    pub fn symbols_with_full_output(&self) -> Vec<Symbol> {
+        self.symbol_statuses
+            .iter()
+            .filter(|status| status.pending_output_full)
+            .map(|status| status.symbol.clone())
+            .collect()
     }
 }
 
