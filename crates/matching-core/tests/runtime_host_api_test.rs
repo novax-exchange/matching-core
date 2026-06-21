@@ -266,6 +266,63 @@ fn runtime_host_enqueue_inputs_routes_batch_across_shards() {
 }
 
 #[test]
+fn runtime_host_can_enqueue_inputs_preflights_batch_without_mutating_state() {
+    let btc = symbol("BTC-USDT");
+    let eth = symbol("ETH-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.topology = RuntimeTopologyConfig {
+        shard_count: 2,
+        assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
+    };
+    let host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
+        .expect("manual runtime host should be supported");
+
+    assert_eq!(
+        host.can_enqueue_inputs(&[
+            command_entry(1, btc.clone()),
+            command_entry(2, eth.clone()),
+            command_entry(3, btc.clone()),
+        ]),
+        Ok(())
+    );
+
+    let status = host
+        .status()
+        .expect("manual runtime host should report status");
+    assert!(status.is_idle());
+}
+
+#[test]
+fn runtime_host_can_enqueue_inputs_reports_capacity_without_partial_enqueue() {
+    let btc = symbol("BTC-USDT");
+    let eth = symbol("ETH-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.topology = RuntimeTopologyConfig {
+        shard_count: 2,
+        assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
+    };
+    config.handoff.capacity = 1;
+    let host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
+        .expect("manual runtime host should be supported");
+
+    assert_eq!(
+        host.can_enqueue_inputs(&[
+            command_entry(1, btc.clone()),
+            command_entry(2, eth.clone()),
+            command_entry(3, eth.clone()),
+        ]),
+        Err(RuntimeHostError::RuntimeLoop(
+            RuntimeLoopError::InputHandoffFull(eth.clone())
+        ))
+    );
+
+    let status = host
+        .status()
+        .expect("manual runtime host should report status");
+    assert!(status.is_idle());
+}
+
+#[test]
 fn runtime_host_enqueue_inputs_rejects_batch_without_partial_enqueue_when_handoff_would_fill() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");

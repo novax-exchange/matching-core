@@ -164,10 +164,45 @@ impl RuntimeHost {
         &mut self,
         entries: Vec<JournalInputEntry>,
     ) -> Result<usize, RuntimeHostError> {
+        let owner_by_symbol = self.validate_enqueue_inputs(&entries)?;
+        let enqueued_count = entries.len();
+        let mut entries_by_runner: Vec<Vec<JournalInputEntry>> =
+            (0..self.runners.len()).map(|_| Vec::new()).collect();
+
+        for entry in entries {
+            let symbol = entry.command.symbol().clone();
+            let runner_index = owner_by_symbol
+                .get(&symbol)
+                .expect("entry symbol should have an owning runner after validation");
+            entries_by_runner[*runner_index].push(entry);
+        }
+
+        for (runner, runner_entries) in self.runners.iter_mut().zip(entries_by_runner) {
+            if !runner_entries.is_empty() {
+                runner
+                    .enqueue_inputs(runner_entries)
+                    .map_err(RuntimeHostError::RuntimeLoop)?;
+            }
+        }
+
+        Ok(enqueued_count)
+    }
+
+    pub fn can_enqueue_inputs(
+        &self,
+        entries: &[JournalInputEntry],
+    ) -> Result<(), RuntimeHostError> {
+        self.validate_enqueue_inputs(entries).map(|_| ())
+    }
+
+    fn validate_enqueue_inputs(
+        &self,
+        entries: &[JournalInputEntry],
+    ) -> Result<HashMap<Symbol, usize>, RuntimeHostError> {
         let mut requested_by_symbol: HashMap<Symbol, usize> = HashMap::new();
         let mut owner_by_symbol: HashMap<Symbol, usize> = HashMap::new();
 
-        for entry in &entries {
+        for entry in entries {
             let symbol = entry.command.symbol().clone();
             let runner_index = self
                 .runners
@@ -209,27 +244,7 @@ impl RuntimeHost {
             }
         }
 
-        let enqueued_count = entries.len();
-        let mut entries_by_runner: Vec<Vec<JournalInputEntry>> =
-            (0..self.runners.len()).map(|_| Vec::new()).collect();
-
-        for entry in entries {
-            let symbol = entry.command.symbol().clone();
-            let runner_index = owner_by_symbol
-                .get(&symbol)
-                .expect("entry symbol should have an owning runner after validation");
-            entries_by_runner[*runner_index].push(entry);
-        }
-
-        for (runner, runner_entries) in self.runners.iter_mut().zip(entries_by_runner) {
-            if !runner_entries.is_empty() {
-                runner
-                    .enqueue_inputs(runner_entries)
-                    .map_err(RuntimeHostError::RuntimeLoop)?;
-            }
-        }
-
-        Ok(enqueued_count)
+        Ok(owner_by_symbol)
     }
 
     pub fn status(&self) -> Result<RuntimeHostStatus, RuntimeHostError> {
