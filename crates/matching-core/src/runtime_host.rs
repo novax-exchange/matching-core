@@ -33,6 +33,24 @@ pub struct RuntimeHostRunReport {
     pub shard_reports: Vec<RuntimeHostShardRunReport>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeHostRunUntilIdleLimit {
+    pub max_configured_runs: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeHostRunUntilIdleStopReason {
+    Idle,
+    Blocked,
+    CallLimitReached,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeHostRunUntilIdleReport {
+    pub run_reports: Vec<RuntimeHostRunReport>,
+    pub stop_reason: RuntimeHostRunUntilIdleStopReason,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeHostShardRunOnceReport {
     pub shard_id: RuntimeShardId,
@@ -156,6 +174,41 @@ impl RuntimeHost {
     ) -> Result<RuntimeHostRunReport, RuntimeHostError> {
         self.run_limited_all(journal_client, output, self.run_once_limits, self.run_limit)
     }
+
+    pub fn run_until_idle(
+        &mut self,
+        journal_client: &mut OutputJournalClient,
+        output: &mut dyn JournalOutputAppender,
+        limit: RuntimeHostRunUntilIdleLimit,
+    ) -> Result<RuntimeHostRunUntilIdleReport, RuntimeHostError> {
+        let mut run_reports = Vec::new();
+
+        for _ in 0..limit.max_configured_runs {
+            let run_report = self.run_configured_all(journal_client, output)?;
+
+            let stop_reason = if run_report.is_idle() {
+                Some(RuntimeHostRunUntilIdleStopReason::Idle)
+            } else if run_report.has_blocked_symbols() && !run_report.needs_another_run() {
+                Some(RuntimeHostRunUntilIdleStopReason::Blocked)
+            } else {
+                None
+            };
+
+            run_reports.push(run_report);
+
+            if let Some(stop_reason) = stop_reason {
+                return Ok(RuntimeHostRunUntilIdleReport {
+                    run_reports,
+                    stop_reason,
+                });
+            }
+        }
+
+        Ok(RuntimeHostRunUntilIdleReport {
+            run_reports,
+            stop_reason: RuntimeHostRunUntilIdleStopReason::CallLimitReached,
+        })
+    }
 }
 
 impl RuntimeHostRunOnceReport {
@@ -236,5 +289,37 @@ impl RuntimeHostRunReport {
             report.run_report.stop_reason == RuntimeLoopRunStopReason::RunLimitReached
                 && report.run_report.has_work_remaining
         })
+    }
+}
+
+impl RuntimeHostRunUntilIdleReport {
+    pub fn configured_run_count(&self) -> usize {
+        self.run_reports.len()
+    }
+
+    pub fn last_run_report(&self) -> Option<&RuntimeHostRunReport> {
+        self.run_reports.last()
+    }
+
+    pub fn is_idle(&self) -> bool {
+        self.stop_reason == RuntimeHostRunUntilIdleStopReason::Idle
+    }
+
+    pub fn has_work_remaining(&self) -> bool {
+        self.last_run_report()
+            .map(RuntimeHostRunReport::has_work_remaining)
+            .unwrap_or(false)
+    }
+
+    pub fn has_blocked_symbols(&self) -> bool {
+        self.last_run_report()
+            .map(RuntimeHostRunReport::has_blocked_symbols)
+            .unwrap_or(false)
+    }
+
+    pub fn blocked_shards(&self) -> Vec<RuntimeShardId> {
+        self.last_run_report()
+            .map(RuntimeHostRunReport::blocked_shards)
+            .unwrap_or_default()
     }
 }

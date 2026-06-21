@@ -8,7 +8,9 @@ use matching_core::runtime_config::{
     MatchingRuntimeConfig, RuntimeHostConfig, RuntimeHostMode, RuntimeShardId,
     RuntimeTopologyConfig, SymbolAssignmentPolicy,
 };
-use matching_core::runtime_host::{RuntimeHost, RuntimeHostError};
+use matching_core::runtime_host::{
+    RuntimeHost, RuntimeHostError, RuntimeHostRunUntilIdleLimit, RuntimeHostRunUntilIdleStopReason,
+};
 use matching_core::runtime_loop::{
     RuntimeLoopRunLimit, RuntimeLoopRunOnceLimits, RuntimeLoopRunStopReason,
 };
@@ -345,6 +347,106 @@ fn runtime_host_run_configured_all_uses_runtime_config_limits() {
     assert!(report.needs_another_run());
     assert_eq!(report.shards_reaching_run_limit(), vec![RuntimeShardId(0)]);
     assert_eq!(output.read_all().len(), 1);
+}
+
+#[test]
+fn runtime_host_run_until_idle_repeats_configured_runs_until_idle() {
+    let btc = symbol("BTC-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.host.max_run_cycles_per_call = 1;
+    config.symbol_runtime.max_input_entries_per_step = 1;
+    config.output_commit.max_output_requests_per_step = 1;
+    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone()], config)
+        .expect("manual runtime host should be supported");
+    let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
+    let mut output = TestJournalOutputAppender::new();
+
+    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    assert_eq!(host.enqueue_input(command_entry(2, btc.clone())), Ok(()));
+    assert_eq!(host.enqueue_input(command_entry(3, btc.clone())), Ok(()));
+
+    let report = host
+        .run_until_idle(
+            &mut journal_client,
+            &mut output,
+            RuntimeHostRunUntilIdleLimit {
+                max_configured_runs: 4,
+            },
+        )
+        .expect("manual runtime host should run configured calls until idle");
+
+    assert_eq!(report.stop_reason, RuntimeHostRunUntilIdleStopReason::Idle);
+    assert_eq!(report.configured_run_count(), 3);
+    assert!(report.is_idle());
+    assert_eq!(output.read_all().len(), 3);
+}
+
+#[test]
+fn runtime_host_run_until_idle_reports_call_limit_before_idle() {
+    let btc = symbol("BTC-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.host.max_run_cycles_per_call = 1;
+    config.symbol_runtime.max_input_entries_per_step = 1;
+    config.output_commit.max_output_requests_per_step = 1;
+    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone()], config)
+        .expect("manual runtime host should be supported");
+    let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
+    let mut output = TestJournalOutputAppender::new();
+
+    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    assert_eq!(host.enqueue_input(command_entry(2, btc.clone())), Ok(()));
+    assert_eq!(host.enqueue_input(command_entry(3, btc.clone())), Ok(()));
+
+    let report = host
+        .run_until_idle(
+            &mut journal_client,
+            &mut output,
+            RuntimeHostRunUntilIdleLimit {
+                max_configured_runs: 2,
+            },
+        )
+        .expect("manual runtime host should stop at outer call limit");
+
+    assert_eq!(
+        report.stop_reason,
+        RuntimeHostRunUntilIdleStopReason::CallLimitReached
+    );
+    assert_eq!(report.configured_run_count(), 2);
+    assert!(report.has_work_remaining());
+    assert_eq!(output.read_all().len(), 2);
+}
+
+#[test]
+fn runtime_host_run_until_idle_stops_when_only_blocked_work_remains() {
+    let btc = symbol("BTC-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.host.max_run_cycles_per_call = 2;
+    config.symbol_runtime.max_input_entries_per_step = 1;
+    config.output_commit.max_output_requests_per_step = 1;
+    let mut host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone()], config)
+        .expect("manual runtime host should be supported");
+    let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
+    let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
+
+    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+
+    let report = host
+        .run_until_idle(
+            &mut journal_client,
+            &mut output,
+            RuntimeHostRunUntilIdleLimit {
+                max_configured_runs: 3,
+            },
+        )
+        .expect("manual runtime host should stop when output remains blocked");
+
+    assert_eq!(
+        report.stop_reason,
+        RuntimeHostRunUntilIdleStopReason::Blocked
+    );
+    assert_eq!(report.configured_run_count(), 1);
+    assert!(report.has_blocked_symbols());
+    assert_eq!(report.blocked_shards(), vec![RuntimeShardId(0)]);
 }
 
 #[test]
