@@ -2,124 +2,170 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-NovaX Matching Core 是 NovaX 中心化交易所架构中的确定性撮合子系统。它实现 confirmed order command 的处理、按交易对维护订单簿、生成撮合输出、推进 safe point，以及通过 replay 和 snapshot 重建状态所需要的核心能力。
+NovaX Matching Core 是 NovaX Matching Service 背后的确定性撮合库。
 
-当前仓库聚焦 deterministic core 和 recovery proof path。Service host、公开 API、部署模型和 benchmark suite 仍在建设中。
+这个仓库不是完整交易所，也还不是生产级 service host。它负责那条必须能被 replay 解释清楚的核心路径：confirmed input 进入系统，order book 以确定性方式变化，matching output 先完成 durable commit，然后 safe point 才能推进。
 
-## 范围
+## 这个仓库负责什么
 
-### 包含
+- 每个 symbol 的 order book state。
+- Price-time priority 撮合行为。
+- Confirmed input 到 symbol runtime 的路由。
+- Bounded handoff 和 runtime pressure signal。
+- Safe point 推进前的 output commit tracking。
+- Snapshot、restore、replay、checksum 和 verification primitives。
 
-- 从 journal-backed command stream 读取 confirmed input。
-- 按 symbol 进行 single-writer execution。
-- 维护 price-time priority order book。
-- 生成确定性的 matching output。
-- 在 safe point 推进前完成 output commit coordination。
-- 提供 replay、snapshot、restore 和 verification primitives。
-- 提供 routing、handoff、backpressure、pending output 等 runtime boundary。
-
-### 不包含
-
-- 面向外部的 order-entry API。
-- Account、wallet、settlement、custody 逻辑。
-- Product configuration authority。
-- 独立的 market-data distribution service。
-- 完整的 deployment、failover 和 operations platform。
+它不负责 order-entry API、account balance、custody、settlement、fee calculation 或对外 market-data fan-out。这些属于相邻服务。
 
 ## 架构
 
-```text
-Confirmed Journal Input
-        |
-        v
-Confirmed Input Consumer
-        |
-        v
-Symbol Routing
-        |
-        v
-Bounded Handoff
-        |
-        v
-Per-Symbol Execution Loop
-        |
-        v
-Matching Engine + Order Book
-        |
-        v
-Output Commit Boundary
-        |
-        v
-Durable Output / Safe Point
+下面两张图直接来自 Matching Service 架构参考：`docs/matching-service-reference/Matching Service.md`。
+
+### Service Context
+
+```mermaid
+flowchart LR
+    subgraph MatchingGroup["Matching Service"]
+        RuntimeShell["Service Runtime Shell"]
+        Interface["Service Interface Boundary"]
+        StreamBoundary["Messaging Reliability Boundary"]
+        Service["Matching Service"]
+        Execution["Per-Symbol Execution Pipeline"]
+    end
+
+    Transport["MQ / Stream Transport"]
+
+    Input["Confirmed input stream"]
+    Output["Durable output append"]
+
+    subgraph GovernanceZone["Governance"]
+        Governance["Product Configuration\nPlatform Risk Control\nOps Controls"]
+    end
+
+    subgraph InfraZone["Infrastructure"]
+        Coordination["Leader Election"]
+        SnapshotStore[("Snapshot Store")]
+    end
+
+    Input -->|"confirmed commands"| Transport
+    Transport --> StreamBoundary --> Service
+    Service -->|"per-symbol command"| Execution
+    Execution -->|"OrderAck / TradeEvent / MarketDataEvent"| Service
+    Service --> StreamBoundary -->|"matching output"| Transport
+    Transport --> Output
+    Governance -->|"governed control"| Transport
+    RuntimeShell -.->|"health / readiness / scheduled tasks"| Service
+    RuntimeShell -.-> Interface
+    Interface --> Service
+    Service <-->|"snapshot / restore"| SnapshotStore
+    Service <-->|"leader lease / fencing"| Coordination
+
+    style GovernanceZone fill:#f8fafc,stroke:#cbd5e1,stroke-dasharray: 4 4,color:#64748b;
+    style InfraZone fill:#f8fafc,stroke:#cbd5e1,stroke-dasharray: 4 4,color:#64748b;
 ```
 
-Replay Runner 和 Snapshot Restore 会基于 durable facts 重建并验证状态。Snapshot 只是恢复加速点；Journal 仍然是 replay 的事实来源。
+### Component View
 
-## 设计原则
+```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 28, "rankSpacing": 38, "diagramPadding": 12, "subGraphTitleMargin": {"top": 8, "bottom": 10}}}}%%
+flowchart TB
+    Journal["Trading Event Journal"]
+    SnapshotBytes[("Snapshot Bytes\n.snap")]
+    VerifiedManifest[("Verified Manifest\n.verified")]
 
-- Deterministic replay 是一等要求。
-- 每个 symbol 只有一个可写 execution owner。
-- Input 必须先经过 journal confirmation，再进入 matching。
-- Output 必须 durable 后，safe point 才能推进。
-- Bounded queue 用来暴露 backpressure，而不是隐藏 overload。
-- Snapshot capture 和 restore 必须绑定 safe point。
-- Replay 和 restore 必须匹配 output、checksum 和 safe point。
-- Matching hot path 不调用外部服务。
+    EventBus["MQ / Derived Streams"]
 
-## 当前能力
+    subgraph Boundary["Interface / Messaging Boundary"]
+        RuntimeShell["Service Runtime Shell"]
+        Interface["Service Interface Boundary"]
+        Messaging["Messaging Reliability Boundary"]
+        JournalAdapter["Journal Adapter"]
+    end
 
-### Matching Kernel
+    subgraph Control["Control"]
+        Governance["Governance Control Boundary"]
+        Evidence["Evidence Boundary"]
+    end
 
-- Core domain types 和 command model。
-- Command ingress validation。
-- Limit order matching 和 cancellation。
-- Order acknowledgement、trade event、market-data related event。
-- 确定性的 trade sequence 和 market sequence 生成。
+    subgraph Input["Input"]
+        Consumer["Confirmed Input Consumer"]
+        Router["Symbol Routing"]
+        Handoff["Bounded Handoff"]
+    end
 
-### Order Book
+    subgraph Execution["Execution"]
+        Manager["Runtime Manager"]
+        Loops["Per-Symbol Execution Loops\n(BTC-USDT, ETH-USDT, ...)"]
+        Engine["Matching Engine"]
+        Book["Order Book"]
+    end
 
-- Price-time priority bid / ask books。
-- 同价位 FIFO queue。
-- Indexed order lookup 和 cancellation。
-- Deterministic checksum。
-- 可恢复 order-book state 的 snapshot capture / restore。
+    subgraph Output["Output"]
+        Commit["Output Commit Boundary"]
+    end
 
-### Runtime Path
+    subgraph Recovery["Recovery"]
+        Snapshot["Snapshot Restore"]
+        SnapshotStore["Snapshot Store"]
+        Replay["Replay Runner"]
+    end
 
-- Single-symbol `SymbolRuntime`。
-- Multi-symbol `RuntimeManager`。
-- Registered-symbol routing。
-- 带 watermark 和 retry prepend 的 bounded handoff queue。
-- Per-symbol execution-loop step。
-- 用于运行期调优的 runtime policy configuration surface。
-
-### Output Commit
-
-- Pending output buffer isolation。
-- Output batch identity 和 digest metadata。
-- Output journal client 和 batch coordinator。
-- Unknown / unavailable / rejected output outcome handling。
-- 只有 confirmed durable output 才能推进 safe point。
-
-### Replay And Snapshot
-
-- Replay Runner 用于 deterministic rebuild 和 comparison。
-- Snapshot Store 用于 canonical snapshot bytes 和 verified manifest。
-- Snapshot Restore 用于 safe-point restore 和 replay-tail processing。
-- Snapshot verification orchestration 以及结构化 mismatch evidence。
-
-## 仓库结构
-
-```text
-crates/
-  matching-core/       deterministic matching library
-  matching-service/    service host boundary, under construction
-  matching-bench/      benchmark workspace, under construction
-
-docs/
-  matching-service-reference/
-                       local architecture reference symlink
+    Journal --> JournalAdapter --> Consumer
+    JournalAdapter --> Messaging
+    EventBus --> Messaging
+    RuntimeShell -.->|"runtime context"| Interface
+    RuntimeShell -.->|"dependency / pressure context"| Messaging
+    RuntimeShell -.->|"governed runtime context"| Governance
+    RuntimeShell -.->|"trace / degradation context"| Evidence
+    Interface --> Governance
+    Governance -.-> Manager
+    Manager -.->|"status view"| Interface
+    RuntimeShell -.->|"startup / drain / readiness"| Manager
+    Manager -.->|"lifecycle"| Loops
+    Consumer --> Router
+    Router --> Handoff
+    Handoff --> Loops
+    Governance -.-> Loops
+    Loops --> Engine
+    Engine --> Book
+    Engine --> Loops
+    Loops --> Commit
+    Commit --> Messaging --> EventBus
+    Commit --> JournalAdapter --> Journal
+    Commit -.->|"safe point"| Loops
+    Governance -.-> Evidence
+    Loops -.-> Evidence
+    Commit -.-> Evidence
+    Manager -.-> Evidence
+    RuntimeShell -.->|"scheduled snapshot verification task"| Snapshot
+    Loops --> Snapshot
+    Snapshot --> SnapshotStore
+    Snapshot -.->|"verification replay / comparison"| Replay
+    Snapshot -.->|"signed verification evidence"| SnapshotStore
+    Snapshot -.->|"mismatch evidence"| Evidence
+    SnapshotStore --> SnapshotBytes
+    SnapshotBytes --> SnapshotStore
+    SnapshotStore --> VerifiedManifest
+    VerifiedManifest --> SnapshotStore
+    SnapshotStore --> Snapshot
+    Interface -.-> Replay
+    JournalAdapter -.-> Replay
+    Replay --> Loops
 ```
+
+`Per-Symbol Execution Loops` 表示多个 runtime instance，通常按 symbol 或 symbol group 划分。Snapshot bytes 和 verified manifests 是恢复用的持久化 artifact，不是 live runtime component。
+
+## 当前状态
+
+`matching-core` crate 目前已经覆盖：
+
+- Domain types、command validation、limit order、cancel、ack、trade 和 market event。
+- 确定性的 bid / ask book、同价位 FIFO、indexed cancellation、checksum、snapshot 和 restore。
+- Multi-symbol runtime management、symbol routing、bounded handoff queue、budgeted runtime-loop scheduling、pending output pressure 和 runtime policy config。
+- Output batch identity、output commit retry / query handling，以及 durable output 之后的 safe-point advancement。
+- Replay、snapshot storage、verified manifest 和 snapshot verification evidence。
+
+`matching-service` crate 仍然是建设中的 service boundary。公开 API、部署、生产运维和 benchmark 报告还没有在这个仓库里完成。
 
 ## 开发
 
@@ -139,19 +185,19 @@ cargo test
 Commit message 使用简洁的 Conventional Commit 风格：
 
 ```text
-feat(core): add runtime manager
+feat(core): add budgeted runtime loop scheduling
 ```
 
 ## 文档
 
-详细的 Matching Service 架构参考维护在 NovaX architecture workspace 中。在本地开发环境里，本仓库通过下面的路径暴露这份参考：
+完整的 Matching Service 架构参考维护在 NovaX architecture workspace 中，本地通过下面路径暴露：
 
 ```text
 docs/matching-service-reference
 ```
 
-这份参考覆盖 component boundary、deterministic recovery strategy、output commit 和 safe-point 规则、snapshot restore、replay、runtime management 以及 backpressure behavior。
+仓库内 roadmap 在：
 
-## 状态
-
-Matching Core 当前聚焦 deterministic execution、durable output coordination、replay、snapshot restore 和 verification support。Service host、external interfaces、production deployment model 和 benchmark suite 是后续重点。
+```text
+docs/roadmap.md
+```
