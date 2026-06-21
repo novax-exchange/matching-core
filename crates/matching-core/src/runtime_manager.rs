@@ -6,7 +6,8 @@ use crate::output_commit_boundary::{
     OutputCommitBlockAction, OutputCommitBlockDecision, OutputCommitRetryTracker,
     OutputJournalClient, PendingOutputBuffer,
 };
-use crate::runtime_config::MatchingRuntimeConfig;
+use crate::runtime_config::{MatchingRuntimeConfig, RuntimeTopologyConfig};
+use crate::runtime_topology::{RuntimeTopology, RuntimeTopologyError};
 use crate::snapshot_restore::SymbolRuntimeSnapshot;
 use crate::symbol_runtime::{
     advance_runtime_safe_point_from_output_commit,
@@ -18,6 +19,8 @@ use std::collections::HashMap;
 
 pub struct RuntimeManager {
     runtimes: HashMap<Symbol, SymbolRuntime>,
+    registered_symbols: Vec<Symbol>,
+    topology_config: RuntimeTopologyConfig,
     pending_output_buffers: HashMap<Symbol, PendingOutputBuffer>,
     output_commit_retry_trackers: HashMap<Symbol, OutputCommitRetryTracker>,
     output_commit_escalations: HashMap<Symbol, OutputCommitBlockDecision>,
@@ -87,9 +90,10 @@ impl RuntimeManager {
     }
 
     pub fn new_with_config(config: MatchingRuntimeConfig) -> Self {
-        Self::new_with_pending_output_capacity_and_output_retry_limit(
+        Self::new_with_runtime_policy(
             config.output_commit.pending_output_capacity,
             config.output_commit.max_unavailable_attempts,
+            config.topology,
         )
     }
 
@@ -105,8 +109,22 @@ impl RuntimeManager {
         default_pending_output_capacity: usize,
         output_commit_max_unavailable_attempts: usize,
     ) -> Self {
+        Self::new_with_runtime_policy(
+            default_pending_output_capacity,
+            output_commit_max_unavailable_attempts,
+            RuntimeTopologyConfig::default(),
+        )
+    }
+
+    fn new_with_runtime_policy(
+        default_pending_output_capacity: usize,
+        output_commit_max_unavailable_attempts: usize,
+        topology_config: RuntimeTopologyConfig,
+    ) -> Self {
         Self {
             runtimes: HashMap::new(),
+            registered_symbols: Vec::new(),
+            topology_config,
             pending_output_buffers: HashMap::new(),
             output_commit_retry_trackers: HashMap::new(),
             output_commit_escalations: HashMap::new(),
@@ -123,6 +141,10 @@ impl RuntimeManager {
     }
 
     pub fn add_symbol(&mut self, symbol: Symbol) {
+        if !self.runtimes.contains_key(&symbol) {
+            self.registered_symbols.push(symbol.clone());
+        }
+
         self.runtimes
             .entry(symbol.clone())
             .or_insert_with(|| SymbolRuntime::new(symbol.clone()));
@@ -138,6 +160,9 @@ impl RuntimeManager {
 
     pub fn restore_symbol_from_snapshot(&mut self, snapshot: SymbolRuntimeSnapshot) {
         let symbol = snapshot.order_book_snapshot.symbol.clone();
+        if !self.runtimes.contains_key(&symbol) {
+            self.registered_symbols.push(symbol.clone());
+        }
 
         self.runtimes.insert(
             symbol.clone(),
@@ -155,6 +180,10 @@ impl RuntimeManager {
         self.output_commit_escalation_query_statuses.remove(&symbol);
         self.output_commit_quarantines.remove(&symbol);
         self.output_commit_quarantine_query_statuses.remove(&symbol);
+    }
+
+    pub fn resolve_runtime_topology(&self) -> Result<RuntimeTopology, RuntimeTopologyError> {
+        RuntimeTopology::resolve(&self.registered_symbols, &self.topology_config)
     }
 
     pub fn symbol_status(&self, symbol: &Symbol) -> Option<SymbolRuntimeStatus> {

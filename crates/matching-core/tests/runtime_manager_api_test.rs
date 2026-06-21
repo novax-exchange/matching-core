@@ -14,13 +14,14 @@ use matching_core::output_commit_boundary::{
 };
 use matching_core::runtime_config::{
     HandoffConfig, InputConsumerConfig, MatchingRuntimeConfig, OutputCommitConfig,
-    RuntimeHostConfig, RuntimeHostMode, RuntimeTopologyConfig, SnapshotConfig,
-    SnapshotVerificationConfig, SymbolAssignmentPolicy, SymbolRuntimeConfig,
+    RuntimeHostConfig, RuntimeHostMode, RuntimeShardId, RuntimeTopologyConfig, SnapshotConfig,
+    SnapshotVerificationConfig, SymbolAssignmentPolicy, SymbolRuntimeConfig, SymbolShardAssignment,
 };
 use matching_core::runtime_manager::{
     OutputCommitBlockageKind, OutputCommitBlockageStatus, RuntimeManager, RuntimeManagerError,
     SymbolRuntimeStatus,
 };
+use matching_core::runtime_topology::RuntimeTopologyError;
 use matching_core::symbol_runtime::SymbolRuntimeOutputCommitStepError;
 use matching_core::types::{
     CommandId, JournalSeq, MarketSeq, OrderId, Price, Quantity, Side, Symbol,
@@ -391,6 +392,79 @@ fn runtime_manager_query_api_is_available_from_public_api() {
             output_commit_quarantine: None,
             output_commit_blockage: None,
         })
+    );
+}
+
+#[test]
+fn runtime_manager_resolves_default_runtime_topology_from_public_api() {
+    let btc = Symbol("BTC-USDT".to_string());
+    let eth = Symbol("ETH-USDT".to_string());
+    let mut manager = RuntimeManager::new();
+
+    manager.add_symbol(btc.clone());
+    manager.add_symbol(eth.clone());
+
+    let topology = manager
+        .resolve_runtime_topology()
+        .expect("default runtime topology should resolve");
+
+    assert_eq!(topology.shard_count(), 1);
+    assert_eq!(
+        topology.symbols_for_shard(RuntimeShardId(0)),
+        Some(&[btc, eth][..])
+    );
+}
+
+#[test]
+fn runtime_manager_resolves_configured_declaration_order_topology_from_public_api() {
+    let btc = Symbol("BTC-USDT".to_string());
+    let eth = Symbol("ETH-USDT".to_string());
+    let sol = Symbol("SOL-USDT".to_string());
+    let mut config = MatchingRuntimeConfig::default();
+    config.topology = RuntimeTopologyConfig {
+        shard_count: 2,
+        assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
+    };
+    let mut manager = RuntimeManager::new_with_config(config);
+
+    manager.add_symbol(btc.clone());
+    manager.add_symbol(eth.clone());
+    manager.add_symbol(sol.clone());
+
+    let topology = manager
+        .resolve_runtime_topology()
+        .expect("configured runtime topology should resolve");
+
+    assert_eq!(
+        topology.symbols_for_shard(RuntimeShardId(0)),
+        Some(&[btc, sol][..])
+    );
+    assert_eq!(
+        topology.symbols_for_shard(RuntimeShardId(1)),
+        Some(&[eth][..])
+    );
+}
+
+#[test]
+fn runtime_manager_reports_invalid_explicit_topology_from_public_api() {
+    let btc = Symbol("BTC-USDT".to_string());
+    let eth = Symbol("ETH-USDT".to_string());
+    let mut config = MatchingRuntimeConfig::default();
+    config.topology = RuntimeTopologyConfig {
+        shard_count: 2,
+        assignment_policy: SymbolAssignmentPolicy::ExplicitMap(vec![SymbolShardAssignment {
+            symbol: btc.clone(),
+            shard_id: RuntimeShardId(0),
+        }]),
+    };
+    let mut manager = RuntimeManager::new_with_config(config);
+
+    manager.add_symbol(btc);
+    manager.add_symbol(eth.clone());
+
+    assert_eq!(
+        manager.resolve_runtime_topology(),
+        Err(RuntimeTopologyError::MissingSymbolAssignment(eth))
     );
 }
 
