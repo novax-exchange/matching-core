@@ -13,6 +13,10 @@ use matching_core::output_commit_boundary::{
     OutputCommitRequest, OutputJournalClient, PendingOutputBufferError, MATCHING_OUTPUT_VERSION,
 };
 use matching_core::per_symbol_execution_loop::PerSymbolExecutionLoopOutputCommitStepError;
+use matching_core::runtime_config::{
+    ExecutionLoopConfig, HandoffConfig, InputConsumerConfig, MatchingRuntimeConfig,
+    OutputCommitConfig, SnapshotConfig, SnapshotVerificationConfig,
+};
 use matching_core::runtime_manager::{
     OutputCommitBlockageKind, OutputCommitBlockageStatus, RuntimeManager, RuntimeManagerError,
     SymbolRuntimeStatus,
@@ -387,6 +391,37 @@ fn runtime_manager_query_api_is_available_from_public_api() {
             output_commit_blockage: None,
         })
     );
+}
+
+#[test]
+fn runtime_manager_uses_runtime_config_for_output_policy_from_public_api() {
+    let btc = Symbol("BTC-USDT".to_string());
+    let config = MatchingRuntimeConfig {
+        output_commit: OutputCommitConfig {
+            pending_output_capacity: 7,
+            max_unavailable_attempts: 2,
+            max_output_requests_per_step: 5,
+        },
+        input_consumer: InputConsumerConfig {
+            max_batch_entries: 11,
+        },
+        handoff: HandoffConfig { capacity: 13 },
+        execution_loop: ExecutionLoopConfig {
+            max_input_entries_per_step: 17,
+        },
+        snapshot: SnapshotConfig { retention_limit: 3 },
+        snapshot_verification: SnapshotVerificationConfig {
+            max_mismatch_attempts: 4,
+        },
+    };
+    let mut manager = RuntimeManager::new_with_config(config);
+
+    manager.add_symbol(btc.clone());
+
+    let status = manager
+        .symbol_status(&btc)
+        .expect("configured symbol should have status");
+    assert_eq!(status.pending_output_capacity, 7);
 }
 
 #[test]

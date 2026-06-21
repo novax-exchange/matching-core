@@ -12,12 +12,10 @@ use crate::per_symbol_execution_loop::{
     PerSymbolExecutionLoopOutputCommitStepError, PerSymbolExecutionLoopOutputCommitStepReport,
     SymbolRuntime,
 };
+use crate::runtime_config::MatchingRuntimeConfig;
 use crate::snapshot_restore::SymbolRuntimeSnapshot;
 use crate::types::{Checksum, JournalSeq, Symbol};
 use std::collections::HashMap;
-
-const DEFAULT_PENDING_OUTPUT_CAPACITY: usize = 1024;
-const DEFAULT_OUTPUT_COMMIT_MAX_UNAVAILABLE_ATTEMPTS: usize = 3;
 
 pub struct RuntimeManager {
     runtimes: HashMap<Symbol, SymbolRuntime>,
@@ -86,16 +84,21 @@ pub struct RuntimeManagerRetryAwareStepReport {
 
 impl RuntimeManager {
     pub fn new() -> Self {
+        Self::new_with_config(MatchingRuntimeConfig::default())
+    }
+
+    pub fn new_with_config(config: MatchingRuntimeConfig) -> Self {
         Self::new_with_pending_output_capacity_and_output_retry_limit(
-            DEFAULT_PENDING_OUTPUT_CAPACITY,
-            DEFAULT_OUTPUT_COMMIT_MAX_UNAVAILABLE_ATTEMPTS,
+            config.output_commit.pending_output_capacity,
+            config.output_commit.max_unavailable_attempts,
         )
     }
 
     pub fn new_with_pending_output_capacity(default_pending_output_capacity: usize) -> Self {
+        let config = MatchingRuntimeConfig::default();
         Self::new_with_pending_output_capacity_and_output_retry_limit(
             default_pending_output_capacity,
-            DEFAULT_OUTPUT_COMMIT_MAX_UNAVAILABLE_ATTEMPTS,
+            config.output_commit.max_unavailable_attempts,
         )
     }
 
@@ -554,6 +557,12 @@ mod tests {
 
     fn eth() -> Symbol {
         Symbol("ETH-USDT".to_string())
+    }
+
+    fn default_pending_output_capacity() -> usize {
+        MatchingRuntimeConfig::default()
+            .output_commit
+            .pending_output_capacity
     }
 
     #[test]
@@ -1062,7 +1071,7 @@ mod tests {
                 symbol: btc(),
                 last_input_seq: None,
                 pending_output_len: 0,
-                pending_output_capacity: DEFAULT_PENDING_OUTPUT_CAPACITY,
+                pending_output_capacity: default_pending_output_capacity(),
                 pending_output_full: false,
                 output_commit_escalation: None,
                 output_commit_quarantine: None,
@@ -1091,7 +1100,7 @@ mod tests {
                 symbol: btc(),
                 last_input_seq: Some(JournalSeq(7)),
                 pending_output_len: 0,
-                pending_output_capacity: DEFAULT_PENDING_OUTPUT_CAPACITY,
+                pending_output_capacity: default_pending_output_capacity(),
                 pending_output_full: false,
                 output_commit_escalation: None,
                 output_commit_quarantine: None,
