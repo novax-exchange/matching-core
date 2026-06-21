@@ -25,6 +25,14 @@ pub struct SnapshotSelectionReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedSnapshotSelectionReport {
+    pub selected: Option<SymbolRuntimeSnapshot>,
+    pub selected_record: Option<SnapshotRecord>,
+    pub skipped_unverified: Vec<SnapshotRecord>,
+    pub rejected: Vec<RejectedSnapshotRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RejectedSnapshotRecord {
     pub record: SnapshotRecord,
     pub error: SnapshotSerializationError,
@@ -168,6 +176,30 @@ impl FileSnapshotStore {
         })
     }
 
+    pub fn mark_symbol_snapshot_verified(
+        &self,
+        symbol: &Symbol,
+        safe_point: JournalSeq,
+    ) -> Result<Option<SnapshotRecord>, SnapshotStoreError> {
+        let Some(record) = self
+            .read_symbol_records(symbol)?
+            .into_iter()
+            .find(|record| record.safe_point == safe_point)
+        else {
+            return Ok(None);
+        };
+
+        SymbolRuntimeSnapshot::from_canonical_bytes(&record.bytes)
+            .map_err(SnapshotStoreError::SnapshotSerialization)?;
+        fs::write(
+            self.verified_marker_path(symbol, safe_point),
+            b"matching-core snapshot verified\n",
+        )
+        .map_err(io_error)?;
+
+        Ok(Some(record))
+    }
+
     pub fn select_latest_valid_symbol_snapshot(
         &self,
         symbol: &Symbol,
@@ -193,6 +225,44 @@ impl FileSnapshotStore {
         Ok(SnapshotSelectionReport {
             selected: None,
             selected_record: None,
+            rejected,
+        })
+    }
+
+    pub fn select_latest_verified_symbol_snapshot(
+        &self,
+        symbol: &Symbol,
+    ) -> Result<VerifiedSnapshotSelectionReport, SnapshotStoreError> {
+        let records = self.read_symbol_records(symbol)?;
+        let mut skipped_unverified = Vec::new();
+        let mut rejected = Vec::new();
+
+        for record in records.into_iter().rev() {
+            if !self
+                .verified_marker_path(symbol, record.safe_point)
+                .exists()
+            {
+                skipped_unverified.push(record);
+                continue;
+            }
+
+            match SymbolRuntimeSnapshot::from_canonical_bytes(&record.bytes) {
+                Ok(snapshot) => {
+                    return Ok(VerifiedSnapshotSelectionReport {
+                        selected: Some(snapshot),
+                        selected_record: Some(record),
+                        skipped_unverified,
+                        rejected,
+                    });
+                }
+                Err(error) => rejected.push(RejectedSnapshotRecord { record, error }),
+            }
+        }
+
+        Ok(VerifiedSnapshotSelectionReport {
+            selected: None,
+            selected_record: None,
+            skipped_unverified,
             rejected,
         })
     }
@@ -242,6 +312,11 @@ impl FileSnapshotStore {
             .join(format!("{:020}.snap", safe_point.0))
     }
 
+    fn verified_marker_path(&self, symbol: &Symbol, safe_point: JournalSeq) -> PathBuf {
+        self.symbol_dir(symbol)
+            .join(format!("{:020}.verified", safe_point.0))
+    }
+
     fn retain_latest_symbol_snapshots(&self, symbol: &Symbol) -> Result<(), SnapshotStoreError> {
         let records = self.read_symbol_records(symbol)?;
 
@@ -254,6 +329,10 @@ impl FileSnapshotStore {
             let path = self.snapshot_path(symbol, record.safe_point);
             if path.exists() {
                 fs::remove_file(path).map_err(io_error)?;
+            }
+            let marker_path = self.verified_marker_path(symbol, record.safe_point);
+            if marker_path.exists() {
+                fs::remove_file(marker_path).map_err(io_error)?;
             }
         }
 

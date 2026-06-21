@@ -326,6 +326,109 @@ fn file_snapshot_store_reports_rejections_when_no_valid_snapshot_exists_from_pub
     fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
 }
 
+#[test]
+fn file_snapshot_store_selects_latest_verified_snapshot_and_skips_unverified_from_public_api() {
+    let dir = temporary_snapshot_dir("file-store-verified-selection");
+    let symbol = Symbol("BTC-USDT".to_string());
+    let mut store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 3);
+
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(10))
+        .expect("first snapshot should be written");
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(11))
+        .expect("second snapshot should be written");
+    store
+        .mark_symbol_snapshot_verified(&symbol, JournalSeq(11))
+        .expect("snapshot should be marked verified")
+        .expect("snapshot should exist before marking verified");
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(12))
+        .expect("newer unverified snapshot should be written");
+
+    let report = store
+        .select_latest_verified_symbol_snapshot(&symbol)
+        .expect("snapshot selection should read verified markers");
+
+    assert_eq!(
+        report
+            .selected_record
+            .expect("verified snapshot should be selected")
+            .safe_point,
+        JournalSeq(11)
+    );
+    assert_eq!(
+        report
+            .selected
+            .expect("verified snapshot should decode")
+            .order_book_snapshot
+            .last_input_seq,
+        JournalSeq(11)
+    );
+    assert_eq!(
+        report
+            .skipped_unverified
+            .iter()
+            .map(|record| record.safe_point)
+            .collect::<Vec<_>>(),
+        vec![JournalSeq(12)]
+    );
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
+}
+
+#[test]
+fn file_snapshot_store_rejects_corrupt_verified_snapshot_and_falls_back_from_public_api() {
+    let dir = temporary_snapshot_dir("file-store-corrupt-verified");
+    let symbol = Symbol("BTC-USDT".to_string());
+    let mut store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 3);
+
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(10))
+        .expect("first snapshot should be written");
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(11))
+        .expect("second snapshot should be written");
+    store
+        .mark_symbol_snapshot_verified(&symbol, JournalSeq(11))
+        .expect("older snapshot should be marked verified")
+        .expect("older snapshot should exist");
+
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(12))
+        .expect("latest snapshot should be written");
+    store
+        .mark_symbol_snapshot_verified(&symbol, JournalSeq(12))
+        .expect("latest snapshot should be marked verified")
+        .expect("latest snapshot should exist");
+
+    let mut corrupt_latest = symbol_runtime_snapshot_at_safe_point(12).to_canonical_bytes();
+    corrupt_latest[0] = b'X';
+    store
+        .write_raw_symbol_snapshot_bytes(symbol.clone(), JournalSeq(12), corrupt_latest)
+        .expect("verified latest snapshot should be overwritten as corrupt");
+
+    let report = store
+        .select_latest_verified_symbol_snapshot(&symbol)
+        .expect("verified snapshot selection should read retained snapshots");
+
+    assert_eq!(
+        report
+            .selected_record
+            .expect("older verified snapshot should be selected")
+            .safe_point,
+        JournalSeq(11)
+    );
+    assert_eq!(report.rejected.len(), 1);
+    assert_eq!(report.rejected[0].record.safe_point, JournalSeq(12));
+    assert_eq!(
+        report.rejected[0].error,
+        SnapshotSerializationError::InvalidMagic
+    );
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
+}
+
 struct TestJournalInputReader {
     entries: Vec<JournalInputEntry>,
 }
