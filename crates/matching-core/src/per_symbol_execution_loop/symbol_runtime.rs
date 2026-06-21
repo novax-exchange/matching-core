@@ -1,15 +1,17 @@
 use crate::journal_adapter::{JournalAdapterError, JournalInputEntry, JournalOutputAppender};
 use crate::matching_engine::{CommandIngress, IngressError};
 use crate::matching_engine::{
-    EngineEvent, MarketEvent, OrderAck, OrderAddedEvent, OrderCancelledEvent, RejectReason,
-    TradeEvent,
+    EngineEvent, MarketEvent, OrderAck, OrderAddedEvent, OrderCancelledEvent,
+    PriceLevelChangedEvent, RejectReason, TradeEvent,
 };
 use crate::order::Command;
 use crate::order_book::OrderBook;
 use crate::output_commit_boundary::OutputCommitRequest;
 use crate::output_commit_boundary::{PendingOutputBuffer, PendingOutputBufferError};
 use crate::snapshot_restore::{OrderBookSnapshot, SymbolRuntimeSnapshot};
-use crate::types::{Checksum, CommandId, JournalSeq, MarketSeq, OrderId, Symbol, TradeId};
+use crate::types::{
+    Checksum, CommandId, JournalSeq, MarketSeq, OrderId, Price, Side, Symbol, TradeId,
+};
 use std::collections::HashSet;
 
 pub struct SymbolRuntime {
@@ -97,6 +99,35 @@ impl SymbolRuntime {
             seen_command_ids: snapshot.seen_command_ids.into_iter().collect(),
             seen_order_ids: snapshot.seen_order_ids.into_iter().collect(),
         }
+    }
+
+    fn next_market_seq(&mut self) -> MarketSeq {
+        let market_seq = MarketSeq(self.next_market_seq);
+        self.next_market_seq += 1;
+        market_seq
+    }
+
+    fn push_price_level_changed_event(
+        &mut self,
+        events: &mut Vec<EngineEvent>,
+        command_id: CommandId,
+        journal_seq: JournalSeq,
+        side: Side,
+        price: Price,
+    ) {
+        let quantity_after = self.order_book.level_quantity(side, price);
+        let market_seq = self.next_market_seq();
+
+        events.push(EngineEvent::Market(MarketEvent::PriceLevelChanged(
+            PriceLevelChangedEvent {
+                market_seq,
+                command_id,
+                journal_seq,
+                side,
+                price,
+                quantity_after,
+            },
+        )));
     }
 
     pub fn mark_output_committed(&mut self, journal_seq: JournalSeq) -> Result<(), SafePointError> {
@@ -223,6 +254,10 @@ impl SymbolRuntime {
         match command {
             Command::PlaceLimit(order) => {
                 let order_id = order.order_id;
+                let maker_side = match order.side {
+                    Side::Buy => Side::Sell,
+                    Side::Sell => Side::Buy,
+                };
 
                 if self.seen_order_ids.contains(&order_id) {
                     return OutputCommitRequest {
@@ -240,6 +275,7 @@ impl SymbolRuntime {
                 self.seen_order_ids.insert(order_id);
 
                 let result = self.order_book.place_limit(order);
+                let mut changed_price_levels = Vec::new();
 
                 let mut events = vec![EngineEvent::OrderAck(OrderAck::Accepted {
                     command_id: entry.command_id,
@@ -249,9 +285,15 @@ impl SymbolRuntime {
 
                 for trade in result.trades {
                     let trade_id = TradeId(self.next_trade_seq);
-                    let market_seq = MarketSeq(self.next_market_seq);
+                    let market_seq = self.next_market_seq();
                     self.next_trade_seq += 1;
-                    self.next_market_seq += 1;
+
+                    if !changed_price_levels
+                        .iter()
+                        .any(|(side, price)| *side == maker_side && *price == trade.price)
+                    {
+                        changed_price_levels.push((maker_side, trade.price));
+                    }
 
                     events.push(EngineEvent::Trade(TradeEvent {
                         trade_id,
@@ -265,9 +307,20 @@ impl SymbolRuntime {
                     }));
                 }
 
+                for (side, price) in changed_price_levels {
+                    self.push_price_level_changed_event(
+                        &mut events,
+                        entry.command_id,
+                        entry.seq,
+                        side,
+                        price,
+                    );
+                }
+
                 if let Some(resting_order) = result.resting_order {
-                    let market_seq = MarketSeq(self.next_market_seq);
-                    self.next_market_seq += 1;
+                    let market_seq = self.next_market_seq();
+                    let side = resting_order.side;
+                    let price = resting_order.price;
 
                     events.push(EngineEvent::Market(MarketEvent::OrderAdded(
                         OrderAddedEvent {
@@ -280,6 +333,14 @@ impl SymbolRuntime {
                             quantity: resting_order.quantity,
                         },
                     )));
+
+                    self.push_price_level_changed_event(
+                        &mut events,
+                        entry.command_id,
+                        entry.seq,
+                        side,
+                        price,
+                    );
                 }
 
                 OutputCommitRequest {
@@ -291,10 +352,8 @@ impl SymbolRuntime {
             Command::Cancel { order_id, .. } => {
                 let events = match self.order_book.cancel(order_id) {
                     Ok(cancelled_order) => {
-                        let market_seq = MarketSeq(self.next_market_seq);
-                        self.next_market_seq += 1;
-
-                        vec![
+                        let market_seq = self.next_market_seq();
+                        let mut events = vec![
                             EngineEvent::OrderAck(OrderAck::Cancelled {
                                 command_id: entry.command_id,
                                 order_id,
@@ -309,7 +368,17 @@ impl SymbolRuntime {
                                 price: cancelled_order.price,
                                 quantity: cancelled_order.quantity,
                             })),
-                        ]
+                        ];
+
+                        self.push_price_level_changed_event(
+                            &mut events,
+                            entry.command_id,
+                            entry.seq,
+                            cancelled_order.side,
+                            cancelled_order.price,
+                        );
+
+                        events
                     }
                     Err(_) => vec![EngineEvent::OrderAck(OrderAck::Rejected {
                         command_id: entry.command_id,
@@ -485,6 +554,24 @@ mod tests {
         }))
     }
 
+    fn price_level_changed_event(
+        market_seq: u64,
+        command_id: u64,
+        journal_seq: u64,
+        side: Side,
+        price: u64,
+        quantity_after: u64,
+    ) -> EngineEvent {
+        EngineEvent::Market(MarketEvent::PriceLevelChanged(PriceLevelChangedEvent {
+            market_seq: MarketSeq(market_seq),
+            command_id: CommandId(command_id),
+            journal_seq: JournalSeq(journal_seq),
+            side,
+            price: Price(price),
+            quantity_after: Quantity(quantity_after),
+        }))
+    }
+
     fn trade_event(
         trade_id: u64,
         market_seq: u64,
@@ -566,6 +653,7 @@ mod tests {
             vec![
                 accepted_event(10, 100, 1),
                 added_event(1, 10, 1, 100, Side::Buy, 100, 5),
+                price_level_changed_event(2, 10, 1, Side::Buy, 100, 5),
             ]
         );
     }
@@ -597,6 +685,7 @@ mod tests {
                     events: vec![
                         accepted_event(10, 100, 1),
                         added_event(1, 10, 1, 100, Side::Sell, 100, 3),
+                        price_level_changed_event(2, 10, 1, Side::Sell, 100, 3),
                     ],
                     output_commit_metadata: None,
                 },
@@ -605,7 +694,8 @@ mod tests {
                     journal_seq: JournalSeq(2),
                     events: vec![
                         accepted_event(11, 101, 2),
-                        trade_event(1, 2, 11, 2, 100, 101, 100, 3),
+                        trade_event(1, 3, 11, 2, 100, 101, 100, 3),
+                        price_level_changed_event(4, 11, 2, Side::Sell, 100, 0),
                     ],
                     output_commit_metadata: None,
                 },
@@ -614,7 +704,8 @@ mod tests {
                     journal_seq: JournalSeq(3),
                     events: vec![
                         accepted_event(12, 102, 3),
-                        added_event(3, 12, 3, 102, Side::Buy, 99, 5),
+                        added_event(5, 12, 3, 102, Side::Buy, 99, 5),
+                        price_level_changed_event(6, 12, 3, Side::Buy, 99, 5),
                     ],
                     output_commit_metadata: None,
                 },
@@ -623,7 +714,8 @@ mod tests {
                     journal_seq: JournalSeq(4),
                     events: vec![
                         cancelled_ack_event(13, 102, 4),
-                        cancelled_market_event(4, 13, 4, 102, Side::Buy, 99, 5),
+                        cancelled_market_event(7, 13, 4, 102, Side::Buy, 99, 5),
+                        price_level_changed_event(8, 13, 4, Side::Buy, 99, 0),
                     ],
                     output_commit_metadata: None,
                 },
@@ -644,6 +736,7 @@ mod tests {
             vec![
                 accepted_event(10, 100, 1),
                 added_event(1, 10, 1, 100, Side::Buy, 100, 5),
+                price_level_changed_event(2, 10, 1, Side::Buy, 100, 5),
             ]
         );
         assert_eq!(runtime.last_input_seq(), None);
@@ -725,6 +818,7 @@ mod tests {
             vec![
                 accepted_event(10, 100, 1),
                 added_event(1, 10, 1, 100, Side::Buy, 100, 5),
+                price_level_changed_event(2, 10, 1, Side::Buy, 100, 5),
             ]
         );
         assert_eq!(runtime.last_input_seq(), None);
@@ -765,7 +859,8 @@ mod tests {
             requests[0].events,
             vec![
                 accepted_event(11, 101, 2),
-                trade_event(1, 2, 11, 2, 100, 101, 100, 3),
+                trade_event(1, 3, 11, 2, 100, 101, 100, 3),
+                price_level_changed_event(4, 11, 2, Side::Sell, 100, 0),
             ]
         );
         assert_eq!(runtime.last_input_seq(), Some(JournalSeq(1)));
@@ -1043,7 +1138,8 @@ mod tests {
             entries[1].events,
             vec![
                 cancelled_ack_event(11, 100, 2),
-                cancelled_market_event(2, 11, 2, 100, Side::Buy, 100, 5),
+                cancelled_market_event(3, 11, 2, 100, Side::Buy, 100, 5),
+                price_level_changed_event(4, 11, 2, Side::Buy, 100, 0),
             ]
         );
     }
@@ -1076,6 +1172,28 @@ mod tests {
                     price: Price(100),
                     quantity: Quantity(5),
                 })),
+                price_level_changed_event(2, 10, 1, Side::Buy, 100, 5),
+            ]
+        );
+    }
+
+    #[test]
+    fn accepted_resting_order_emits_price_level_changed_event() {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let mut output = InMemoryJournalOutputAppender::new();
+
+        assert_eq!(
+            runtime.process_entry(limit_entry(1, 10, 100, Side::Buy, 100, 5), &mut output),
+            Ok(())
+        );
+
+        let entries = output.read_all();
+        assert_eq!(
+            entries[0].events,
+            vec![
+                accepted_event(10, 100, 1),
+                added_event(1, 10, 1, 100, Side::Buy, 100, 5),
+                price_level_changed_event(2, 10, 1, Side::Buy, 100, 5),
             ]
         );
     }
@@ -1104,7 +1222,7 @@ mod tests {
                     journal_seq: JournalSeq(2),
                 }),
                 EngineEvent::Market(MarketEvent::OrderCancelled(OrderCancelledEvent {
-                    market_seq: MarketSeq(2),
+                    market_seq: MarketSeq(3),
                     command_id: CommandId(11),
                     journal_seq: JournalSeq(2),
                     order_id: OrderId(100),
@@ -1112,6 +1230,36 @@ mod tests {
                     price: Price(100),
                     quantity: Quantity(5),
                 })),
+                price_level_changed_event(4, 11, 2, Side::Buy, 100, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn cancelled_order_emits_price_level_changed_event_with_remaining_quantity() {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let mut output = InMemoryJournalOutputAppender::new();
+
+        assert_eq!(
+            runtime.process_entry(limit_entry(1, 10, 100, Side::Buy, 100, 5), &mut output),
+            Ok(())
+        );
+        assert_eq!(
+            runtime.process_entry(limit_entry(2, 11, 101, Side::Buy, 100, 2), &mut output),
+            Ok(())
+        );
+        assert_eq!(
+            runtime.process_entry(cancel_entry(3, 12, 100), &mut output),
+            Ok(())
+        );
+
+        let entries = output.read_all();
+        assert_eq!(
+            entries[2].events,
+            vec![
+                cancelled_ack_event(12, 100, 3),
+                cancelled_market_event(5, 12, 3, 100, Side::Buy, 100, 5),
+                price_level_changed_event(6, 12, 3, Side::Buy, 100, 2),
             ]
         );
     }
@@ -1155,7 +1303,33 @@ mod tests {
             entries[1].events,
             vec![
                 accepted_event(11, 101, 2),
-                trade_event(1, 2, 11, 2, 100, 101, 100, 3),
+                trade_event(1, 3, 11, 2, 100, 101, 100, 3),
+                price_level_changed_event(4, 11, 2, Side::Sell, 100, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn matching_order_emits_price_level_changed_event_after_trade() {
+        let mut runtime = SymbolRuntime::new(symbol());
+        let mut output = InMemoryJournalOutputAppender::new();
+
+        assert_eq!(
+            runtime.process_entry(limit_entry(1, 10, 100, Side::Sell, 100, 5), &mut output),
+            Ok(())
+        );
+        assert_eq!(
+            runtime.process_entry(limit_entry(2, 11, 101, Side::Buy, 100, 3), &mut output),
+            Ok(())
+        );
+
+        let entries = output.read_all();
+        assert_eq!(
+            entries[1].events,
+            vec![
+                accepted_event(11, 101, 2),
+                trade_event(1, 3, 11, 2, 100, 101, 100, 3),
+                price_level_changed_event(4, 11, 2, Side::Sell, 100, 2),
             ]
         );
     }
@@ -1192,7 +1366,8 @@ mod tests {
             entries[2].events,
             vec![
                 cancelled_ack_event(12, 100, 3),
-                cancelled_market_event(2, 12, 3, 100, Side::Sell, 100, 3),
+                cancelled_market_event(3, 12, 3, 100, Side::Sell, 100, 3),
+                price_level_changed_event(4, 12, 3, Side::Sell, 100, 0),
             ]
         );
     }
@@ -1257,7 +1432,8 @@ mod tests {
             entries[2].events,
             vec![
                 cancelled_ack_event(12, 100, 3),
-                cancelled_market_event(2, 12, 3, 100, Side::Sell, 100, 3),
+                cancelled_market_event(3, 12, 3, 100, Side::Sell, 100, 3),
+                price_level_changed_event(4, 12, 3, Side::Sell, 100, 0),
             ]
         );
     }
@@ -1316,7 +1492,8 @@ mod tests {
             entries[0].events,
             vec![
                 accepted_event(11, 101, 2),
-                trade_event(1, 2, 11, 2, 100, 101, 100, 3),
+                trade_event(1, 3, 11, 2, 100, 101, 100, 3),
+                price_level_changed_event(4, 11, 2, Side::Sell, 100, 0),
             ]
         );
     }
@@ -1359,7 +1536,8 @@ mod tests {
             entries[0].events,
             vec![
                 cancelled_ack_event(11, 100, 2),
-                cancelled_market_event(2, 11, 2, 100, Side::Buy, 100, 5),
+                cancelled_market_event(3, 11, 2, 100, Side::Buy, 100, 5),
+                price_level_changed_event(4, 11, 2, Side::Buy, 100, 0),
             ]
         );
     }
@@ -1467,7 +1645,8 @@ mod tests {
             retry_entries[0].events,
             vec![
                 accepted_event(11, 101, 2),
-                added_event(2, 11, 2, 101, Side::Buy, 100, 5),
+                added_event(3, 11, 2, 101, Side::Buy, 100, 5),
+                price_level_changed_event(4, 11, 2, Side::Buy, 100, 10),
             ]
         );
     }
@@ -1530,7 +1709,8 @@ mod tests {
             retry_entries[0].events,
             vec![
                 accepted_event(11, 101, 2),
-                trade_event(1, 2, 11, 2, 100, 101, 100, 3),
+                trade_event(1, 3, 11, 2, 100, 101, 100, 3),
+                price_level_changed_event(4, 11, 2, Side::Sell, 100, 0),
             ]
         );
     }
@@ -1574,7 +1754,8 @@ mod tests {
             entries[1].events,
             vec![
                 accepted_event(13, 103, 4),
-                trade_event(2, 4, 13, 4, 102, 103, 100, 1),
+                trade_event(2, 7, 13, 4, 102, 103, 100, 1),
+                price_level_changed_event(8, 13, 4, Side::Sell, 100, 0),
             ]
         );
     }

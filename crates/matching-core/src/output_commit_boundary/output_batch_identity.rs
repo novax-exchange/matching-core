@@ -120,6 +120,15 @@ fn digest_market_event(hasher: &mut StableDigest, event: &MarketEvent) {
             hasher.write_u64(cancelled.price.0);
             hasher.write_u64(cancelled.quantity.0);
         }
+        MarketEvent::PriceLevelChanged(changed) => {
+            hasher.write_tag("market.price_level_changed");
+            hasher.write_u64(changed.market_seq.0);
+            hasher.write_u64(changed.command_id.0);
+            hasher.write_u64(changed.journal_seq.0);
+            hasher.write_u64(side_code(changed.side));
+            hasher.write_u64(changed.price.0);
+            hasher.write_u64(changed.quantity_after.0);
+        }
     }
 }
 

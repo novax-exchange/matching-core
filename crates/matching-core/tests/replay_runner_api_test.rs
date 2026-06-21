@@ -232,7 +232,7 @@ fn replay_result_from_snapshot_continues_trade_and_market_sequences_across_recov
         .expect("tail buy should trade against the restored book");
 
     assert_eq!(tail_trade.trade_id, TradeId(2));
-    assert_eq!(tail_trade.market_seq, MarketSeq(4));
+    assert_eq!(tail_trade.market_seq, MarketSeq(7));
 }
 
 #[test]

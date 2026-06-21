@@ -65,9 +65,20 @@ pub struct OrderCancelledEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PriceLevelChangedEvent {
+    pub market_seq: MarketSeq,
+    pub command_id: CommandId,
+    pub journal_seq: JournalSeq,
+    pub side: Side,
+    pub price: Price,
+    pub quantity_after: Quantity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MarketEvent {
     OrderAdded(OrderAddedEvent),
     OrderCancelled(OrderCancelledEvent),
+    PriceLevelChanged(PriceLevelChangedEvent),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

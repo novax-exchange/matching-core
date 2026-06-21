@@ -10,7 +10,7 @@
 use crate::{
     matching_engine::{MatchResult, Trade},
     order::Order,
-    types::{Checksum, OrderId, Price, Side, Symbol},
+    types::{Checksum, OrderId, Price, Quantity, Side, Symbol},
 };
 use slotmap::{new_key_type, SlotMap};
 use std::collections::{BTreeMap, HashMap};
@@ -111,6 +111,18 @@ impl OrderBook {
         };
 
         levels.get(&price)?.front()
+    }
+
+    pub fn level_quantity(&self, side: Side, price: Price) -> Quantity {
+        let levels = match side {
+            Side::Buy => &self.bids,
+            Side::Sell => &self.asks,
+        };
+
+        levels
+            .get(&price)
+            .map(PriceLevel::total_quantity)
+            .unwrap_or(Quantity(0))
     }
 
     pub fn contains_order(&self, order_id: OrderId) -> bool {
@@ -424,6 +436,15 @@ impl PriceLevel {
         }
 
         orders
+    }
+
+    pub fn total_quantity(&self) -> Quantity {
+        Quantity(
+            self.orders()
+                .into_iter()
+                .map(|order| order.quantity.0)
+                .sum(),
+        )
     }
 }
 

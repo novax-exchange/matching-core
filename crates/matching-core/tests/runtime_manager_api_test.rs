@@ -3,7 +3,9 @@ use matching_core::journal_adapter::{
     JournalAdapterError, JournalInputEntry, JournalOutputAppender, JournalOutputCommitMetadata,
     JournalOutputEntry,
 };
-use matching_core::matching_engine::{EngineEvent, MarketEvent, OrderAck, OrderAddedEvent};
+use matching_core::matching_engine::{
+    EngineEvent, MarketEvent, OrderAck, OrderAddedEvent, PriceLevelChangedEvent,
+};
 use matching_core::order::{Command, Order};
 use matching_core::output_commit_boundary::{
     build_output_batch_identity, OutputBatchIdentity, OutputBatchQueryStatus,
@@ -282,6 +284,14 @@ fn output_request(seq: u64, order_id: u64) -> OutputCommitRequest {
                 side: Side::Buy,
                 price: Price(100),
                 quantity: Quantity(1),
+            })),
+            EngineEvent::Market(MarketEvent::PriceLevelChanged(PriceLevelChangedEvent {
+                market_seq: MarketSeq(seq + 1),
+                command_id: CommandId(seq),
+                journal_seq: JournalSeq(seq),
+                side: Side::Buy,
+                price: Price(100),
+                quantity_after: Quantity(1),
             })),
         ],
     }

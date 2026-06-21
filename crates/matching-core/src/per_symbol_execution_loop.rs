@@ -163,7 +163,9 @@ mod tests {
     use crate::journal_adapter::{
         JournalAdapterError, JournalInputEntry, JournalOutputAppender, JournalOutputEntry,
     };
-    use crate::matching_engine::{EngineEvent, MarketEvent, OrderAck, OrderAddedEvent};
+    use crate::matching_engine::{
+        EngineEvent, MarketEvent, OrderAck, OrderAddedEvent, PriceLevelChangedEvent,
+    };
     use crate::order::{Command, Order};
     use crate::output_commit_boundary::OutputBatchCommitResult;
     use crate::output_commit_boundary::{PendingOutputBuffer, PendingOutputBufferError};
@@ -255,6 +257,14 @@ mod tests {
                     side: Side::Buy,
                     price: Price(100),
                     quantity: Quantity(5),
+                })),
+                EngineEvent::Market(MarketEvent::PriceLevelChanged(PriceLevelChangedEvent {
+                    market_seq: MarketSeq(2),
+                    command_id: CommandId(10),
+                    journal_seq: JournalSeq(1),
+                    side: Side::Buy,
+                    price: Price(100),
+                    quantity_after: Quantity(5),
                 })),
             ]
         );
