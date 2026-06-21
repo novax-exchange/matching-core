@@ -438,6 +438,39 @@ fn runtime_host_close_input_rejects_new_single_and_batch_inputs() {
 }
 
 #[test]
+fn runtime_host_shutdown_closes_input_without_draining_pending_work() {
+    let btc = symbol("BTC-USDT");
+    let mut host = RuntimeHost::new_for_symbols_with_config(
+        vec![btc.clone()],
+        MatchingRuntimeConfig::default(),
+    )
+    .expect("manual runtime host should be supported");
+
+    assert_eq!(host.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+
+    let report = host
+        .shutdown()
+        .expect("manual runtime host should shut down");
+
+    assert_eq!(report.input_state, RuntimeHostInputState::Closed);
+    assert_eq!(report.driver_report.shard_ids, vec![RuntimeShardId(0)]);
+    assert_eq!(host.input_state(), RuntimeHostInputState::Closed);
+    assert_eq!(
+        host.enqueue_input(command_entry(2, btc.clone())),
+        Err(RuntimeHostError::InputClosed)
+    );
+
+    let status = host
+        .status()
+        .expect("manual runtime host status should remain available");
+    let symbol_status = status
+        .shard_status(RuntimeShardId(0))
+        .and_then(|shard_status| shard_status.symbol_status(&btc))
+        .expect("BTC-USDT status should be available");
+    assert_eq!(symbol_status.pending_input_len, 1);
+}
+
+#[test]
 fn runtime_host_drain_configured_closes_input_and_drains_existing_work() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();

@@ -42,12 +42,18 @@ pub trait RuntimeHostDriver {
         limits: RuntimeLoopRunOnceLimits,
         limit: RuntimeLoopRunLimit,
     ) -> Result<RuntimeHostRunReport, RuntimeHostDriverError>;
+    fn shutdown(&mut self) -> Result<RuntimeHostDriverShutdownReport, RuntimeHostDriverError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeHostDriverError {
     RuntimeLoop(RuntimeLoopError),
     DriverUnavailable(RuntimeShardId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeHostDriverShutdownReport {
+    pub shard_ids: Vec<RuntimeShardId>,
 }
 
 impl From<RuntimeLoopError> for RuntimeHostDriverError {
@@ -273,6 +279,12 @@ impl RuntimeHostDriver for ManualRuntimeHostDriver {
         }
 
         Ok(RuntimeHostRunReport { shard_reports })
+    }
+
+    fn shutdown(&mut self) -> Result<RuntimeHostDriverShutdownReport, RuntimeHostDriverError> {
+        Ok(RuntimeHostDriverShutdownReport {
+            shard_ids: self.shard_ids(),
+        })
     }
 }
 

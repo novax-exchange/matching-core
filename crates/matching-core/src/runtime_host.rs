@@ -3,6 +3,7 @@ use crate::output_commit_boundary::OutputJournalClient;
 use crate::runtime_config::{MatchingRuntimeConfig, RuntimeHostMode, RuntimeShardId};
 use crate::runtime_host_driver::{
     ManualRuntimeHostDriver, RuntimeHostDriver, RuntimeHostDriverError,
+    RuntimeHostDriverShutdownReport,
 };
 use crate::runtime_loop::{
     RuntimeLoopError, RuntimeLoopRunLimit, RuntimeLoopRunOnceLimits, RuntimeLoopRunOnceReport,
@@ -83,6 +84,12 @@ pub enum RuntimeHostDrainStopReason {
 pub struct RuntimeHostDrainReport {
     pub run_report: RuntimeHostRunUntilIdleReport,
     pub stop_reason: RuntimeHostDrainStopReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeHostShutdownReport {
+    pub input_state: RuntimeHostInputState,
+    pub driver_report: RuntimeHostDriverShutdownReport,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -284,6 +291,20 @@ impl RuntimeHost {
         Ok(RuntimeHostDrainReport {
             run_report,
             stop_reason,
+        })
+    }
+
+    pub fn shutdown(&mut self) -> Result<RuntimeHostShutdownReport, RuntimeHostError> {
+        self.close_input();
+
+        let driver_report = self
+            .driver
+            .shutdown()
+            .map_err(RuntimeHostError::from_driver_error)?;
+
+        Ok(RuntimeHostShutdownReport {
+            input_state: self.input_state,
+            driver_report,
         })
     }
 
