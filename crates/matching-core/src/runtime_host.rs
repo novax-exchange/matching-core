@@ -35,7 +35,7 @@ impl RuntimeHost {
         config: MatchingRuntimeConfig,
     ) -> Result<Self, RuntimeHostError> {
         match config.host.mode {
-            RuntimeHostMode::Manual | RuntimeHostMode::Inline => {
+            RuntimeHostMode::Manual => {
                 let mode = config.host.mode;
                 let runners = RuntimeShardRunner::from_symbols_with_config(symbols, config)
                     .map_err(RuntimeHostError::Topology)?;

@@ -87,19 +87,19 @@ fn runtime_host_builds_manual_host_from_public_api() {
 }
 
 #[test]
-fn runtime_host_builds_inline_host_from_public_api() {
+fn runtime_host_rejects_inline_until_inline_scheduling_exists_from_public_api() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
     config.host = RuntimeHostConfig {
         mode: RuntimeHostMode::Inline,
     };
 
-    let host = RuntimeHost::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("inline runtime host should be supported");
+    let result = RuntimeHost::new_for_symbols_with_config(vec![btc], config);
 
-    assert_eq!(host.mode(), RuntimeHostMode::Inline);
-    assert_eq!(host.shard_count(), 1);
-    assert_eq!(host.symbols_for_shard(RuntimeShardId(0)), Some(&[btc][..]));
+    assert!(matches!(
+        result,
+        Err(RuntimeHostError::UnsupportedMode(RuntimeHostMode::Inline))
+    ));
 }
 
 #[test]
