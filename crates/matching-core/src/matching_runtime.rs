@@ -206,6 +206,7 @@ impl MatchingRuntime {
     }
 
     pub fn enqueue_input(&mut self, entry: JournalInputEntry) -> Result<(), MatchingRuntimeError> {
+        self.ensure_runtime_running()?;
         self.ensure_input_open()?;
 
         self.driver
@@ -217,6 +218,7 @@ impl MatchingRuntime {
         &mut self,
         entries: Vec<JournalInputEntry>,
     ) -> Result<usize, MatchingRuntimeError> {
+        self.ensure_runtime_running()?;
         self.ensure_input_open()?;
 
         self.driver
@@ -228,6 +230,7 @@ impl MatchingRuntime {
         &self,
         entries: &[JournalInputEntry],
     ) -> Result<(), MatchingRuntimeError> {
+        self.ensure_runtime_running()?;
         self.ensure_input_open()?;
         self.driver
             .can_write_inputs(entries)

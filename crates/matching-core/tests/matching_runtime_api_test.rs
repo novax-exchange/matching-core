@@ -472,7 +472,15 @@ fn matching_runtime_shutdown_closes_input_without_draining_pending_work() {
     assert_eq!(runtime.input_state(), MatchingRuntimeInputState::Closed);
     assert_eq!(
         runtime.enqueue_input(command_entry(2, btc.clone())),
-        Err(MatchingRuntimeError::InputClosed)
+        Err(MatchingRuntimeError::RuntimeShutdown)
+    );
+    assert_eq!(
+        runtime.can_enqueue_inputs(&[command_entry(2, btc.clone())]),
+        Err(MatchingRuntimeError::RuntimeShutdown)
+    );
+    assert_eq!(
+        runtime.enqueue_inputs(vec![command_entry(2, btc.clone())]),
+        Err(MatchingRuntimeError::RuntimeShutdown)
     );
 
     let status = runtime
