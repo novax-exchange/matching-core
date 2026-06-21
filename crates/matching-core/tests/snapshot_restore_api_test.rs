@@ -5,8 +5,13 @@ use matching_core::replay_runner::ReplayRunner;
 use matching_core::snapshot_restore::{
     OrderBookSnapshot, SnapshotSerializationError, SymbolRuntimeSnapshot,
 };
-use matching_core::snapshot_store::{InMemorySnapshotStore, SnapshotStore, SnapshotStoreError};
+use matching_core::snapshot_store::{
+    FileSnapshotStore, InMemorySnapshotStore, SnapshotStore, SnapshotStoreError,
+};
 use matching_core::types::*;
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
 fn snapshot_can_be_created_and_restored_from_public_api() {
@@ -174,6 +179,74 @@ fn in_memory_snapshot_store_retains_latest_symbol_snapshots_within_limit_from_pu
         vec![JournalSeq(11), JournalSeq(12)]
     );
     assert_eq!(loaded.order_book_snapshot.last_input_seq, JournalSeq(12));
+}
+
+fn temporary_snapshot_dir(test_name: &str) -> PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after unix epoch")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("matching-core-{test_name}-{unique}"));
+
+    fs::create_dir_all(&path).expect("temporary snapshot dir should be created");
+    path
+}
+
+#[test]
+fn file_snapshot_store_saves_and_loads_latest_symbol_snapshot_from_public_api() {
+    let dir = temporary_snapshot_dir("file-store-round-trip");
+    let snapshot = symbol_runtime_snapshot();
+
+    let mut writer = FileSnapshotStore::new(dir.clone());
+    writer
+        .save_symbol_snapshot(&snapshot)
+        .expect("snapshot should be written to disk");
+
+    let reader = FileSnapshotStore::new(dir.clone());
+    let loaded = reader
+        .load_latest_symbol_snapshot(&snapshot.order_book_snapshot.symbol)
+        .expect("stored snapshot should decode")
+        .expect("stored snapshot should exist");
+
+    assert_eq!(loaded, snapshot);
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
+}
+
+#[test]
+fn file_snapshot_store_retains_latest_symbol_snapshots_within_limit_from_public_api() {
+    let dir = temporary_snapshot_dir("file-store-retention");
+    let symbol = Symbol("BTC-USDT".to_string());
+    let mut store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 2);
+
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(10))
+        .expect("first snapshot should be written");
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(11))
+        .expect("second snapshot should be written");
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(12))
+        .expect("third snapshot should be written");
+
+    let records = store
+        .symbol_snapshot_records(&symbol)
+        .expect("snapshot records should be listed");
+    let loaded = store
+        .load_latest_symbol_snapshot(&symbol)
+        .expect("latest snapshot should decode")
+        .expect("latest snapshot should exist");
+
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.safe_point)
+            .collect::<Vec<_>>(),
+        vec![JournalSeq(11), JournalSeq(12)]
+    );
+    assert_eq!(loaded.order_book_snapshot.last_input_seq, JournalSeq(12));
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
 }
 
 struct TestJournalInputReader {

@@ -12,9 +12,12 @@ use matching_core::replay_runner::{ReplayResult, ReplayRunner};
 use matching_core::runtime_loop::{RuntimeLoop, RuntimeLoopError, RuntimeLoopTickLimits};
 use matching_core::runtime_manager::RuntimeManager;
 use matching_core::snapshot_restore::{OrderBookSnapshot, SymbolRuntimeSnapshot};
-use matching_core::snapshot_store::{InMemorySnapshotStore, SnapshotStore};
+use matching_core::snapshot_store::{FileSnapshotStore, InMemorySnapshotStore, SnapshotStore};
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 struct RejectOneSymbolJournalOutputAppender {
     rejected_symbol: Symbol,
@@ -213,6 +216,17 @@ fn cancel_entry(seq: u64, command_id: u64, order_id: u64, symbol: Symbol) -> Jou
             symbol,
         },
     }
+}
+
+fn temporary_snapshot_dir(test_name: &str) -> PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after unix epoch")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("matching-core-{test_name}-{unique}"));
+
+    fs::create_dir_all(&path).expect("temporary snapshot dir should be created");
+    path
 }
 
 #[derive(Clone)]
@@ -678,6 +692,66 @@ fn runtime_loop_can_be_restored_from_symbol_snapshot_store() {
         runtime_loop.last_input_seq(&btc),
         Some(Some(JournalSeq(11)))
     );
+}
+
+#[test]
+fn runtime_loop_can_restore_from_file_snapshot_store_after_process_restart() {
+    let btc = Symbol("BTC-USDT".to_string());
+    let dir = temporary_snapshot_dir("runtime-loop-file-snapshot");
+    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone()], 4, 8);
+    let mut journal_client = OutputJournalClient::new();
+    let mut output = AcceptingJournalOutputAppender::new();
+    let mut writer_store = FileSnapshotStore::new(dir.clone());
+
+    assert_eq!(
+        runtime_loop.enqueue_input(limit_entry(1, 10, 100, btc.clone(), Side::Sell, 100, 1,)),
+        Ok(())
+    );
+    runtime_loop
+        .run_tick(
+            &mut journal_client,
+            &mut output,
+            RuntimeLoopTickLimits {
+                max_input_entries_per_symbol: 1,
+                max_output_requests_per_symbol: 10,
+            },
+        )
+        .expect("runtime loop should advance a safe point");
+    runtime_loop
+        .save_symbol_snapshot(&btc, &mut writer_store)
+        .expect("file snapshot store should accept runtime snapshot")
+        .expect("safe point should produce a snapshot");
+
+    let reader_store = FileSnapshotStore::new(dir.clone());
+    let loaded_snapshot = reader_store
+        .load_latest_symbol_snapshot(&btc)
+        .expect("file snapshot should decode after restart")
+        .expect("file snapshot should exist after restart");
+    let mut restored_loop = RuntimeLoop::new_from_symbol_snapshots(vec![loaded_snapshot], 4, 8);
+    let mut restored_journal_client = OutputJournalClient::new();
+    let mut restored_output = AcceptingJournalOutputAppender::new();
+
+    assert_eq!(
+        restored_loop.enqueue_input(limit_entry(2, 11, 101, btc.clone(), Side::Buy, 100, 1,)),
+        Ok(())
+    );
+    restored_loop
+        .run_tick(
+            &mut restored_journal_client,
+            &mut restored_output,
+            RuntimeLoopTickLimits {
+                max_input_entries_per_symbol: 1,
+                max_output_requests_per_symbol: 10,
+            },
+        )
+        .expect("restored runtime loop should process the replay tail");
+
+    assert_eq!(
+        restored_loop.last_input_seq(&btc),
+        Some(Some(JournalSeq(2)))
+    );
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
 }
 
 #[test]
