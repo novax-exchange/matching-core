@@ -2,7 +2,7 @@ use crate::journal_adapter::{JournalInputEntry, JournalOutputAppender};
 use crate::output_commit_boundary::OutputJournalClient;
 use crate::runtime_config::{MatchingRuntimeConfig, RuntimeHostMode, RuntimeShardId};
 use crate::runtime_loop::{
-    RuntimeLoopError, RuntimeLoopRunBudget, RuntimeLoopRunReport, RuntimeLoopTickLimits,
+    RuntimeLoopError, RuntimeLoopRunLimit, RuntimeLoopRunReport, RuntimeLoopTickLimits,
     RuntimeLoopTickReport,
 };
 use crate::runtime_shard_runner::RuntimeShardRunner;
@@ -118,18 +118,18 @@ impl RuntimeHost {
         Ok(RuntimeHostTickReport { shard_reports })
     }
 
-    pub fn run_budgeted_all(
+    pub fn run_limited_all(
         &mut self,
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
         limits: RuntimeLoopTickLimits,
-        budget: RuntimeLoopRunBudget,
+        limit: RuntimeLoopRunLimit,
     ) -> Result<RuntimeHostRunReport, RuntimeHostError> {
         let mut shard_reports = Vec::new();
 
         for runner in &mut self.runners {
             let run_report = runner
-                .run_budgeted(journal_client, output, limits, budget)
+                .run_limited(journal_client, output, limits, limit)
                 .map_err(RuntimeHostError::RuntimeLoop)?;
             shard_reports.push(RuntimeHostShardRunReport {
                 shard_id: runner.shard_id(),

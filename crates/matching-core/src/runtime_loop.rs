@@ -47,7 +47,7 @@ pub struct RuntimeLoopTickReport {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuntimeLoopRunBudget {
+pub struct RuntimeLoopRunLimit {
     pub max_ticks: usize,
 }
 
@@ -55,7 +55,7 @@ pub struct RuntimeLoopRunBudget {
 pub enum RuntimeLoopRunStopReason {
     Idle,
     Blocked,
-    TickBudgetExhausted,
+    RunLimitReached,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -231,12 +231,12 @@ impl RuntimeLoop {
         Ok(RuntimeLoopTickReport { symbol_reports })
     }
 
-    pub fn run_budgeted(
+    pub fn run_limited(
         &mut self,
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
         limits: RuntimeLoopTickLimits,
-        budget: RuntimeLoopRunBudget,
+        limit: RuntimeLoopRunLimit,
     ) -> Result<RuntimeLoopRunReport, RuntimeLoopError> {
         let initial_state = self.current_work_state()?;
 
@@ -251,10 +251,10 @@ impl RuntimeLoop {
             });
         }
 
-        if budget.max_ticks == 0 {
+        if limit.max_ticks == 0 {
             return Ok(RuntimeLoopRunReport {
                 tick_reports: Vec::new(),
-                stop_reason: RuntimeLoopRunStopReason::TickBudgetExhausted,
+                stop_reason: RuntimeLoopRunStopReason::RunLimitReached,
                 made_progress: false,
                 has_work_remaining: initial_state.has_work_remaining(),
                 has_blocked_symbols: initial_state.has_blocked_symbols(),
@@ -265,7 +265,7 @@ impl RuntimeLoop {
         let mut tick_reports = Vec::new();
         let mut made_progress = false;
 
-        for _ in 0..budget.max_ticks {
+        for _ in 0..limit.max_ticks {
             let tick_report = self.run_tick(journal_client, output, limits)?;
             let tick_made_progress = tick_report.made_progress();
 
@@ -301,7 +301,7 @@ impl RuntimeLoop {
 
         Ok(RuntimeLoopRunReport {
             tick_reports,
-            stop_reason: RuntimeLoopRunStopReason::TickBudgetExhausted,
+            stop_reason: RuntimeLoopRunStopReason::RunLimitReached,
             made_progress,
             has_work_remaining: final_state.has_work_remaining(),
             has_blocked_symbols: final_state.has_blocked_symbols(),

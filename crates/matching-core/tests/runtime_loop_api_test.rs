@@ -11,7 +11,7 @@ use matching_core::output_commit_boundary::{
 use matching_core::replay_runner::{ReplayResult, ReplayRunner};
 use matching_core::runtime_config::MatchingRuntimeConfig;
 use matching_core::runtime_loop::{
-    RuntimeLoop, RuntimeLoopError, RuntimeLoopRunBudget, RuntimeLoopRunStopReason,
+    RuntimeLoop, RuntimeLoopError, RuntimeLoopRunLimit, RuntimeLoopRunStopReason,
     RuntimeLoopTickLimits,
 };
 use matching_core::runtime_manager::RuntimeManager;
@@ -1660,7 +1660,7 @@ fn runtime_loop_tick_reports_symbols_in_deterministic_order() {
 }
 
 #[test]
-fn runtime_loop_run_budgeted_drains_work_until_idle() {
+fn runtime_loop_run_limited_drains_work_until_idle() {
     let btc = Symbol("BTC-USDT".to_string());
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
@@ -1675,16 +1675,16 @@ fn runtime_loop_run_budgeted_drains_work_until_idle() {
     );
 
     let report = runtime_loop
-        .run_budgeted(
+        .run_limited(
             &mut journal_client,
             &mut output,
             RuntimeLoopTickLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
-            RuntimeLoopRunBudget { max_ticks: 4 },
+            RuntimeLoopRunLimit { max_ticks: 4 },
         )
-        .expect("budgeted run should drain queued work");
+        .expect("limited run should drain queued work");
 
     assert_eq!(report.stop_reason, RuntimeLoopRunStopReason::Idle);
     assert_eq!(report.tick_count(), 2);
@@ -1698,7 +1698,7 @@ fn runtime_loop_run_budgeted_drains_work_until_idle() {
 }
 
 #[test]
-fn runtime_loop_run_budgeted_reports_tick_budget_exhaustion_with_remaining_work() {
+fn runtime_loop_run_limited_reports_run_limit_exhaustion_with_remaining_work() {
     let btc = Symbol("BTC-USDT".to_string());
     let mut journal_client = OutputJournalClient::new();
     let mut output = AcceptingJournalOutputAppender::new();
@@ -1713,20 +1713,20 @@ fn runtime_loop_run_budgeted_reports_tick_budget_exhaustion_with_remaining_work(
     );
 
     let report = runtime_loop
-        .run_budgeted(
+        .run_limited(
             &mut journal_client,
             &mut output,
             RuntimeLoopTickLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
-            RuntimeLoopRunBudget { max_ticks: 1 },
+            RuntimeLoopRunLimit { max_ticks: 1 },
         )
-        .expect("budgeted run should stop when tick budget is consumed");
+        .expect("limited run should stop when run limit is consumed");
 
     assert_eq!(
         report.stop_reason,
-        RuntimeLoopRunStopReason::TickBudgetExhausted
+        RuntimeLoopRunStopReason::RunLimitReached
     );
     assert_eq!(report.tick_count(), 1);
     assert!(report.made_progress);
@@ -1741,7 +1741,7 @@ fn runtime_loop_run_budgeted_reports_tick_budget_exhaustion_with_remaining_work(
 }
 
 #[test]
-fn runtime_loop_run_budgeted_stops_after_unblocked_work_drains_when_symbol_is_blocked() {
+fn runtime_loop_run_limited_stops_after_unblocked_work_drains_when_symbol_is_blocked() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
     let mut journal_client = OutputJournalClient::new();
@@ -1758,16 +1758,16 @@ fn runtime_loop_run_budgeted_stops_after_unblocked_work_drains_when_symbol_is_bl
     );
 
     let report = runtime_loop
-        .run_budgeted(
+        .run_limited(
             &mut journal_client,
             &mut output,
             RuntimeLoopTickLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
-            RuntimeLoopRunBudget { max_ticks: 4 },
+            RuntimeLoopRunLimit { max_ticks: 4 },
         )
-        .expect("budgeted run should stop once only blocked work remains");
+        .expect("limited run should stop once only blocked work remains");
 
     assert_eq!(report.stop_reason, RuntimeLoopRunStopReason::Blocked);
     assert_eq!(report.tick_count(), 3);
@@ -1800,7 +1800,7 @@ fn runtime_loop_run_budgeted_stops_after_unblocked_work_drains_when_symbol_is_bl
 }
 
 #[test]
-fn runtime_loop_run_budgeted_reports_initial_work_when_tick_budget_is_zero() {
+fn runtime_loop_run_limited_reports_initial_work_when_run_limit_is_zero() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
     let mut journal_client = OutputJournalClient::new();
@@ -1816,20 +1816,20 @@ fn runtime_loop_run_budgeted_reports_initial_work_when_tick_budget_is_zero() {
     );
 
     let report = runtime_loop
-        .run_budgeted(
+        .run_limited(
             &mut journal_client,
             &mut output,
             RuntimeLoopTickLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 10,
             },
-            RuntimeLoopRunBudget { max_ticks: 0 },
+            RuntimeLoopRunLimit { max_ticks: 0 },
         )
-        .expect("zero budget should report initial work without running a tick");
+        .expect("zero limit should report initial work without running a tick");
 
     assert_eq!(
         report.stop_reason,
-        RuntimeLoopRunStopReason::TickBudgetExhausted
+        RuntimeLoopRunStopReason::RunLimitReached
     );
     assert_eq!(report.tick_count(), 0);
     assert!(!report.made_progress);

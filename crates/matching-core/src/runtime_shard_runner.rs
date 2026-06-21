@@ -2,7 +2,7 @@ use crate::journal_adapter::{JournalInputEntry, JournalOutputAppender};
 use crate::output_commit_boundary::{OutputCommitBlockDecision, OutputJournalClient};
 use crate::runtime_config::{MatchingRuntimeConfig, RuntimeShardId, RuntimeTopologyConfig};
 use crate::runtime_loop::{
-    RuntimeLoop, RuntimeLoopError, RuntimeLoopInputStatus, RuntimeLoopRunBudget,
+    RuntimeLoop, RuntimeLoopError, RuntimeLoopInputStatus, RuntimeLoopRunLimit,
     RuntimeLoopRunReport, RuntimeLoopTickLimits, RuntimeLoopTickReport,
 };
 use crate::runtime_manager::{RuntimeManagerError, SymbolRuntimeStatus};
@@ -56,15 +56,15 @@ impl RuntimeShardRunner {
         self.runtime_loop.run_tick(journal_client, output, limits)
     }
 
-    pub fn run_budgeted(
+    pub fn run_limited(
         &mut self,
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
         limits: RuntimeLoopTickLimits,
-        budget: RuntimeLoopRunBudget,
+        limit: RuntimeLoopRunLimit,
     ) -> Result<RuntimeLoopRunReport, RuntimeLoopError> {
         self.runtime_loop
-            .run_budgeted(journal_client, output, limits, budget)
+            .run_limited(journal_client, output, limits, limit)
     }
 
     pub fn enqueue_input(&mut self, entry: JournalInputEntry) -> Result<(), RuntimeLoopError> {

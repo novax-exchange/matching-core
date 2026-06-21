@@ -9,7 +9,7 @@ use matching_core::runtime_config::{
 };
 use matching_core::runtime_host::{RuntimeHost, RuntimeHostError};
 use matching_core::runtime_loop::{
-    RuntimeLoopRunBudget, RuntimeLoopRunStopReason, RuntimeLoopTickLimits,
+    RuntimeLoopRunLimit, RuntimeLoopRunStopReason, RuntimeLoopTickLimits,
 };
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 
@@ -160,7 +160,7 @@ fn runtime_host_routes_input_to_owning_shard_and_runs_all_ticks() {
 }
 
 #[test]
-fn runtime_host_run_budgeted_all_drives_all_shards_until_idle() {
+fn runtime_host_run_limited_all_drives_all_shards_until_idle() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -177,16 +177,16 @@ fn runtime_host_run_budgeted_all_drives_all_shards_until_idle() {
     assert_eq!(host.enqueue_input(command_entry(2, eth.clone())), Ok(()));
 
     let report = host
-        .run_budgeted_all(
+        .run_limited_all(
             &mut journal_client,
             &mut output,
             RuntimeLoopTickLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 1,
             },
-            RuntimeLoopRunBudget { max_ticks: 2 },
+            RuntimeLoopRunLimit { max_ticks: 2 },
         )
-        .expect("manual runtime host should run all shard budgets");
+        .expect("manual runtime host should run all shard run limits");
 
     assert_eq!(report.shard_reports.len(), 2);
     assert!(report.is_idle());
@@ -205,7 +205,7 @@ fn runtime_host_run_budgeted_all_drives_all_shards_until_idle() {
 }
 
 #[test]
-fn runtime_host_run_budgeted_all_reports_remaining_work_when_budget_is_exhausted() {
+fn runtime_host_run_limited_all_reports_remaining_work_when_limit_is_reached() {
     let btc = symbol("BTC-USDT");
     let mut host = RuntimeHost::new_for_symbols_with_config(
         vec![btc.clone()],
@@ -219,16 +219,16 @@ fn runtime_host_run_budgeted_all_reports_remaining_work_when_budget_is_exhausted
     assert_eq!(host.enqueue_input(command_entry(2, btc.clone())), Ok(()));
 
     let report = host
-        .run_budgeted_all(
+        .run_limited_all(
             &mut journal_client,
             &mut output,
             RuntimeLoopTickLimits {
                 max_input_entries_per_symbol: 1,
                 max_output_requests_per_symbol: 1,
             },
-            RuntimeLoopRunBudget { max_ticks: 1 },
+            RuntimeLoopRunLimit { max_ticks: 1 },
         )
-        .expect("manual runtime host should run all shard budgets");
+        .expect("manual runtime host should run all shard run limits");
 
     assert!(!report.is_idle());
     assert!(report.has_work_remaining());
@@ -236,6 +236,6 @@ fn runtime_host_run_budgeted_all_reports_remaining_work_when_budget_is_exhausted
         report
             .shard_report(RuntimeShardId(0))
             .map(|item| item.run_report.stop_reason),
-        Some(RuntimeLoopRunStopReason::TickBudgetExhausted)
+        Some(RuntimeLoopRunStopReason::RunLimitReached)
     );
 }
