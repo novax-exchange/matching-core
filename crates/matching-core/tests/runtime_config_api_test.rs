@@ -20,7 +20,7 @@ fn matching_runtime_config_groups_runtime_policy_from_public_api() {
             }]),
         },
         execution: RuntimeExecutionConfig {
-            mode: RuntimeExecutionMode::Manual,
+            mode: RuntimeExecutionMode::Inline,
             max_run_cycles_per_call: 7,
             max_run_calls_per_until_idle: 9,
         },
@@ -50,7 +50,7 @@ fn matching_runtime_config_groups_runtime_policy_from_public_api() {
             shard_id: RuntimeShardId(1),
         }])
     );
-    assert_eq!(config.execution.mode, RuntimeExecutionMode::Manual);
+    assert_eq!(config.execution.mode, RuntimeExecutionMode::Inline);
     assert_eq!(config.execution.max_run_cycles_per_call, 7);
     assert_eq!(config.execution.max_run_calls_per_until_idle, 9);
     assert_eq!(config.output_commit.pending_output_capacity, 512);
@@ -72,7 +72,7 @@ fn matching_runtime_config_defaults_are_available_from_public_api() {
         config.topology.assignment_policy,
         SymbolAssignmentPolicy::DeclarationOrder
     );
-    assert_eq!(config.execution.mode, RuntimeExecutionMode::Manual);
+    assert_eq!(config.execution.mode, RuntimeExecutionMode::Inline);
     assert_eq!(config.execution.max_run_cycles_per_call, 1024);
     assert_eq!(config.execution.max_run_calls_per_until_idle, 1024);
     assert_eq!(config.output_commit.pending_output_capacity, 1024);

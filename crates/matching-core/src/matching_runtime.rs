@@ -1,8 +1,4 @@
 use crate::journal_adapter::{JournalInputEntry, JournalOutputAppender};
-use crate::matching_runtime_driver::{
-    ManualMatchingRuntimeDriver, MatchingRuntimeDriver, MatchingRuntimeDriverError,
-    MatchingRuntimeDriverShutdownReport,
-};
 use crate::output_commit_boundary::OutputJournalClient;
 use crate::runtime_config::{MatchingRuntimeConfig, RuntimeExecutionMode, RuntimeShardId};
 use crate::runtime_topology::RuntimeTopologyError;
@@ -10,11 +6,14 @@ use crate::shard_runtime::{
     ShardRuntimeError, ShardRuntimeRunLimit, ShardRuntimeRunOnceLimits, ShardRuntimeRunOnceReport,
     ShardRuntimeRunReport, ShardRuntimeRunStopReason,
 };
+use crate::shard_runtime_set::{
+    InlineShardRuntimeSet, ShardRuntimeSet, ShardRuntimeSetError, ShardRuntimeSetShutdownReport,
+};
 use crate::types::Symbol;
 
 pub struct MatchingRuntime {
     mode: RuntimeExecutionMode,
-    driver: Box<dyn MatchingRuntimeDriver>,
+    runtime_set: Box<dyn ShardRuntimeSet>,
     run_once_limits: ShardRuntimeRunOnceLimits,
     run_limit: ShardRuntimeRunLimit,
     run_until_idle_limit: MatchingRuntimeRunUntilIdleLimit,
@@ -27,8 +26,8 @@ pub enum MatchingRuntimeError {
     InputClosed,
     RuntimeShutdown,
     UnsupportedMode(RuntimeExecutionMode),
-    RuntimeDriverRequired(RuntimeExecutionMode),
-    RuntimeDriver(MatchingRuntimeDriverError),
+    RuntimeModeUnavailable(RuntimeExecutionMode),
+    ShardRuntimeSet(ShardRuntimeSetError),
     Topology(RuntimeTopologyError),
     ShardRuntime(ShardRuntimeError),
 }
@@ -106,7 +105,7 @@ pub struct MatchingRuntimeDrainReport {
 pub struct MatchingRuntimeShutdownReport {
     pub input_state: MatchingRuntimeInputState,
     pub lifecycle_state: MatchingRuntimeLifecycleState,
-    pub driver_report: MatchingRuntimeDriverShutdownReport,
+    pub runtime_set_report: ShardRuntimeSetShutdownReport,
     pub final_status: MatchingRuntimeStatus,
 }
 
@@ -153,17 +152,17 @@ impl MatchingRuntime {
         config: MatchingRuntimeConfig,
     ) -> Result<Self, MatchingRuntimeError> {
         match config.execution.mode {
-            RuntimeExecutionMode::Manual => {
+            RuntimeExecutionMode::Inline => {
                 let mode = config.execution.mode;
                 let run_once_limits = ShardRuntimeRunOnceLimits::from_config(&config);
                 let run_limit = ShardRuntimeRunLimit::from_config(&config);
                 let run_until_idle_limit = MatchingRuntimeRunUntilIdleLimit::from_config(&config);
-                let driver = ManualMatchingRuntimeDriver::from_symbols_with_config(symbols, config)
+                let runtime_set = InlineShardRuntimeSet::from_symbols_with_config(symbols, config)
                     .map_err(MatchingRuntimeError::Topology)?;
 
                 Ok(Self {
                     mode,
-                    driver: Box::new(driver),
+                    runtime_set: Box::new(runtime_set),
                     run_once_limits,
                     run_limit,
                     run_until_idle_limit,
@@ -172,7 +171,7 @@ impl MatchingRuntime {
                 })
             }
             RuntimeExecutionMode::ThreadPerShard | RuntimeExecutionMode::AsyncTaskPerShard => Err(
-                MatchingRuntimeError::RuntimeDriverRequired(config.execution.mode),
+                MatchingRuntimeError::RuntimeModeUnavailable(config.execution.mode),
             ),
         }
     }
@@ -182,15 +181,15 @@ impl MatchingRuntime {
     }
 
     pub fn shard_count(&self) -> usize {
-        self.driver.shard_count()
+        self.runtime_set.shard_count()
     }
 
     pub fn shard_ids(&self) -> Vec<RuntimeShardId> {
-        self.driver.shard_ids()
+        self.runtime_set.shard_ids()
     }
 
     pub fn symbols_for_shard(&self, shard_id: RuntimeShardId) -> Option<&[Symbol]> {
-        self.driver.symbols_for_shard(shard_id)
+        self.runtime_set.symbols_for_shard(shard_id)
     }
 
     pub fn input_state(&self) -> MatchingRuntimeInputState {
@@ -209,9 +208,9 @@ impl MatchingRuntime {
         self.ensure_runtime_running()?;
         self.ensure_input_open()?;
 
-        self.driver
+        self.runtime_set
             .write_input(entry)
-            .map_err(MatchingRuntimeError::from_driver_error)
+            .map_err(MatchingRuntimeError::from_runtime_set_error)
     }
 
     pub fn enqueue_inputs(
@@ -221,9 +220,9 @@ impl MatchingRuntime {
         self.ensure_runtime_running()?;
         self.ensure_input_open()?;
 
-        self.driver
+        self.runtime_set
             .write_inputs(entries)
-            .map_err(MatchingRuntimeError::from_driver_error)
+            .map_err(MatchingRuntimeError::from_runtime_set_error)
     }
 
     pub fn can_enqueue_inputs(
@@ -232,16 +231,16 @@ impl MatchingRuntime {
     ) -> Result<(), MatchingRuntimeError> {
         self.ensure_runtime_running()?;
         self.ensure_input_open()?;
-        self.driver
+        self.runtime_set
             .can_write_inputs(entries)
-            .map_err(MatchingRuntimeError::from_driver_error)
+            .map_err(MatchingRuntimeError::from_runtime_set_error)
     }
 
     pub fn status(&self) -> Result<MatchingRuntimeStatus, MatchingRuntimeError> {
         let shard_statuses = self
-            .driver
+            .runtime_set
             .shard_statuses()
-            .map_err(MatchingRuntimeError::from_driver_error)?;
+            .map_err(MatchingRuntimeError::from_runtime_set_error)?;
 
         Ok(MatchingRuntimeStatus {
             input_state: self.input_state,
@@ -274,9 +273,9 @@ impl MatchingRuntime {
     ) -> Result<MatchingRuntimeRunOnceReport, MatchingRuntimeError> {
         self.ensure_runtime_running()?;
 
-        self.driver
+        self.runtime_set
             .run_once_all(journal_client, output, limits)
-            .map_err(MatchingRuntimeError::from_driver_error)
+            .map_err(MatchingRuntimeError::from_runtime_set_error)
     }
 
     pub fn run_limited_all(
@@ -288,9 +287,9 @@ impl MatchingRuntime {
     ) -> Result<MatchingRuntimeRunReport, MatchingRuntimeError> {
         self.ensure_runtime_running()?;
 
-        self.driver
+        self.runtime_set
             .run_limited_all(journal_client, output, limits, limit)
-            .map_err(MatchingRuntimeError::from_driver_error)
+            .map_err(MatchingRuntimeError::from_runtime_set_error)
     }
 
     pub fn run_configured_all(
@@ -338,17 +337,17 @@ impl MatchingRuntime {
         self.ensure_runtime_running()?;
         self.close_input();
 
-        let driver_report = self
-            .driver
+        let runtime_set_report = self
+            .runtime_set
             .shutdown()
-            .map_err(MatchingRuntimeError::from_driver_error)?;
+            .map_err(MatchingRuntimeError::from_runtime_set_error)?;
         self.lifecycle_state = MatchingRuntimeLifecycleState::Shutdown;
         let final_status = self.status()?;
 
         Ok(MatchingRuntimeShutdownReport {
             input_state: self.input_state,
             lifecycle_state: self.lifecycle_state,
-            driver_report,
+            runtime_set_report,
             final_status,
         })
     }
@@ -400,10 +399,10 @@ impl MatchingRuntime {
 }
 
 impl MatchingRuntimeError {
-    fn from_driver_error(error: MatchingRuntimeDriverError) -> Self {
+    fn from_runtime_set_error(error: ShardRuntimeSetError) -> Self {
         match error {
-            MatchingRuntimeDriverError::ShardRuntime(error) => Self::ShardRuntime(error),
-            error => Self::RuntimeDriver(error),
+            ShardRuntimeSetError::ShardRuntime(error) => Self::ShardRuntime(error),
+            error => Self::ShardRuntimeSet(error),
         }
     }
 }

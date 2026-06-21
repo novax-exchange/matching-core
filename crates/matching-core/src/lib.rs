@@ -1,12 +1,8 @@
 pub mod bounded_handoff;
 pub mod confirmed_input_consumer;
-pub mod evidence_boundary;
-pub mod governance_control_boundary;
 pub mod journal_adapter;
 pub mod matching_engine;
 pub mod matching_runtime;
-pub mod matching_runtime_driver;
-pub mod messaging_reliability_boundary;
 pub mod order;
 pub mod order_book;
 pub mod output_commit_boundary;
@@ -15,8 +11,13 @@ pub mod runtime_config;
 pub mod runtime_topology;
 pub mod shard_execution_core;
 pub mod shard_runtime;
+pub mod shard_runtime_set;
 pub mod snapshot_restore;
 pub mod snapshot_store;
 pub mod symbol_routing;
 pub mod symbol_runtime;
 pub mod types;
+
+mod evidence_boundary;
+mod governance_control_boundary;
+mod messaging_reliability_boundary;

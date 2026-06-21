@@ -1,11 +1,11 @@
-use matching_core::matching_runtime_driver::{
-    InputHandoffWriteCommand, InputHandoffWriter, ManualMatchingRuntimeDriver,
-    MatchingRuntimeDriver, MatchingRuntimeDriverError,
-};
 use matching_core::runtime_config::{
     MatchingRuntimeConfig, RuntimeShardId, RuntimeTopologyConfig, SymbolAssignmentPolicy,
 };
 use matching_core::shard_runtime::ShardRuntimeError;
+use matching_core::shard_runtime_set::{
+    InlineShardRuntimeSet, InputHandoffWriteCommand, InputHandoffWriter, ShardRuntimeSet,
+    ShardRuntimeSetError,
+};
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 use matching_core::{
     journal_adapter::JournalInputEntry,
@@ -31,7 +31,7 @@ fn command_entry(seq: u64, symbol: Symbol) -> JournalInputEntry {
 }
 
 #[test]
-fn manual_matching_runtime_driver_builds_shards_from_runtime_topology_from_public_api() {
+fn inline_shard_runtime_set_builds_shards_from_runtime_topology_from_public_api() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let sol = symbol("SOL-USDT");
@@ -41,47 +41,47 @@ fn manual_matching_runtime_driver_builds_shards_from_runtime_topology_from_publi
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
 
-    let driver = ManualMatchingRuntimeDriver::from_symbols_with_config(
+    let runtime_set = InlineShardRuntimeSet::from_symbols_with_config(
         vec![btc.clone(), eth.clone(), sol.clone()],
         config,
     )
-    .expect("manual matching runtime driver topology should resolve");
+    .expect("inline matching runtime runtime_set topology should resolve");
 
-    assert_eq!(driver.shard_count(), 2);
+    assert_eq!(runtime_set.shard_count(), 2);
     assert_eq!(
-        driver.shard_ids(),
+        runtime_set.shard_ids(),
         vec![RuntimeShardId(0), RuntimeShardId(1)]
     );
     assert_eq!(
-        driver.symbols_for_shard(RuntimeShardId(0)),
+        runtime_set.symbols_for_shard(RuntimeShardId(0)),
         Some(&[btc, sol][..])
     );
     assert_eq!(
-        driver.symbols_for_shard(RuntimeShardId(1)),
+        runtime_set.symbols_for_shard(RuntimeShardId(1)),
         Some(&[eth][..])
     );
 }
 
 #[test]
-fn manual_matching_runtime_driver_wraps_shard_runtime_errors_from_public_api() {
+fn inline_shard_runtime_set_wraps_shard_runtime_errors_from_public_api() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
-    let mut driver = ManualMatchingRuntimeDriver::from_symbols_with_config(
+    let mut runtime_set = InlineShardRuntimeSet::from_symbols_with_config(
         vec![btc],
         MatchingRuntimeConfig::default(),
     )
-    .expect("manual matching runtime driver topology should resolve");
+    .expect("inline matching runtime runtime_set topology should resolve");
 
     assert_eq!(
-        driver.write_input(command_entry(1, eth.clone())),
-        Err(MatchingRuntimeDriverError::ShardRuntime(
+        runtime_set.write_input(command_entry(1, eth.clone())),
+        Err(ShardRuntimeSetError::ShardRuntime(
             ShardRuntimeError::UnregisteredHandoff(eth)
         ))
     );
 }
 
 #[test]
-fn manual_matching_runtime_driver_plans_input_handoff_writes_by_owning_shard_from_public_api() {
+fn inline_shard_runtime_set_plans_input_handoff_writes_by_owning_shard_from_public_api() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let sol = symbol("SOL-USDT");
@@ -90,18 +90,18 @@ fn manual_matching_runtime_driver_plans_input_handoff_writes_by_owning_shard_fro
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
-    let driver = ManualMatchingRuntimeDriver::from_symbols_with_config(
+    let runtime_set = InlineShardRuntimeSet::from_symbols_with_config(
         vec![btc.clone(), eth.clone(), sol.clone()],
         config,
     )
-    .expect("manual matching runtime driver topology should resolve");
+    .expect("inline matching runtime runtime_set topology should resolve");
     let btc_entry = command_entry(1, btc);
     let eth_entry = command_entry(2, eth);
     let sol_entry = command_entry(3, sol);
 
-    let commands = driver
+    let commands = runtime_set
         .plan_writes(&[btc_entry.clone(), eth_entry.clone(), sol_entry.clone()])
-        .expect("manual matching runtime driver should plan input handoff writes");
+        .expect("inline matching runtime runtime_set should plan input handoff writes");
 
     assert_eq!(
         commands,

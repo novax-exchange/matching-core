@@ -10,7 +10,7 @@ The first system property is determinism. Given the same confirmed input sequenc
 
 Rust is the implementation language used to make the architecture concrete. Rust learning is valuable, but secondary to understanding matching-core design.
 
-Service Runtime, RPC, gRPC, HTTP APIs, deployment, and operational frameworks are deferred topics. They should be studied later as hosting and operational layers around the matching core, not as the current driver of the roadmap.
+Service Runtime, RPC, gRPC, HTTP APIs, deployment, and operational frameworks are deferred topics. They should be studied later as hosting and operational layers around the matching core, not as the current focus of the roadmap.
 
 ## Learning Method
 
@@ -51,7 +51,7 @@ Journal Adapter input reader
 
 The asynchronous output commit discipline is now established at the learning-project level. The matching execution path generates deterministic output requests and enqueues them locally; the output commit path batches and durably appends those requests to Journal; safe-point advancement consumes only confirmed durable prefixes, not attempted remote calls or generated output.
 
-The manual runtime contract is now explicit enough to serve as the reference for threaded and async execution. The next major shift is implementing thread-per-shard execution while preserving the same input preflight, lifecycle, pressure, remaining-work, blocked-symbol, and safe-point rules.
+The inline runtime contract is now explicit enough to serve as the reference for threaded and async execution. The next major shift is implementing thread-per-shard execution while preserving the same input preflight, lifecycle, pressure, remaining-work, blocked-symbol, and safe-point rules.
 
 ## Phase Roadmap
 
@@ -83,8 +83,8 @@ The manual runtime contract is now explicit enough to serve as the reference for
 | 23 | Completed | Replay output equivalence | Live path and replay path produce comparable output sequence, state, checksum, and safe point |
 | 24 | Completed | Snapshot restore output determinism | Snapshot restore plus replay tail equals full replay for state, output identity, and safe point |
 | 25 | Completed | Output commit ambiguity and safe-point discipline | Missing / incomplete / durable / conflict output commit evidence is surfaced through ShardExecutionCore; unknown / failed output commit does not advance safe point beyond the confirmed durable prefix or consume future deterministic identity |
-| 26 | Completed | Runtime execution modes and pressure | MatchingRuntime manual execution is the reference contract; input preflight, close, drain, shutdown, pressure, remaining work, and blocked-symbol semantics are explicit before threaded or async execution is implemented |
-| 27 | In progress | Thread-per-shard execution mode | Threaded execution preserves the same shard ownership, input close, drain, shutdown, pressure, and safe-point semantics as manual execution |
+| 26 | Completed | Runtime execution modes and pressure | MatchingRuntime inline execution is the reference contract; input preflight, close, drain, shutdown, pressure, remaining work, and blocked-symbol semantics are explicit before threaded or async execution is implemented |
+| 27 | In progress | Thread-per-shard execution mode | Threaded execution preserves the same shard ownership, input close, drain, shutdown, pressure, and safe-point semantics as inline execution |
 | 28 | Planned | Async-task-per-shard execution mode | Async execution preserves deterministic ownership and bounded pressure without introducing a second writer for a symbol |
 | 29 | Planned | Multi-symbol concurrency and hot-symbol isolation | Slow or saturated symbol does not corrupt or block unrelated symbols beyond the chosen shard-level policy |
 | 30 | Planned | Output commit pressure | Slow or failing output commit does not create ambiguous safe-point progress |
@@ -112,7 +112,7 @@ The manual runtime contract is now explicit enough to serve as the reference for
 | Replay runner | Partial | `replay_runner.rs`; checksum replay exists, and replay result now regenerates comparable output entries for the current live-vs-replay proof |
 | Snapshot restore | Partial | `snapshot_restore.rs`; in-memory order-book snapshot/restore exists, and `SymbolRuntimeSnapshot` now captures runtime identity state for restore |
 | Symbol runtime | Completed for current stage | `symbol_runtime.rs`, `symbol_runtime/runtime.rs`; deterministic output generation, bounded input draining, retry requeue, pending output handoff, rollback, safe-point advancement, and one-shot execution support are covered for the current layer |
-| Matching runtime | Completed for current stage | `matching_runtime.rs`, `matching_runtime_driver.rs`; configured execution mode, input preflight, input close / drain / shutdown boundaries, post-shutdown and repeated-shutdown rejection, runtime lifecycle state, shard status, symbol-level remaining-work / blocked-symbol reporting, aggregate run stop reasons, final run-until-idle / shutdown status, and manual multi-shard execution are covered for the current layer |
+| Matching runtime | Completed for current stage | `matching_runtime.rs`, `shard_runtime_set.rs`; configured execution mode, input preflight, input close / drain / shutdown boundaries, post-shutdown and repeated-shutdown rejection, runtime lifecycle state, shard status, symbol-level remaining-work / blocked-symbol reporting, aggregate run stop reasons, final run-until-idle / shutdown status, and inline multi-shard execution are covered for the current layer |
 | Shard runtime | Completed for current stage | `shard_runtime.rs`; bounded input handoff, shard ownership, run-once / run-limited execution, topology construction, remaining-work reporting, and blocked-symbol reporting are covered for the current layer |
 | Shard execution core | Completed for current stage | `shard_execution_core.rs` |
 | Symbol routing | Completed | `symbol_routing.rs` |
@@ -263,20 +263,20 @@ Completion boundary:
 
 ## Completed Phase: Runtime Execution Modes and Pressure
 
-This phase made manual `MatchingRuntime` execution the reference contract for future threaded and async modes. The goal was not to add threads yet, but to remove ambiguity from the runtime boundary before multiple execution carriers can exist.
+This phase made inline `MatchingRuntime` execution the reference contract for future threaded and async modes. The goal was not to add threads yet, but to remove ambiguity from the runtime boundary before multiple execution modes can exist.
 
 Progress so far:
 
-- `MatchingRuntime` exposes configured manual execution, run-until-idle, drain, and shutdown entry points.
+- `MatchingRuntime` exposes configured inline execution, run-until-idle, drain, and shutdown entry points.
 - Runtime input has explicit preflight behavior and rejects partial multi-shard enqueue when any target handoff cannot accept the batch.
 - `close_input()` and `shutdown()` are distinct lifecycle operations: closed input can still drain, while shutdown rejects future input, execution, drain, and repeated shutdown calls.
 - Runtime reports expose aggregate stop reasons, final status, lifecycle state, remaining work, blocked shards, blocked symbols, full input pressure, and full output pressure.
 - Run-until-idle, drain, and shutdown reports carry enough final-state evidence for a service layer to decide whether work drained, blocked, or remains pending.
-- Thread-per-shard and async-task-per-shard modes are intentionally still rejected until their drivers preserve the same manual contract.
+- Thread-per-shard and async-task-per-shard modes are intentionally still rejected until they preserve the same inline contract.
 
 Completion boundary:
 
-- Phase 26 is complete for the learning-project contract: manual execution now defines the lifecycle, pressure, remaining-work, blocked-symbol, and shutdown semantics that threaded and async modes must preserve.
+- Phase 26 is complete for the learning-project contract: inline execution now defines the lifecycle, pressure, remaining-work, blocked-symbol, and shutdown semantics that threaded and async modes must preserve.
 - Phase 27 should start by implementing thread-per-shard execution against that contract instead of inventing a separate lifecycle model.
 
 ## Difficulty Backlog

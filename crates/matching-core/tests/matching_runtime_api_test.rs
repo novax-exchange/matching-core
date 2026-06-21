@@ -128,7 +128,7 @@ fn command_entry(seq: u64, symbol: Symbol) -> JournalInputEntry {
 }
 
 #[test]
-fn matching_runtime_builds_manual_runtime_from_public_api() {
+fn matching_runtime_builds_inline_runtime_from_public_api() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -137,16 +137,16 @@ fn matching_runtime_builds_manual_runtime_from_public_api() {
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
     config.execution = RuntimeExecutionConfig {
-        mode: RuntimeExecutionMode::Manual,
+        mode: RuntimeExecutionMode::Inline,
         max_run_cycles_per_call: 1024,
         max_run_calls_per_until_idle: 1024,
     };
 
     let runtime =
         MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-            .expect("manual matching runtime should be supported");
+            .expect("inline matching runtime should be supported");
 
-    assert_eq!(runtime.mode(), RuntimeExecutionMode::Manual);
+    assert_eq!(runtime.mode(), RuntimeExecutionMode::Inline);
     assert_eq!(
         runtime.lifecycle_state(),
         MatchingRuntimeLifecycleState::Running
@@ -167,7 +167,7 @@ fn matching_runtime_builds_manual_runtime_from_public_api() {
 }
 
 #[test]
-fn matching_runtime_rejects_thread_mode_until_runtime_driver_exists_from_public_api() {
+fn matching_runtime_rejects_thread_mode_until_runtime_mode_exists_from_public_api() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
     config.execution = RuntimeExecutionConfig {
@@ -180,14 +180,14 @@ fn matching_runtime_rejects_thread_mode_until_runtime_driver_exists_from_public_
 
     assert!(matches!(
         result,
-        Err(MatchingRuntimeError::RuntimeDriverRequired(
+        Err(MatchingRuntimeError::RuntimeModeUnavailable(
             RuntimeExecutionMode::ThreadPerShard
         ))
     ));
 }
 
 #[test]
-fn matching_runtime_rejects_async_mode_until_runtime_driver_exists_from_public_api() {
+fn matching_runtime_rejects_async_mode_until_runtime_mode_exists_from_public_api() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
     config.execution = RuntimeExecutionConfig {
@@ -200,7 +200,7 @@ fn matching_runtime_rejects_async_mode_until_runtime_driver_exists_from_public_a
 
     assert!(matches!(
         result,
-        Err(MatchingRuntimeError::RuntimeDriverRequired(
+        Err(MatchingRuntimeError::RuntimeModeUnavailable(
             RuntimeExecutionMode::AsyncTaskPerShard
         ))
     ));
@@ -217,7 +217,7 @@ fn matching_runtime_routes_input_to_owning_shard_and_runs_once_all() {
     };
     let mut runtime =
         MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-            .expect("manual matching runtime should be supported");
+            .expect("inline matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
@@ -232,7 +232,7 @@ fn matching_runtime_routes_input_to_owning_shard_and_runs_once_all() {
                 max_output_requests_per_symbol: 1,
             },
         )
-        .expect("manual matching runtime should run all shard run_once cycles");
+        .expect("inline matching runtime should run all shard run_once cycles");
 
     assert_eq!(report.shard_reports.len(), 2);
     assert_eq!(
@@ -255,7 +255,7 @@ fn matching_runtime_enqueue_inputs_routes_batch_across_shards() {
     };
     let mut runtime =
         MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-            .expect("manual matching runtime should be supported");
+            .expect("inline matching runtime should be supported");
 
     assert_eq!(
         runtime.enqueue_inputs(vec![
@@ -268,7 +268,7 @@ fn matching_runtime_enqueue_inputs_routes_batch_across_shards() {
 
     let status = runtime
         .status()
-        .expect("manual matching runtime should report status");
+        .expect("inline matching runtime should report status");
     assert_eq!(
         status
             .shard_status(RuntimeShardId(0))
@@ -296,7 +296,7 @@ fn matching_runtime_can_enqueue_inputs_preflights_batch_without_mutating_state()
     };
     let runtime =
         MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-            .expect("manual matching runtime should be supported");
+            .expect("inline matching runtime should be supported");
 
     assert_eq!(
         runtime.can_enqueue_inputs(&[
@@ -309,7 +309,7 @@ fn matching_runtime_can_enqueue_inputs_preflights_batch_without_mutating_state()
 
     let status = runtime
         .status()
-        .expect("manual matching runtime should report status");
+        .expect("inline matching runtime should report status");
     assert!(status.is_idle());
 }
 
@@ -325,7 +325,7 @@ fn matching_runtime_can_enqueue_inputs_reports_capacity_without_partial_enqueue(
     config.handoff.capacity = 1;
     let runtime =
         MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-            .expect("manual matching runtime should be supported");
+            .expect("inline matching runtime should be supported");
 
     assert_eq!(
         runtime.can_enqueue_inputs(&[
@@ -340,7 +340,7 @@ fn matching_runtime_can_enqueue_inputs_reports_capacity_without_partial_enqueue(
 
     let status = runtime
         .status()
-        .expect("manual matching runtime should report status");
+        .expect("inline matching runtime should report status");
     assert!(status.is_idle());
 }
 
@@ -356,7 +356,7 @@ fn matching_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue_when_ha
     config.handoff.capacity = 1;
     let mut runtime =
         MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-            .expect("manual matching runtime should be supported");
+            .expect("inline matching runtime should be supported");
 
     assert_eq!(
         runtime.enqueue_inputs(vec![
@@ -371,7 +371,7 @@ fn matching_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue_when_ha
 
     let status = runtime
         .status()
-        .expect("manual matching runtime should report status");
+        .expect("inline matching runtime should report status");
     assert!(status.is_idle());
     assert_eq!(
         status.shards_with_remaining_work(),
@@ -387,7 +387,7 @@ fn matching_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue_when_sy
         vec![btc.clone()],
         MatchingRuntimeConfig::default(),
     )
-    .expect("manual matching runtime should be supported");
+    .expect("inline matching runtime should be supported");
 
     assert_eq!(
         runtime.enqueue_inputs(vec![
@@ -401,7 +401,7 @@ fn matching_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue_when_sy
 
     let status = runtime
         .status()
-        .expect("manual matching runtime should report status");
+        .expect("inline matching runtime should report status");
     assert!(status.is_idle());
 }
 
@@ -412,7 +412,7 @@ fn matching_runtime_close_input_rejects_new_single_and_batch_inputs() {
         vec![btc.clone()],
         MatchingRuntimeConfig::default(),
     )
-    .expect("manual matching runtime should be supported");
+    .expect("inline matching runtime should be supported");
 
     assert_eq!(runtime.input_state(), MatchingRuntimeInputState::Open);
     runtime.close_input();
@@ -443,20 +443,20 @@ fn matching_runtime_shutdown_closes_input_without_draining_pending_work() {
         vec![btc.clone()],
         MatchingRuntimeConfig::default(),
     )
-    .expect("manual matching runtime should be supported");
+    .expect("inline matching runtime should be supported");
 
     assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
 
     let report = runtime
         .shutdown()
-        .expect("manual matching runtime should shut down");
+        .expect("inline matching runtime should shut down");
 
     assert_eq!(report.input_state, MatchingRuntimeInputState::Closed);
     assert_eq!(
         report.lifecycle_state,
         MatchingRuntimeLifecycleState::Shutdown
     );
-    assert_eq!(report.driver_report.shard_ids, vec![RuntimeShardId(0)]);
+    assert_eq!(report.runtime_set_report.shard_ids, vec![RuntimeShardId(0)]);
     assert_eq!(
         report.final_status.lifecycle_state,
         MatchingRuntimeLifecycleState::Shutdown
@@ -487,7 +487,7 @@ fn matching_runtime_shutdown_closes_input_without_draining_pending_work() {
 
     let status = runtime
         .status()
-        .expect("manual matching runtime status should remain available");
+        .expect("inline matching runtime status should remain available");
     assert_eq!(
         status.lifecycle_state,
         MatchingRuntimeLifecycleState::Shutdown
@@ -506,14 +506,14 @@ fn matching_runtime_shutdown_rejects_later_execution_without_losing_status() {
         vec![btc.clone()],
         MatchingRuntimeConfig::default(),
     )
-    .expect("manual matching runtime should be supported");
+    .expect("inline matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
     assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
     runtime
         .shutdown()
-        .expect("manual matching runtime should shut down");
+        .expect("inline matching runtime should shut down");
 
     assert_eq!(
         runtime.run_once_all(
@@ -541,7 +541,7 @@ fn matching_runtime_shutdown_rejects_later_execution_without_losing_status() {
 
     let status = runtime
         .status()
-        .expect("manual matching runtime status should remain queryable after shutdown");
+        .expect("inline matching runtime status should remain queryable after shutdown");
     assert_eq!(
         status.lifecycle_state,
         MatchingRuntimeLifecycleState::Shutdown
@@ -557,12 +557,12 @@ fn matching_runtime_shutdown_rejects_repeated_shutdown_without_losing_status() {
         vec![btc.clone()],
         MatchingRuntimeConfig::default(),
     )
-    .expect("manual matching runtime should be supported");
+    .expect("inline matching runtime should be supported");
 
     assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
     runtime
         .shutdown()
-        .expect("manual matching runtime should shut down once");
+        .expect("inline matching runtime should shut down once");
 
     assert_eq!(
         runtime.shutdown(),
@@ -571,7 +571,7 @@ fn matching_runtime_shutdown_rejects_repeated_shutdown_without_losing_status() {
 
     let status = runtime
         .status()
-        .expect("manual matching runtime status should remain queryable after repeated shutdown");
+        .expect("inline matching runtime status should remain queryable after repeated shutdown");
     assert_eq!(
         status.lifecycle_state,
         MatchingRuntimeLifecycleState::Shutdown
@@ -588,7 +588,7 @@ fn matching_runtime_drain_configured_closes_input_and_drains_existing_work() {
     config.symbol_runtime.max_input_entries_per_step = 1;
     config.output_commit.max_output_requests_per_step = 1;
     let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("manual matching runtime should be supported");
+        .expect("inline matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
@@ -597,7 +597,7 @@ fn matching_runtime_drain_configured_closes_input_and_drains_existing_work() {
 
     let report = runtime
         .drain_configured(&mut journal_client, &mut output)
-        .expect("manual matching runtime should drain with configured limits");
+        .expect("inline matching runtime should drain with configured limits");
 
     assert_eq!(runtime.input_state(), MatchingRuntimeInputState::Closed);
     assert_eq!(report.stop_reason, MatchingRuntimeDrainStopReason::Drained);
@@ -622,7 +622,7 @@ fn matching_runtime_drain_configured_reports_blocked_output() {
         vec![btc.clone()],
         MatchingRuntimeConfig::default(),
     )
-    .expect("manual matching runtime should be supported");
+    .expect("inline matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
 
@@ -630,7 +630,7 @@ fn matching_runtime_drain_configured_reports_blocked_output() {
 
     let report = runtime
         .drain_configured(&mut journal_client, &mut output)
-        .expect("manual matching runtime should report blocked drain");
+        .expect("inline matching runtime should report blocked drain");
 
     assert_eq!(runtime.input_state(), MatchingRuntimeInputState::Closed);
     assert_eq!(report.stop_reason, MatchingRuntimeDrainStopReason::Blocked);
@@ -653,7 +653,7 @@ fn matching_runtime_run_limited_all_drives_all_shards_until_idle() {
     };
     let mut runtime =
         MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-            .expect("manual matching runtime should be supported");
+            .expect("inline matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
@@ -670,7 +670,7 @@ fn matching_runtime_run_limited_all_drives_all_shards_until_idle() {
             },
             ShardRuntimeRunLimit { max_cycles: 2 },
         )
-        .expect("manual matching runtime should run all shard run limits");
+        .expect("inline matching runtime should run all shard run limits");
 
     assert_eq!(report.shard_reports.len(), 2);
     assert!(report.is_idle());
@@ -714,7 +714,7 @@ fn matching_runtime_run_report_summarizes_mixed_shard_states() {
     };
     let mut runtime =
         MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-            .expect("manual matching runtime should be supported");
+            .expect("inline matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
 
@@ -733,7 +733,7 @@ fn matching_runtime_run_report_summarizes_mixed_shard_states() {
             },
             ShardRuntimeRunLimit { max_cycles: 2 },
         )
-        .expect("manual matching runtime should summarize shard run states");
+        .expect("inline matching runtime should summarize shard run states");
 
     assert!(!report.is_idle());
     assert_eq!(
@@ -764,7 +764,7 @@ fn matching_runtime_run_report_reports_blocked_when_no_shard_can_progress() {
         vec![btc.clone()],
         MatchingRuntimeConfig::default(),
     )
-    .expect("manual matching runtime should be supported");
+    .expect("inline matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
 
@@ -780,7 +780,7 @@ fn matching_runtime_run_report_reports_blocked_when_no_shard_can_progress() {
             },
             ShardRuntimeRunLimit { max_cycles: 2 },
         )
-        .expect("manual matching runtime should report blocked shard execution");
+        .expect("inline matching runtime should report blocked shard execution");
 
     assert_eq!(report.stop_reason(), MatchingRuntimeRunStopReason::Blocked);
     assert!(report.has_work_remaining());
@@ -799,7 +799,7 @@ fn matching_runtime_run_configured_all_uses_runtime_config_limits() {
     config.symbol_runtime.max_input_entries_per_step = 1;
     config.output_commit.max_output_requests_per_step = 1;
     let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("manual matching runtime should be supported");
+        .expect("inline matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
@@ -808,7 +808,7 @@ fn matching_runtime_run_configured_all_uses_runtime_config_limits() {
 
     let report = runtime
         .run_configured_all(&mut journal_client, &mut output)
-        .expect("manual matching runtime should run with configured limits");
+        .expect("inline matching runtime should run with configured limits");
 
     assert!(report.needs_another_run());
     assert_eq!(report.shards_reaching_run_limit(), vec![RuntimeShardId(0)]);
@@ -823,7 +823,7 @@ fn matching_runtime_run_until_idle_repeats_configured_runs_until_idle() {
     config.symbol_runtime.max_input_entries_per_step = 1;
     config.output_commit.max_output_requests_per_step = 1;
     let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("manual matching runtime should be supported");
+        .expect("inline matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
@@ -837,7 +837,7 @@ fn matching_runtime_run_until_idle_repeats_configured_runs_until_idle() {
             &mut output,
             MatchingRuntimeRunUntilIdleLimit { max_run_calls: 4 },
         )
-        .expect("manual matching runtime should run configured calls until idle");
+        .expect("inline matching runtime should run configured calls until idle");
 
     assert_eq!(
         report.stop_reason,
@@ -856,7 +856,7 @@ fn matching_runtime_run_until_idle_reports_call_limit_before_idle() {
     config.symbol_runtime.max_input_entries_per_step = 1;
     config.output_commit.max_output_requests_per_step = 1;
     let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("manual matching runtime should be supported");
+        .expect("inline matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
@@ -870,7 +870,7 @@ fn matching_runtime_run_until_idle_reports_call_limit_before_idle() {
             &mut output,
             MatchingRuntimeRunUntilIdleLimit { max_run_calls: 2 },
         )
-        .expect("manual matching runtime should stop at outer call limit");
+        .expect("inline matching runtime should stop at outer call limit");
 
     assert_eq!(
         report.stop_reason,
@@ -888,7 +888,7 @@ fn matching_runtime_run_until_idle_reports_final_status_when_no_run_is_allowed()
         vec![btc.clone()],
         MatchingRuntimeConfig::default(),
     )
-    .expect("manual matching runtime should be supported");
+    .expect("inline matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
@@ -900,7 +900,7 @@ fn matching_runtime_run_until_idle_reports_final_status_when_no_run_is_allowed()
             &mut output,
             MatchingRuntimeRunUntilIdleLimit { max_run_calls: 0 },
         )
-        .expect("manual matching runtime should report final status without running");
+        .expect("inline matching runtime should report final status without running");
 
     assert_eq!(
         report.stop_reason,
@@ -924,7 +924,7 @@ fn matching_runtime_run_until_idle_stops_when_only_blocked_work_remains() {
     config.symbol_runtime.max_input_entries_per_step = 1;
     config.output_commit.max_output_requests_per_step = 1;
     let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("manual matching runtime should be supported");
+        .expect("inline matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
 
@@ -936,7 +936,7 @@ fn matching_runtime_run_until_idle_stops_when_only_blocked_work_remains() {
             &mut output,
             MatchingRuntimeRunUntilIdleLimit { max_run_calls: 3 },
         )
-        .expect("manual matching runtime should stop when output remains blocked");
+        .expect("inline matching runtime should stop when output remains blocked");
 
     assert_eq!(
         report.stop_reason,
@@ -958,7 +958,7 @@ fn matching_runtime_run_until_idle_configured_uses_runtime_config_limit() {
     config.symbol_runtime.max_input_entries_per_step = 1;
     config.output_commit.max_output_requests_per_step = 1;
     let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("manual matching runtime should be supported");
+        .expect("inline matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
@@ -968,7 +968,7 @@ fn matching_runtime_run_until_idle_configured_uses_runtime_config_limit() {
 
     let report = runtime
         .run_until_idle_configured(&mut journal_client, &mut output)
-        .expect("manual matching runtime should run until idle with configured limit");
+        .expect("inline matching runtime should run until idle with configured limit");
 
     assert_eq!(
         report.stop_reason,
@@ -989,13 +989,13 @@ fn matching_runtime_status_reports_pending_input_without_running() {
     };
     let mut runtime =
         MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-            .expect("manual matching runtime should be supported");
+            .expect("inline matching runtime should be supported");
 
     assert_eq!(runtime.enqueue_input(command_entry(1, eth.clone())), Ok(()));
 
     let status = runtime
         .status()
-        .expect("manual matching runtime should report status");
+        .expect("inline matching runtime should report status");
 
     assert_eq!(status.input_state, MatchingRuntimeInputState::Open);
     assert!(!status.is_idle());
@@ -1018,13 +1018,13 @@ fn matching_runtime_status_reports_closed_input_state() {
     let btc = symbol("BTC-USDT");
     let mut runtime =
         MatchingRuntime::new_for_symbols_with_config(vec![btc], MatchingRuntimeConfig::default())
-            .expect("manual matching runtime should be supported");
+            .expect("inline matching runtime should be supported");
 
     runtime.close_input();
 
     let status = runtime
         .status()
-        .expect("manual matching runtime should report status");
+        .expect("inline matching runtime should report status");
 
     assert_eq!(status.input_state, MatchingRuntimeInputState::Closed);
     assert_eq!(
@@ -1041,7 +1041,7 @@ fn matching_runtime_status_reports_blocked_output_pressure() {
         vec![btc.clone()],
         MatchingRuntimeConfig::default(),
     )
-    .expect("manual matching runtime should be supported");
+    .expect("inline matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
 
@@ -1049,12 +1049,12 @@ fn matching_runtime_status_reports_blocked_output_pressure() {
 
     let run_report = runtime
         .run_configured_all(&mut journal_client, &mut output)
-        .expect("manual matching runtime should run with configured limits");
+        .expect("inline matching runtime should run with configured limits");
     assert!(run_report.has_blocked_symbols());
 
     let status = runtime
         .status()
-        .expect("manual matching runtime should report status");
+        .expect("inline matching runtime should report status");
 
     assert!(!status.is_idle());
     assert!(status.has_blocked_symbols());
@@ -1086,20 +1086,20 @@ fn matching_runtime_status_summarizes_full_input_and_output_pressure() {
     config.output_commit.max_output_requests_per_step = 1;
     let mut runtime =
         MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-            .expect("manual matching runtime should be supported");
+            .expect("inline matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
 
     assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
     let run_report = runtime
         .run_configured_all(&mut journal_client, &mut output)
-        .expect("manual matching runtime should run with configured limits");
+        .expect("inline matching runtime should run with configured limits");
     assert!(run_report.has_blocked_symbols());
     assert_eq!(runtime.enqueue_input(command_entry(1, eth.clone())), Ok(()));
 
     let status = runtime
         .status()
-        .expect("manual matching runtime should report status");
+        .expect("inline matching runtime should report status");
 
     assert_eq!(status.shards_with_full_input(), vec![RuntimeShardId(1)]);
     assert_eq!(status.shards_with_full_output(), vec![RuntimeShardId(0)]);
@@ -1114,7 +1114,7 @@ fn matching_runtime_run_limited_all_reports_remaining_work_when_limit_is_reached
         vec![btc.clone()],
         MatchingRuntimeConfig::default(),
     )
-    .expect("manual matching runtime should be supported");
+    .expect("inline matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
@@ -1131,7 +1131,7 @@ fn matching_runtime_run_limited_all_reports_remaining_work_when_limit_is_reached
             },
             ShardRuntimeRunLimit { max_cycles: 1 },
         )
-        .expect("manual matching runtime should run all shard run limits");
+        .expect("inline matching runtime should run all shard run limits");
 
     assert!(!report.is_idle());
     assert_eq!(

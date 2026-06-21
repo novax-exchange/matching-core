@@ -68,7 +68,7 @@ pub struct RuntimeExecutionConfig {
 impl Default for RuntimeExecutionConfig {
     fn default() -> Self {
         Self {
-            mode: RuntimeExecutionMode::Manual,
+            mode: RuntimeExecutionMode::Inline,
             max_run_cycles_per_call: 1024,
             max_run_calls_per_until_idle: 1024,
         }
@@ -77,7 +77,7 @@ impl Default for RuntimeExecutionConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeExecutionMode {
-    Manual,
+    Inline,
     ThreadPerShard,
     AsyncTaskPerShard,
 }

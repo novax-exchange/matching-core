@@ -481,7 +481,7 @@ fn shard_execution_core_uses_runtime_config_for_output_policy_from_public_api() 
             assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
         },
         execution: RuntimeExecutionConfig {
-            mode: RuntimeExecutionMode::Manual,
+            mode: RuntimeExecutionMode::Inline,
             max_run_cycles_per_call: 19,
             max_run_calls_per_until_idle: 23,
         },

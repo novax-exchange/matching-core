@@ -18,46 +18,40 @@ pub trait InputHandoffWriter {
     fn plan_writes(
         &self,
         entries: &[JournalInputEntry],
-    ) -> Result<Vec<InputHandoffWriteCommand>, MatchingRuntimeDriverError>;
-    fn write_input(&mut self, entry: JournalInputEntry) -> Result<(), MatchingRuntimeDriverError>;
+    ) -> Result<Vec<InputHandoffWriteCommand>, ShardRuntimeSetError>;
+    fn write_input(&mut self, entry: JournalInputEntry) -> Result<(), ShardRuntimeSetError>;
     fn write_inputs(
         &mut self,
         entries: Vec<JournalInputEntry>,
-    ) -> Result<usize, MatchingRuntimeDriverError>;
-    fn can_write_inputs(
-        &self,
-        entries: &[JournalInputEntry],
-    ) -> Result<(), MatchingRuntimeDriverError>;
+    ) -> Result<usize, ShardRuntimeSetError>;
+    fn can_write_inputs(&self, entries: &[JournalInputEntry]) -> Result<(), ShardRuntimeSetError>;
 }
 
-pub trait MatchingRuntimeDriver: InputHandoffWriter {
+pub trait ShardRuntimeSet: InputHandoffWriter {
     fn shard_count(&self) -> usize;
     fn shard_ids(&self) -> Vec<RuntimeShardId>;
     fn symbols_for_shard(&self, shard_id: RuntimeShardId) -> Option<&[Symbol]>;
-    fn shard_statuses(&self)
-        -> Result<Vec<MatchingRuntimeShardStatus>, MatchingRuntimeDriverError>;
+    fn shard_statuses(&self) -> Result<Vec<MatchingRuntimeShardStatus>, ShardRuntimeSetError>;
     fn run_once_all(
         &mut self,
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
         limits: ShardRuntimeRunOnceLimits,
-    ) -> Result<MatchingRuntimeRunOnceReport, MatchingRuntimeDriverError>;
+    ) -> Result<MatchingRuntimeRunOnceReport, ShardRuntimeSetError>;
     fn run_limited_all(
         &mut self,
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
         limits: ShardRuntimeRunOnceLimits,
         limit: ShardRuntimeRunLimit,
-    ) -> Result<MatchingRuntimeRunReport, MatchingRuntimeDriverError>;
-    fn shutdown(
-        &mut self,
-    ) -> Result<MatchingRuntimeDriverShutdownReport, MatchingRuntimeDriverError>;
+    ) -> Result<MatchingRuntimeRunReport, ShardRuntimeSetError>;
+    fn shutdown(&mut self) -> Result<ShardRuntimeSetShutdownReport, ShardRuntimeSetError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MatchingRuntimeDriverError {
+pub enum ShardRuntimeSetError {
     ShardRuntime(ShardRuntimeError),
-    DriverUnavailable(RuntimeShardId),
+    ShardRuntimeUnavailable(RuntimeShardId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,21 +63,21 @@ pub enum InputHandoffWriteCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MatchingRuntimeDriverShutdownReport {
+pub struct ShardRuntimeSetShutdownReport {
     pub shard_ids: Vec<RuntimeShardId>,
 }
 
-impl From<ShardRuntimeError> for MatchingRuntimeDriverError {
+impl From<ShardRuntimeError> for ShardRuntimeSetError {
     fn from(error: ShardRuntimeError) -> Self {
         Self::ShardRuntime(error)
     }
 }
 
-pub struct ManualMatchingRuntimeDriver {
+pub struct InlineShardRuntimeSet {
     runtimes: Vec<ShardRuntime>,
 }
 
-impl ManualMatchingRuntimeDriver {
+impl InlineShardRuntimeSet {
     pub fn from_symbols_with_config(
         symbols: Vec<Symbol>,
         config: MatchingRuntimeConfig,
@@ -102,14 +96,14 @@ impl ManualMatchingRuntimeDriver {
     fn validate_enqueue_inputs(
         &self,
         entries: &[JournalInputEntry],
-    ) -> Result<HashMap<Symbol, usize>, MatchingRuntimeDriverError> {
+    ) -> Result<HashMap<Symbol, usize>, ShardRuntimeSetError> {
         let mut requested_by_symbol: HashMap<Symbol, usize> = HashMap::new();
         let mut owner_by_symbol: HashMap<Symbol, usize> = HashMap::new();
 
         for entry in entries {
             let symbol = entry.command.symbol().clone();
             let runtime_index = self.runtime_index_for_symbol(&symbol).ok_or_else(|| {
-                MatchingRuntimeDriverError::ShardRuntime(ShardRuntimeError::UnregisteredHandoff(
+                ShardRuntimeSetError::ShardRuntime(ShardRuntimeError::UnregisteredHandoff(
                     symbol.clone(),
                 ))
             })?;
@@ -131,7 +125,7 @@ impl ManualMatchingRuntimeDriver {
             let pending_input_status = self.runtimes[*runtime_index]
                 .pending_input_status(&symbol)
                 .ok_or_else(|| {
-                    MatchingRuntimeDriverError::ShardRuntime(ShardRuntimeError::MissingHandoff(
+                    ShardRuntimeSetError::ShardRuntime(ShardRuntimeError::MissingHandoff(
                         symbol.clone(),
                     ))
                 })?;
@@ -140,7 +134,7 @@ impl ManualMatchingRuntimeDriver {
                 .saturating_sub(pending_input_status.len);
 
             if available_capacity < *requested_count {
-                return Err(MatchingRuntimeDriverError::ShardRuntime(
+                return Err(ShardRuntimeSetError::ShardRuntime(
                     ShardRuntimeError::InputHandoffFull(symbol),
                 ));
             }
@@ -150,11 +144,11 @@ impl ManualMatchingRuntimeDriver {
     }
 }
 
-impl InputHandoffWriter for ManualMatchingRuntimeDriver {
+impl InputHandoffWriter for InlineShardRuntimeSet {
     fn plan_writes(
         &self,
         entries: &[JournalInputEntry],
-    ) -> Result<Vec<InputHandoffWriteCommand>, MatchingRuntimeDriverError> {
+    ) -> Result<Vec<InputHandoffWriteCommand>, ShardRuntimeSetError> {
         let owner_by_symbol = self.validate_enqueue_inputs(entries)?;
         let mut entries_by_runtime: Vec<Vec<JournalInputEntry>> =
             (0..self.runtimes.len()).map(|_| Vec::new()).collect();
@@ -179,23 +173,23 @@ impl InputHandoffWriter for ManualMatchingRuntimeDriver {
             .collect())
     }
 
-    fn write_input(&mut self, entry: JournalInputEntry) -> Result<(), MatchingRuntimeDriverError> {
+    fn write_input(&mut self, entry: JournalInputEntry) -> Result<(), ShardRuntimeSetError> {
         let symbol = entry.command.symbol().clone();
-        let runtime_index = self.runtime_index_for_symbol(&symbol).ok_or(
-            MatchingRuntimeDriverError::ShardRuntime(ShardRuntimeError::UnregisteredHandoff(
-                symbol,
-            )),
-        )?;
+        let runtime_index =
+            self.runtime_index_for_symbol(&symbol)
+                .ok_or(ShardRuntimeSetError::ShardRuntime(
+                    ShardRuntimeError::UnregisteredHandoff(symbol),
+                ))?;
 
         self.runtimes[runtime_index]
             .enqueue_input(entry)
-            .map_err(MatchingRuntimeDriverError::from)
+            .map_err(ShardRuntimeSetError::from)
     }
 
     fn write_inputs(
         &mut self,
         entries: Vec<JournalInputEntry>,
-    ) -> Result<usize, MatchingRuntimeDriverError> {
+    ) -> Result<usize, ShardRuntimeSetError> {
         let written_count = entries.len();
         let commands = self.plan_writes(&entries)?;
 
@@ -206,10 +200,10 @@ impl InputHandoffWriter for ManualMatchingRuntimeDriver {
                         .runtimes
                         .iter_mut()
                         .find(|runtime| runtime.shard_id() == shard_id)
-                        .ok_or(MatchingRuntimeDriverError::DriverUnavailable(shard_id))?;
+                        .ok_or(ShardRuntimeSetError::ShardRuntimeUnavailable(shard_id))?;
                     runtime
                         .enqueue_inputs(entries)
-                        .map_err(MatchingRuntimeDriverError::from)?;
+                        .map_err(ShardRuntimeSetError::from)?;
                 }
             }
         }
@@ -217,15 +211,12 @@ impl InputHandoffWriter for ManualMatchingRuntimeDriver {
         Ok(written_count)
     }
 
-    fn can_write_inputs(
-        &self,
-        entries: &[JournalInputEntry],
-    ) -> Result<(), MatchingRuntimeDriverError> {
+    fn can_write_inputs(&self, entries: &[JournalInputEntry]) -> Result<(), ShardRuntimeSetError> {
         self.validate_enqueue_inputs(entries).map(|_| ())
     }
 }
 
-impl MatchingRuntimeDriver for ManualMatchingRuntimeDriver {
+impl ShardRuntimeSet for InlineShardRuntimeSet {
     fn shard_count(&self) -> usize {
         self.runtimes.len()
     }
@@ -241,9 +232,7 @@ impl MatchingRuntimeDriver for ManualMatchingRuntimeDriver {
             .map(ShardRuntime::symbols)
     }
 
-    fn shard_statuses(
-        &self,
-    ) -> Result<Vec<MatchingRuntimeShardStatus>, MatchingRuntimeDriverError> {
+    fn shard_statuses(&self) -> Result<Vec<MatchingRuntimeShardStatus>, ShardRuntimeSetError> {
         let mut shard_statuses = Vec::new();
 
         for runtime in &self.runtimes {
@@ -252,17 +241,18 @@ impl MatchingRuntimeDriver for ManualMatchingRuntimeDriver {
             for symbol in runtime.symbols() {
                 let pending_input_status =
                     runtime.pending_input_status(symbol).ok_or_else(|| {
-                        MatchingRuntimeDriverError::ShardRuntime(ShardRuntimeError::MissingHandoff(
+                        ShardRuntimeSetError::ShardRuntime(ShardRuntimeError::MissingHandoff(
                             symbol.clone(),
                         ))
                     })?;
-                let runtime_status = runtime.symbol_status(symbol).ok_or(
-                    MatchingRuntimeDriverError::ShardRuntime(
-                        ShardRuntimeError::ShardExecutionCore(
-                            ShardExecutionCoreError::UnknownSymbol,
-                        ),
-                    ),
-                )?;
+                let runtime_status =
+                    runtime
+                        .symbol_status(symbol)
+                        .ok_or(ShardRuntimeSetError::ShardRuntime(
+                            ShardRuntimeError::ShardExecutionCore(
+                                ShardExecutionCoreError::UnknownSymbol,
+                            ),
+                        ))?;
 
                 symbol_statuses.push(symbol_status_from_runtime_status(
                     symbol.clone(),
@@ -287,13 +277,13 @@ impl MatchingRuntimeDriver for ManualMatchingRuntimeDriver {
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
         limits: ShardRuntimeRunOnceLimits,
-    ) -> Result<MatchingRuntimeRunOnceReport, MatchingRuntimeDriverError> {
+    ) -> Result<MatchingRuntimeRunOnceReport, ShardRuntimeSetError> {
         let mut shard_reports = Vec::new();
 
         for runtime in &mut self.runtimes {
             let run_once_report: ShardRuntimeRunOnceReport = runtime
                 .run_once(journal_client, output, limits)
-                .map_err(MatchingRuntimeDriverError::from)?;
+                .map_err(ShardRuntimeSetError::from)?;
             shard_reports.push(MatchingRuntimeShardRunOnceReport {
                 shard_id: runtime.shard_id(),
                 run_once_report,
@@ -309,13 +299,13 @@ impl MatchingRuntimeDriver for ManualMatchingRuntimeDriver {
         output: &mut dyn JournalOutputAppender,
         limits: ShardRuntimeRunOnceLimits,
         limit: ShardRuntimeRunLimit,
-    ) -> Result<MatchingRuntimeRunReport, MatchingRuntimeDriverError> {
+    ) -> Result<MatchingRuntimeRunReport, ShardRuntimeSetError> {
         let mut shard_reports = Vec::new();
 
         for runtime in &mut self.runtimes {
             let run_report: ShardRuntimeRunReport = runtime
                 .run_limited(journal_client, output, limits, limit)
-                .map_err(MatchingRuntimeDriverError::from)?;
+                .map_err(ShardRuntimeSetError::from)?;
             shard_reports.push(MatchingRuntimeShardRunReport {
                 shard_id: runtime.shard_id(),
                 run_report,
@@ -325,10 +315,8 @@ impl MatchingRuntimeDriver for ManualMatchingRuntimeDriver {
         Ok(MatchingRuntimeRunReport { shard_reports })
     }
 
-    fn shutdown(
-        &mut self,
-    ) -> Result<MatchingRuntimeDriverShutdownReport, MatchingRuntimeDriverError> {
-        Ok(MatchingRuntimeDriverShutdownReport {
+    fn shutdown(&mut self) -> Result<ShardRuntimeSetShutdownReport, ShardRuntimeSetError> {
+        Ok(ShardRuntimeSetShutdownReport {
             shard_ids: self.shard_ids(),
         })
     }
