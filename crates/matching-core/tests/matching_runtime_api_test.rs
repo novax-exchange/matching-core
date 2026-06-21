@@ -549,6 +549,35 @@ fn matching_runtime_shutdown_rejects_later_execution_without_losing_status() {
 }
 
 #[test]
+fn matching_runtime_shutdown_rejects_repeated_shutdown_without_losing_status() {
+    let btc = symbol("BTC-USDT");
+    let mut runtime = MatchingRuntime::new_for_symbols_with_config(
+        vec![btc.clone()],
+        MatchingRuntimeConfig::default(),
+    )
+    .expect("manual matching runtime should be supported");
+
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    runtime
+        .shutdown()
+        .expect("manual matching runtime should shut down once");
+
+    assert_eq!(
+        runtime.shutdown(),
+        Err(MatchingRuntimeError::RuntimeShutdown)
+    );
+
+    let status = runtime
+        .status()
+        .expect("manual matching runtime status should remain queryable after repeated shutdown");
+    assert_eq!(
+        status.lifecycle_state,
+        MatchingRuntimeLifecycleState::Shutdown
+    );
+    assert_eq!(status.shards_with_remaining_work(), vec![RuntimeShardId(0)]);
+}
+
+#[test]
 fn matching_runtime_drain_configured_closes_input_and_drains_existing_work() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();

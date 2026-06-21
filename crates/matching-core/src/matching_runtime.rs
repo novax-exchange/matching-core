@@ -335,6 +335,7 @@ impl MatchingRuntime {
     }
 
     pub fn shutdown(&mut self) -> Result<MatchingRuntimeShutdownReport, MatchingRuntimeError> {
+        self.ensure_runtime_running()?;
         self.close_input();
 
         let driver_report = self
