@@ -6,7 +6,8 @@ use matching_core::snapshot_restore::{
     OrderBookSnapshot, SnapshotSerializationError, SymbolRuntimeSnapshot,
 };
 use matching_core::snapshot_store::{
-    FileSnapshotStore, InMemorySnapshotStore, SnapshotStore, SnapshotStoreError,
+    FileSnapshotStore, InMemorySnapshotStore, SnapshotManifestSigner, SnapshotManifestVerifier,
+    SnapshotStore, SnapshotStoreError, SnapshotVerificationError,
 };
 use matching_core::types::*;
 use std::fs;
@@ -444,6 +445,127 @@ fn file_snapshot_store_rejects_verified_snapshot_when_manifest_digest_does_not_m
     assert_eq!(
         report.rejected[0].error,
         matching_core::snapshot_store::SnapshotVerificationError::SnapshotDigestMismatch
+    );
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
+}
+
+fn test_snapshot_manifest_signer() -> SnapshotManifestSigner {
+    SnapshotManifestSigner::ed25519(
+        "snapshot-verifier-a",
+        "snapshot-verifier-a-key-1",
+        [7_u8; 32],
+    )
+}
+
+fn trusted_test_snapshot_manifest_verifier() -> SnapshotManifestVerifier {
+    let signer = test_snapshot_manifest_signer();
+
+    SnapshotManifestVerifier::new().trust_ed25519_key(
+        "snapshot-verifier-a",
+        "snapshot-verifier-a-key-1",
+        signer.public_key_bytes(),
+    )
+}
+
+#[test]
+fn file_snapshot_store_selects_snapshot_verified_by_trusted_ed25519_key_from_public_api() {
+    let dir = temporary_snapshot_dir("file-store-ed25519-verified-selection");
+    let symbol = Symbol("BTC-USDT".to_string());
+    let mut store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 2);
+    let signer = test_snapshot_manifest_signer();
+    let verifier = trusted_test_snapshot_manifest_verifier();
+
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(11))
+        .expect("snapshot should be written");
+    store
+        .mark_symbol_snapshot_verified_by(&symbol, JournalSeq(11), &signer)
+        .expect("snapshot should be signed as verified")
+        .expect("snapshot should exist before signing verified manifest");
+
+    let report = store
+        .select_latest_trusted_verified_symbol_snapshot(&symbol, &verifier)
+        .expect("trusted verified snapshot selection should read manifest");
+
+    assert_eq!(
+        report
+            .selected
+            .expect("trusted verified snapshot should decode")
+            .order_book_snapshot
+            .last_input_seq,
+        JournalSeq(11)
+    );
+    assert_eq!(report.rejected, Vec::new());
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
+}
+
+#[test]
+fn file_snapshot_store_rejects_snapshot_verified_by_untrusted_ed25519_key_from_public_api() {
+    let dir = temporary_snapshot_dir("file-store-ed25519-untrusted-verifier");
+    let symbol = Symbol("BTC-USDT".to_string());
+    let mut store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 2);
+    let signer = test_snapshot_manifest_signer();
+    let verifier = SnapshotManifestVerifier::new();
+
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(11))
+        .expect("snapshot should be written");
+    store
+        .mark_symbol_snapshot_verified_by(&symbol, JournalSeq(11), &signer)
+        .expect("snapshot should be signed as verified")
+        .expect("snapshot should exist before signing verified manifest");
+
+    let report = store
+        .select_latest_trusted_verified_symbol_snapshot(&symbol, &verifier)
+        .expect("trusted verified snapshot selection should read manifest");
+
+    assert_eq!(report.selected, None);
+    assert_eq!(report.selected_record, None);
+    assert_eq!(
+        report.rejected[0].error,
+        SnapshotVerificationError::UntrustedVerifier
+    );
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
+}
+
+#[test]
+fn file_snapshot_store_rejects_verified_snapshot_when_ed25519_signature_does_not_match_from_public_api(
+) {
+    let dir = temporary_snapshot_dir("file-store-ed25519-signature-mismatch");
+    let symbol = Symbol("BTC-USDT".to_string());
+    let mut store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 2);
+    let signer = test_snapshot_manifest_signer();
+    let verifier = trusted_test_snapshot_manifest_verifier();
+
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(11))
+        .expect("snapshot should be written");
+    store
+        .mark_symbol_snapshot_verified_by(&symbol, JournalSeq(11), &signer)
+        .expect("snapshot should be signed as verified")
+        .expect("snapshot should exist before signing verified manifest");
+
+    let mut manifest = store
+        .load_symbol_snapshot_verification_manifest(&symbol, JournalSeq(11))
+        .expect("manifest should be readable")
+        .expect("manifest should exist");
+    manifest.snapshot_checksum = Checksum(manifest.snapshot_checksum.0 + 1);
+    store
+        .write_symbol_snapshot_verification_manifest(&manifest)
+        .expect("tampered manifest should be written");
+
+    let report = store
+        .select_latest_trusted_verified_symbol_snapshot(&symbol, &verifier)
+        .expect("trusted verified snapshot selection should read tampered manifest");
+
+    assert_eq!(report.selected, None);
+    assert_eq!(report.selected_record, None);
+    assert_eq!(
+        report.rejected[0].error,
+        SnapshotVerificationError::SignatureMismatch
     );
 
     fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");

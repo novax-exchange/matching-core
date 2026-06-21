@@ -4,4 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+ed25519-dalek = { version = "2", default-features = false, features = ["fast", "std", "zeroize"] }
+sha2 = "0.10"
 slotmap = "1"
