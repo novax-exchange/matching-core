@@ -5,8 +5,8 @@ use matching_core::journal_adapter::{
 use matching_core::matching_engine::EngineEvent;
 use matching_core::matching_runtime::{
     MatchingRuntime, MatchingRuntimeDrainStopReason, MatchingRuntimeError,
-    MatchingRuntimeInputState, MatchingRuntimeRunStopReason, MatchingRuntimeRunUntilIdleLimit,
-    MatchingRuntimeRunUntilIdleStopReason,
+    MatchingRuntimeInputState, MatchingRuntimeLifecycleState, MatchingRuntimeRunStopReason,
+    MatchingRuntimeRunUntilIdleLimit, MatchingRuntimeRunUntilIdleStopReason,
 };
 use matching_core::order::{Command, Order};
 use matching_core::runtime_config::{
@@ -147,6 +147,10 @@ fn matching_runtime_builds_manual_runtime_from_public_api() {
             .expect("manual matching runtime should be supported");
 
     assert_eq!(runtime.mode(), RuntimeExecutionMode::Manual);
+    assert_eq!(
+        runtime.lifecycle_state(),
+        MatchingRuntimeLifecycleState::Running
+    );
     assert_eq!(runtime.shard_count(), 2);
     assert_eq!(
         runtime.shard_ids(),
@@ -448,7 +452,15 @@ fn matching_runtime_shutdown_closes_input_without_draining_pending_work() {
         .expect("manual matching runtime should shut down");
 
     assert_eq!(report.input_state, MatchingRuntimeInputState::Closed);
+    assert_eq!(
+        report.lifecycle_state,
+        MatchingRuntimeLifecycleState::Shutdown
+    );
     assert_eq!(report.driver_report.shard_ids, vec![RuntimeShardId(0)]);
+    assert_eq!(
+        report.final_status.lifecycle_state,
+        MatchingRuntimeLifecycleState::Shutdown
+    );
     assert_eq!(
         report.final_status.input_state,
         MatchingRuntimeInputState::Closed
@@ -466,11 +478,66 @@ fn matching_runtime_shutdown_closes_input_without_draining_pending_work() {
     let status = runtime
         .status()
         .expect("manual matching runtime status should remain available");
+    assert_eq!(
+        status.lifecycle_state,
+        MatchingRuntimeLifecycleState::Shutdown
+    );
     let symbol_status = status
         .shard_status(RuntimeShardId(0))
         .and_then(|shard_status| shard_status.symbol_status(&btc))
         .expect("BTC-USDT status should be available");
     assert_eq!(symbol_status.pending_input_len, 1);
+}
+
+#[test]
+fn matching_runtime_shutdown_rejects_later_execution_without_losing_status() {
+    let btc = symbol("BTC-USDT");
+    let mut runtime = MatchingRuntime::new_for_symbols_with_config(
+        vec![btc.clone()],
+        MatchingRuntimeConfig::default(),
+    )
+    .expect("manual matching runtime should be supported");
+    let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
+    let mut output = TestJournalOutputAppender::new();
+
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+    runtime
+        .shutdown()
+        .expect("manual matching runtime should shut down");
+
+    assert_eq!(
+        runtime.run_once_all(
+            &mut journal_client,
+            &mut output,
+            ShardRuntimeRunOnceLimits {
+                max_input_entries_per_symbol: 1,
+                max_output_requests_per_symbol: 1,
+            },
+        ),
+        Err(MatchingRuntimeError::RuntimeShutdown)
+    );
+    assert_eq!(
+        runtime.run_configured_all(&mut journal_client, &mut output),
+        Err(MatchingRuntimeError::RuntimeShutdown)
+    );
+    assert_eq!(
+        runtime.run_until_idle_configured(&mut journal_client, &mut output),
+        Err(MatchingRuntimeError::RuntimeShutdown)
+    );
+    assert_eq!(
+        runtime.drain_configured(&mut journal_client, &mut output),
+        Err(MatchingRuntimeError::RuntimeShutdown)
+    );
+
+    let status = runtime
+        .status()
+        .expect("manual matching runtime status should remain queryable after shutdown");
+    assert_eq!(
+        status.lifecycle_state,
+        MatchingRuntimeLifecycleState::Shutdown
+    );
+    assert_eq!(status.shards_with_remaining_work(), vec![RuntimeShardId(0)]);
+    assert_eq!(output.read_all().len(), 0);
 }
 
 #[test]
@@ -908,6 +975,10 @@ fn matching_runtime_status_reports_closed_input_state() {
         .expect("manual matching runtime should report status");
 
     assert_eq!(status.input_state, MatchingRuntimeInputState::Closed);
+    assert_eq!(
+        status.lifecycle_state,
+        MatchingRuntimeLifecycleState::Running
+    );
     assert!(status.is_idle());
 }
 

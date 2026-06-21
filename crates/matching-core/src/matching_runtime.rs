@@ -19,11 +19,13 @@ pub struct MatchingRuntime {
     run_limit: ShardRuntimeRunLimit,
     run_until_idle_limit: MatchingRuntimeRunUntilIdleLimit,
     input_state: MatchingRuntimeInputState,
+    lifecycle_state: MatchingRuntimeLifecycleState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MatchingRuntimeError {
     InputClosed,
+    RuntimeShutdown,
     UnsupportedMode(RuntimeExecutionMode),
     RuntimeDriverRequired(RuntimeExecutionMode),
     RuntimeDriver(MatchingRuntimeDriverError),
@@ -35,6 +37,12 @@ pub enum MatchingRuntimeError {
 pub enum MatchingRuntimeInputState {
     Open,
     Closed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchingRuntimeLifecycleState {
+    Running,
+    Shutdown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +105,7 @@ pub struct MatchingRuntimeDrainReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchingRuntimeShutdownReport {
     pub input_state: MatchingRuntimeInputState,
+    pub lifecycle_state: MatchingRuntimeLifecycleState,
     pub driver_report: MatchingRuntimeDriverShutdownReport,
     pub final_status: MatchingRuntimeStatus,
 }
@@ -104,6 +113,7 @@ pub struct MatchingRuntimeShutdownReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchingRuntimeStatus {
     pub input_state: MatchingRuntimeInputState,
+    pub lifecycle_state: MatchingRuntimeLifecycleState,
     pub shard_statuses: Vec<MatchingRuntimeShardStatus>,
 }
 
@@ -158,6 +168,7 @@ impl MatchingRuntime {
                     run_limit,
                     run_until_idle_limit,
                     input_state: MatchingRuntimeInputState::Open,
+                    lifecycle_state: MatchingRuntimeLifecycleState::Running,
                 })
             }
             RuntimeExecutionMode::ThreadPerShard | RuntimeExecutionMode::AsyncTaskPerShard => Err(
@@ -184,6 +195,10 @@ impl MatchingRuntime {
 
     pub fn input_state(&self) -> MatchingRuntimeInputState {
         self.input_state
+    }
+
+    pub fn lifecycle_state(&self) -> MatchingRuntimeLifecycleState {
+        self.lifecycle_state
     }
 
     pub fn close_input(&mut self) {
@@ -227,6 +242,7 @@ impl MatchingRuntime {
 
         Ok(MatchingRuntimeStatus {
             input_state: self.input_state,
+            lifecycle_state: self.lifecycle_state,
             shard_statuses,
         })
     }
@@ -239,12 +255,22 @@ impl MatchingRuntime {
         Ok(())
     }
 
+    fn ensure_runtime_running(&self) -> Result<(), MatchingRuntimeError> {
+        if self.lifecycle_state == MatchingRuntimeLifecycleState::Shutdown {
+            return Err(MatchingRuntimeError::RuntimeShutdown);
+        }
+
+        Ok(())
+    }
+
     pub fn run_once_all(
         &mut self,
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
         limits: ShardRuntimeRunOnceLimits,
     ) -> Result<MatchingRuntimeRunOnceReport, MatchingRuntimeError> {
+        self.ensure_runtime_running()?;
+
         self.driver
             .run_once_all(journal_client, output, limits)
             .map_err(MatchingRuntimeError::from_driver_error)
@@ -257,6 +283,8 @@ impl MatchingRuntime {
         limits: ShardRuntimeRunOnceLimits,
         limit: ShardRuntimeRunLimit,
     ) -> Result<MatchingRuntimeRunReport, MatchingRuntimeError> {
+        self.ensure_runtime_running()?;
+
         self.driver
             .run_limited_all(journal_client, output, limits, limit)
             .map_err(MatchingRuntimeError::from_driver_error)
@@ -283,6 +311,7 @@ impl MatchingRuntime {
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
     ) -> Result<MatchingRuntimeDrainReport, MatchingRuntimeError> {
+        self.ensure_runtime_running()?;
         self.close_input();
 
         let run_report = self.run_until_idle_configured(journal_client, output)?;
@@ -309,10 +338,12 @@ impl MatchingRuntime {
             .driver
             .shutdown()
             .map_err(MatchingRuntimeError::from_driver_error)?;
+        self.lifecycle_state = MatchingRuntimeLifecycleState::Shutdown;
         let final_status = self.status()?;
 
         Ok(MatchingRuntimeShutdownReport {
             input_state: self.input_state,
+            lifecycle_state: self.lifecycle_state,
             driver_report,
             final_status,
         })
@@ -324,6 +355,8 @@ impl MatchingRuntime {
         output: &mut dyn JournalOutputAppender,
         limit: MatchingRuntimeRunUntilIdleLimit,
     ) -> Result<MatchingRuntimeRunUntilIdleReport, MatchingRuntimeError> {
+        self.ensure_runtime_running()?;
+
         let mut run_reports = Vec::new();
 
         for _ in 0..limit.max_run_calls {
