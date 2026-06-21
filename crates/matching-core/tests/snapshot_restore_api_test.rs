@@ -3,9 +3,12 @@ use matching_core::order::{Command, Order};
 use matching_core::order_book::OrderBook;
 use matching_core::per_symbol_execution_loop::SymbolRuntime;
 use matching_core::replay_runner::ReplayRunner;
+use matching_core::runtime_config::SnapshotVerificationConfig;
 use matching_core::snapshot_restore::{
     OrderBookSnapshot, SnapshotSerializationError, SnapshotVerificationMismatchDimension,
-    SnapshotVerificationOrchestrator, SnapshotVerificationSchedulingOutcome, SymbolRuntimeSnapshot,
+    SnapshotVerificationOrchestrator, SnapshotVerificationRetryAction,
+    SnapshotVerificationRetryTracker, SnapshotVerificationSchedulingOutcome,
+    SnapshotVerificationSchedulingReport, SymbolRuntimeSnapshot,
 };
 use matching_core::snapshot_store::{
     FileSnapshotStore, InMemorySnapshotStore, SnapshotManifestSigner, SnapshotManifestVerifier,
@@ -890,6 +893,137 @@ fn snapshot_verification_orchestrator_run_once_reports_mismatch_without_manifest
         .is_none());
 
     fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
+}
+
+#[test]
+fn snapshot_verification_retry_tracker_escalates_repeated_mismatch_from_public_api() {
+    let dir = temporary_snapshot_dir("snapshot-verification-retry-tracker-mismatch");
+    let symbol = Symbol("BTC-USDT".to_string());
+    let mut store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 3);
+    let signer = test_snapshot_manifest_signer();
+    let mut journal = TestJournalInputReader::new();
+    let mut retry_tracker = SnapshotVerificationRetryTracker::new(SnapshotVerificationConfig {
+        max_mismatch_attempts: 2,
+    });
+
+    journal.append(
+        CommandId(1),
+        Command::PlaceLimit(Order {
+            order_id: OrderId(1),
+            symbol: symbol.clone(),
+            side: Side::Buy,
+            price: Price(100),
+            quantity: Quantity(5),
+        }),
+    );
+    journal.append(
+        CommandId(2),
+        Command::PlaceLimit(Order {
+            order_id: OrderId(2),
+            symbol: symbol.clone(),
+            side: Side::Sell,
+            price: Price(105),
+            quantity: Quantity(3),
+        }),
+    );
+
+    let mut snapshot = snapshot_after_journal_prefix(&journal, 1);
+    snapshot.next_market_seq += 1;
+    snapshot.order_book_snapshot.resting_orders[0].quantity = Quantity(4);
+    store
+        .save_symbol_snapshot(&snapshot)
+        .expect("drifted snapshot should be written");
+
+    let report = SnapshotVerificationOrchestrator::new(symbol.clone())
+        .run_once(&journal, &store, &signer)
+        .expect("verification scheduling should run");
+
+    let first_decision = retry_tracker.record_scheduling_report(&report);
+    assert_eq!(
+        first_decision.action,
+        SnapshotVerificationRetryAction::Retry
+    );
+    assert_eq!(first_decision.symbol, symbol);
+    assert_eq!(first_decision.safe_point, Some(JournalSeq(1)));
+    assert_eq!(first_decision.attempt_count, 1);
+    assert_eq!(first_decision.failure_evidence, report.failure_evidence);
+
+    let second_decision = retry_tracker.record_scheduling_report(&report);
+    assert_eq!(
+        second_decision.action,
+        SnapshotVerificationRetryAction::Escalate
+    );
+    assert_eq!(second_decision.attempt_count, 2);
+    assert_eq!(
+        retry_tracker.mismatch_attempt_count(&symbol, JournalSeq(1)),
+        2
+    );
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
+}
+
+#[test]
+fn snapshot_verification_retry_tracker_clears_attempts_after_verified_from_public_api() {
+    let symbol = Symbol("BTC-USDT".to_string());
+    let mut retry_tracker = SnapshotVerificationRetryTracker::new(SnapshotVerificationConfig {
+        max_mismatch_attempts: 2,
+    });
+    let mismatch_report = SnapshotVerificationSchedulingReport {
+        symbol: symbol.clone(),
+        outcome: SnapshotVerificationSchedulingOutcome::Mismatch,
+        candidate_safe_point: Some(JournalSeq(11)),
+        skipped_already_verified_safe_points: Vec::new(),
+        verification: None,
+        failure_evidence: None,
+    };
+    let verified_report = SnapshotVerificationSchedulingReport {
+        symbol: symbol.clone(),
+        outcome: SnapshotVerificationSchedulingOutcome::Verified,
+        candidate_safe_point: Some(JournalSeq(11)),
+        skipped_already_verified_safe_points: Vec::new(),
+        verification: None,
+        failure_evidence: None,
+    };
+
+    retry_tracker.record_scheduling_report(&mismatch_report);
+    assert_eq!(
+        retry_tracker.mismatch_attempt_count(&symbol, JournalSeq(11)),
+        1
+    );
+
+    let clear_decision = retry_tracker.record_scheduling_report(&verified_report);
+    assert_eq!(
+        clear_decision.action,
+        SnapshotVerificationRetryAction::Clear
+    );
+    assert_eq!(
+        retry_tracker.mismatch_attempt_count(&symbol, JournalSeq(11)),
+        0
+    );
+}
+
+#[test]
+fn snapshot_verification_retry_tracker_no_candidate_is_no_action_from_public_api() {
+    let symbol = Symbol("BTC-USDT".to_string());
+    let mut retry_tracker = SnapshotVerificationRetryTracker::new(SnapshotVerificationConfig {
+        max_mismatch_attempts: 2,
+    });
+    let no_candidate_report = SnapshotVerificationSchedulingReport {
+        symbol: symbol.clone(),
+        outcome: SnapshotVerificationSchedulingOutcome::NoCandidate,
+        candidate_safe_point: None,
+        skipped_already_verified_safe_points: Vec::new(),
+        verification: None,
+        failure_evidence: None,
+    };
+
+    let decision = retry_tracker.record_scheduling_report(&no_candidate_report);
+
+    assert_eq!(decision.action, SnapshotVerificationRetryAction::NoAction);
+    assert_eq!(decision.symbol, symbol);
+    assert_eq!(decision.safe_point, None);
+    assert_eq!(decision.attempt_count, 0);
+    assert_eq!(decision.failure_evidence, None);
 }
 
 #[test]

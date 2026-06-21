@@ -3,8 +3,10 @@ use crate::order::Order;
 use crate::order_book::OrderBook;
 use crate::output_commit_boundary::OutputDigest;
 use crate::replay_runner::{ReplayComparisonResult, ReplayResult, ReplayRunner};
+use crate::runtime_config::SnapshotVerificationConfig;
 use crate::snapshot_store::{FileSnapshotStore, SnapshotManifestSigner, SnapshotStoreError};
 use crate::types::*;
+use std::collections::HashMap;
 
 const SNAPSHOT_MAGIC: &[u8; 8] = b"NVXSNP01";
 pub const SYMBOL_RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 1;
@@ -71,6 +73,105 @@ pub enum SnapshotVerificationSchedulingOutcome {
     NoCandidate,
     Verified,
     Mismatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotVerificationRetryDecision {
+    pub action: SnapshotVerificationRetryAction,
+    pub symbol: Symbol,
+    pub safe_point: Option<JournalSeq>,
+    pub attempt_count: usize,
+    pub failure_evidence: Option<SnapshotVerificationFailureEvidence>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotVerificationRetryAction {
+    NoAction,
+    Retry,
+    Escalate,
+    Clear,
+}
+
+#[derive(Debug, Clone)]
+pub struct SnapshotVerificationRetryTracker {
+    config: SnapshotVerificationConfig,
+    mismatch_attempts: HashMap<(Symbol, JournalSeq), usize>,
+}
+
+impl SnapshotVerificationRetryTracker {
+    pub fn new(config: SnapshotVerificationConfig) -> Self {
+        Self {
+            config,
+            mismatch_attempts: HashMap::new(),
+        }
+    }
+
+    pub fn record_scheduling_report(
+        &mut self,
+        report: &SnapshotVerificationSchedulingReport,
+    ) -> SnapshotVerificationRetryDecision {
+        match report.outcome {
+            SnapshotVerificationSchedulingOutcome::NoCandidate => {
+                SnapshotVerificationRetryDecision {
+                    action: SnapshotVerificationRetryAction::NoAction,
+                    symbol: report.symbol.clone(),
+                    safe_point: report.candidate_safe_point,
+                    attempt_count: 0,
+                    failure_evidence: None,
+                }
+            }
+            SnapshotVerificationSchedulingOutcome::Verified => {
+                if let Some(safe_point) = report.candidate_safe_point {
+                    self.mismatch_attempts
+                        .remove(&(report.symbol.clone(), safe_point));
+                }
+
+                SnapshotVerificationRetryDecision {
+                    action: SnapshotVerificationRetryAction::Clear,
+                    symbol: report.symbol.clone(),
+                    safe_point: report.candidate_safe_point,
+                    attempt_count: 0,
+                    failure_evidence: None,
+                }
+            }
+            SnapshotVerificationSchedulingOutcome::Mismatch => {
+                let Some(safe_point) = report.candidate_safe_point else {
+                    return SnapshotVerificationRetryDecision {
+                        action: SnapshotVerificationRetryAction::NoAction,
+                        symbol: report.symbol.clone(),
+                        safe_point: None,
+                        attempt_count: 0,
+                        failure_evidence: report.failure_evidence.clone(),
+                    };
+                };
+
+                let key = (report.symbol.clone(), safe_point);
+                let attempt_count = self.mismatch_attempts.entry(key).or_insert(0);
+                *attempt_count += 1;
+
+                let action = if *attempt_count >= self.config.max_mismatch_attempts {
+                    SnapshotVerificationRetryAction::Escalate
+                } else {
+                    SnapshotVerificationRetryAction::Retry
+                };
+
+                SnapshotVerificationRetryDecision {
+                    action,
+                    symbol: report.symbol.clone(),
+                    safe_point: Some(safe_point),
+                    attempt_count: *attempt_count,
+                    failure_evidence: report.failure_evidence.clone(),
+                }
+            }
+        }
+    }
+
+    pub fn mismatch_attempt_count(&self, symbol: &Symbol, safe_point: JournalSeq) -> usize {
+        self.mismatch_attempts
+            .get(&(symbol.clone(), safe_point))
+            .copied()
+            .unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Clone)]
