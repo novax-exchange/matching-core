@@ -249,6 +249,83 @@ fn file_snapshot_store_retains_latest_symbol_snapshots_within_limit_from_public_
     fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
 }
 
+#[test]
+fn file_snapshot_store_selects_latest_valid_snapshot_when_latest_is_corrupt_from_public_api() {
+    let dir = temporary_snapshot_dir("file-store-corrupt-latest");
+    let symbol = Symbol("BTC-USDT".to_string());
+    let mut store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 3);
+
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(10))
+        .expect("first snapshot should be written");
+    store
+        .save_symbol_snapshot(&symbol_runtime_snapshot_at_safe_point(11))
+        .expect("second snapshot should be written");
+
+    let mut corrupt_latest = symbol_runtime_snapshot_at_safe_point(12).to_canonical_bytes();
+    corrupt_latest[0] = b'X';
+    store
+        .write_raw_symbol_snapshot_bytes(symbol.clone(), JournalSeq(12), corrupt_latest)
+        .expect("corrupt latest snapshot should be written");
+
+    let report = store
+        .select_latest_valid_symbol_snapshot(&symbol)
+        .expect("snapshot selection should read the file store");
+
+    assert_eq!(
+        report
+            .selected
+            .expect("older retained snapshot should be selected")
+            .order_book_snapshot
+            .last_input_seq,
+        JournalSeq(11)
+    );
+    assert_eq!(report.rejected.len(), 1);
+    assert_eq!(report.rejected[0].record.safe_point, JournalSeq(12));
+    assert_eq!(
+        report.rejected[0].error,
+        SnapshotSerializationError::InvalidMagic
+    );
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
+}
+
+#[test]
+fn file_snapshot_store_reports_rejections_when_no_valid_snapshot_exists_from_public_api() {
+    let dir = temporary_snapshot_dir("file-store-all-corrupt");
+    let symbol = Symbol("BTC-USDT".to_string());
+    let store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 2);
+
+    let mut first = symbol_runtime_snapshot_at_safe_point(10).to_canonical_bytes();
+    first[0] = b'X';
+    store
+        .write_raw_symbol_snapshot_bytes(symbol.clone(), JournalSeq(10), first)
+        .expect("first corrupt snapshot should be written");
+
+    let mut second = symbol_runtime_snapshot_at_safe_point(11).to_canonical_bytes();
+    second[0] = b'X';
+    store
+        .write_raw_symbol_snapshot_bytes(symbol.clone(), JournalSeq(11), second)
+        .expect("second corrupt snapshot should be written");
+
+    let report = store
+        .select_latest_valid_symbol_snapshot(&symbol)
+        .expect("snapshot selection should read corrupt records");
+
+    assert_eq!(report.selected, None);
+    assert_eq!(report.selected_record, None);
+    assert_eq!(
+        report
+            .rejected
+            .iter()
+            .map(|rejected| rejected.record.safe_point)
+            .collect::<Vec<_>>(),
+        vec![JournalSeq(11), JournalSeq(10)]
+    );
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
+}
+
 struct TestJournalInputReader {
     entries: Vec<JournalInputEntry>,
 }

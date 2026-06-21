@@ -17,6 +17,19 @@ pub enum SnapshotStoreError {
     SnapshotSerialization(SnapshotSerializationError),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotSelectionReport {
+    pub selected: Option<SymbolRuntimeSnapshot>,
+    pub selected_record: Option<SnapshotRecord>,
+    pub rejected: Vec<RejectedSnapshotRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RejectedSnapshotRecord {
+    pub record: SnapshotRecord,
+    pub error: SnapshotSerializationError,
+}
+
 pub trait SnapshotStore {
     fn save_symbol_snapshot(
         &mut self,
@@ -134,6 +147,54 @@ impl FileSnapshotStore {
         let mut records = self.read_symbol_records(symbol)?;
         records.sort_by_key(|record| record.safe_point);
         Ok(records)
+    }
+
+    pub fn write_raw_symbol_snapshot_bytes(
+        &self,
+        symbol: Symbol,
+        safe_point: JournalSeq,
+        bytes: Vec<u8>,
+    ) -> Result<SnapshotRecord, SnapshotStoreError> {
+        let symbol_dir = self.symbol_dir(&symbol);
+
+        fs::create_dir_all(&symbol_dir).map_err(io_error)?;
+        fs::write(self.snapshot_path(&symbol, safe_point), &bytes).map_err(io_error)?;
+        self.retain_latest_symbol_snapshots(&symbol)?;
+
+        Ok(SnapshotRecord {
+            symbol,
+            safe_point,
+            bytes,
+        })
+    }
+
+    pub fn select_latest_valid_symbol_snapshot(
+        &self,
+        symbol: &Symbol,
+    ) -> Result<SnapshotSelectionReport, SnapshotStoreError> {
+        let records = self.read_symbol_records(symbol)?;
+        let mut rejected = Vec::new();
+
+        for record in records.into_iter().rev() {
+            match SymbolRuntimeSnapshot::from_canonical_bytes(&record.bytes) {
+                Ok(snapshot) => {
+                    return Ok(SnapshotSelectionReport {
+                        selected: Some(snapshot),
+                        selected_record: Some(record),
+                        rejected,
+                    });
+                }
+                Err(error) => {
+                    rejected.push(RejectedSnapshotRecord { record, error });
+                }
+            }
+        }
+
+        Ok(SnapshotSelectionReport {
+            selected: None,
+            selected_record: None,
+            rejected,
+        })
     }
 
     fn read_symbol_records(

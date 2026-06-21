@@ -755,6 +755,88 @@ fn runtime_loop_can_restore_from_file_snapshot_store_after_process_restart() {
 }
 
 #[test]
+fn runtime_loop_can_restore_from_older_file_snapshot_when_latest_is_corrupt() {
+    let btc = Symbol("BTC-USDT".to_string());
+    let dir = temporary_snapshot_dir("runtime-loop-file-snapshot-fallback");
+    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone()], 4, 8);
+    let mut journal_client = OutputJournalClient::new();
+    let mut output = AcceptingJournalOutputAppender::new();
+    let mut writer_store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 2);
+
+    assert_eq!(
+        runtime_loop.enqueue_input(limit_entry(1, 10, 100, btc.clone(), Side::Sell, 100, 1,)),
+        Ok(())
+    );
+    runtime_loop
+        .run_tick(
+            &mut journal_client,
+            &mut output,
+            RuntimeLoopTickLimits {
+                max_input_entries_per_symbol: 1,
+                max_output_requests_per_symbol: 10,
+            },
+        )
+        .expect("runtime loop should advance a safe point");
+    let saved = runtime_loop
+        .save_symbol_snapshot(&btc, &mut writer_store)
+        .expect("file snapshot store should accept runtime snapshot")
+        .expect("safe point should produce a snapshot");
+
+    let mut corrupt_latest = saved.bytes.clone();
+    corrupt_latest[0] = b'X';
+    writer_store
+        .write_raw_symbol_snapshot_bytes(btc.clone(), JournalSeq(2), corrupt_latest)
+        .expect("corrupt latest snapshot should be written");
+
+    let reader_store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 2);
+    let selection = reader_store
+        .select_latest_valid_symbol_snapshot(&btc)
+        .expect("file snapshot selection should read retained snapshots");
+
+    assert_eq!(
+        selection
+            .selected_record
+            .as_ref()
+            .expect("older snapshot record should be selected")
+            .safe_point,
+        JournalSeq(1)
+    );
+    assert_eq!(selection.rejected[0].record.safe_point, JournalSeq(2));
+
+    let mut restored_loop = RuntimeLoop::new_from_symbol_snapshots(
+        vec![selection
+            .selected
+            .expect("older valid snapshot should be selected")],
+        4,
+        8,
+    );
+    let mut restored_journal_client = OutputJournalClient::new();
+    let mut restored_output = AcceptingJournalOutputAppender::new();
+
+    assert_eq!(
+        restored_loop.enqueue_input(limit_entry(2, 11, 101, btc.clone(), Side::Buy, 100, 1,)),
+        Ok(())
+    );
+    restored_loop
+        .run_tick(
+            &mut restored_journal_client,
+            &mut restored_output,
+            RuntimeLoopTickLimits {
+                max_input_entries_per_symbol: 1,
+                max_output_requests_per_symbol: 10,
+            },
+        )
+        .expect("restored runtime loop should process tail from older snapshot");
+
+    assert_eq!(
+        restored_loop.last_input_seq(&btc),
+        Some(Some(JournalSeq(2)))
+    );
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
+}
+
+#[test]
 fn runtime_loop_can_validate_configuration_before_running_tick() {
     let btc = Symbol("BTC-USDT".to_string());
     let eth = Symbol("ETH-USDT".to_string());
