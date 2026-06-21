@@ -151,9 +151,7 @@ impl RuntimeHost {
                     input_state: RuntimeHostInputState::Open,
                 })
             }
-            RuntimeHostMode::ThreadPerShard
-            | RuntimeHostMode::AsyncTaskPerShard
-            | RuntimeHostMode::ProcessPerShard => {
+            RuntimeHostMode::ThreadPerShard | RuntimeHostMode::AsyncTaskPerShard => {
                 Err(RuntimeHostError::RuntimeDriverRequired(config.host.mode))
             }
             unsupported => Err(RuntimeHostError::UnsupportedMode(unsupported)),

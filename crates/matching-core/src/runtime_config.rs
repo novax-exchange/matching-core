@@ -81,7 +81,6 @@ pub enum RuntimeHostMode {
     Inline,
     ThreadPerShard,
     AsyncTaskPerShard,
-    ProcessPerShard,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

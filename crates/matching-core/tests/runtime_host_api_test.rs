@@ -190,26 +190,23 @@ fn runtime_host_rejects_unsupported_host_modes_from_public_api() {
 }
 
 #[test]
-fn runtime_host_rejects_async_and_process_modes_until_runtime_driver_exists_from_public_api() {
-    for mode in [
-        RuntimeHostMode::AsyncTaskPerShard,
-        RuntimeHostMode::ProcessPerShard,
-    ] {
-        let btc = symbol("BTC-USDT");
-        let mut config = MatchingRuntimeConfig::default();
-        config.host = RuntimeHostConfig {
-            mode,
-            max_run_cycles_per_call: 1024,
-            max_run_calls_per_until_idle: 1024,
-        };
+fn runtime_host_rejects_async_mode_until_runtime_driver_exists_from_public_api() {
+    let btc = symbol("BTC-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.host = RuntimeHostConfig {
+        mode: RuntimeHostMode::AsyncTaskPerShard,
+        max_run_cycles_per_call: 1024,
+        max_run_calls_per_until_idle: 1024,
+    };
 
-        let result = RuntimeHost::new_for_symbols_with_config(vec![btc], config);
+    let result = RuntimeHost::new_for_symbols_with_config(vec![btc], config);
 
-        assert!(matches!(
-            result,
-            Err(RuntimeHostError::RuntimeDriverRequired(rejected_mode)) if rejected_mode == mode
-        ));
-    }
+    assert!(matches!(
+        result,
+        Err(RuntimeHostError::RuntimeDriverRequired(
+            RuntimeHostMode::AsyncTaskPerShard
+        ))
+    ));
 }
 
 #[test]
