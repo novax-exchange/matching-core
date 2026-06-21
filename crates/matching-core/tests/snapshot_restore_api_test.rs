@@ -5,7 +5,7 @@ use matching_core::per_symbol_execution_loop::SymbolRuntime;
 use matching_core::replay_runner::ReplayRunner;
 use matching_core::snapshot_restore::{
     OrderBookSnapshot, SnapshotSerializationError, SnapshotVerificationOrchestrator,
-    SymbolRuntimeSnapshot,
+    SnapshotVerificationSchedulingOutcome, SymbolRuntimeSnapshot,
 };
 use matching_core::snapshot_store::{
     FileSnapshotStore, InMemorySnapshotStore, SnapshotManifestSigner, SnapshotManifestVerifier,
@@ -616,6 +616,240 @@ fn snapshot_verification_orchestrator_does_not_write_manifest_after_replay_misma
             .expect("manifest lookup should read store"),
         None
     );
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
+}
+
+#[test]
+fn snapshot_verification_orchestrator_run_once_signs_latest_unverified_candidate_from_public_api() {
+    let dir = temporary_snapshot_dir("snapshot-verification-orchestrator-run-once-latest");
+    let symbol = Symbol("BTC-USDT".to_string());
+    let mut store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 3);
+    let signer = test_snapshot_manifest_signer();
+    let verifier = trusted_test_snapshot_manifest_verifier();
+    let mut journal = TestJournalInputReader::new();
+
+    journal.append(
+        CommandId(1),
+        Command::PlaceLimit(Order {
+            order_id: OrderId(1),
+            symbol: symbol.clone(),
+            side: Side::Buy,
+            price: Price(100),
+            quantity: Quantity(5),
+        }),
+    );
+    journal.append(
+        CommandId(2),
+        Command::PlaceLimit(Order {
+            order_id: OrderId(2),
+            symbol: symbol.clone(),
+            side: Side::Sell,
+            price: Price(105),
+            quantity: Quantity(3),
+        }),
+    );
+    journal.append(
+        CommandId(3),
+        Command::PlaceLimit(Order {
+            order_id: OrderId(3),
+            symbol: symbol.clone(),
+            side: Side::Buy,
+            price: Price(99),
+            quantity: Quantity(2),
+        }),
+    );
+
+    store
+        .save_symbol_snapshot(&snapshot_after_journal_prefix(&journal, 1))
+        .expect("first snapshot should be written");
+    store
+        .save_symbol_snapshot(&snapshot_after_journal_prefix(&journal, 2))
+        .expect("second snapshot should be written");
+
+    let report = SnapshotVerificationOrchestrator::new(symbol.clone())
+        .run_once(&journal, &store, &signer)
+        .expect("verification scheduling should run");
+
+    assert_eq!(report.candidate_safe_point, Some(JournalSeq(2)));
+    assert_eq!(
+        report.outcome,
+        SnapshotVerificationSchedulingOutcome::Verified
+    );
+    assert_eq!(report.skipped_already_verified_safe_points, Vec::new());
+    assert!(report
+        .verification
+        .as_ref()
+        .expect("latest unverified candidate should be verified")
+        .comparison
+        .is_match());
+    assert!(
+        report
+            .verification
+            .expect("latest unverified candidate should be verified")
+            .verified_manifest_written
+    );
+
+    let selection = store
+        .select_latest_trusted_verified_symbol_snapshot(&symbol, &verifier)
+        .expect("trusted verified snapshot should be selectable");
+
+    assert_eq!(
+        selection
+            .selected_record
+            .expect("signed snapshot should be selected")
+            .safe_point,
+        JournalSeq(2)
+    );
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
+}
+
+#[test]
+fn snapshot_verification_orchestrator_run_once_skips_verified_candidate_from_public_api() {
+    let dir = temporary_snapshot_dir("snapshot-verification-orchestrator-run-once-skip-verified");
+    let symbol = Symbol("BTC-USDT".to_string());
+    let mut store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 3);
+    let signer = test_snapshot_manifest_signer();
+    let mut journal = TestJournalInputReader::new();
+
+    journal.append(
+        CommandId(1),
+        Command::PlaceLimit(Order {
+            order_id: OrderId(1),
+            symbol: symbol.clone(),
+            side: Side::Buy,
+            price: Price(100),
+            quantity: Quantity(5),
+        }),
+    );
+    journal.append(
+        CommandId(2),
+        Command::PlaceLimit(Order {
+            order_id: OrderId(2),
+            symbol: symbol.clone(),
+            side: Side::Sell,
+            price: Price(105),
+            quantity: Quantity(3),
+        }),
+    );
+
+    store
+        .save_symbol_snapshot(&snapshot_after_journal_prefix(&journal, 1))
+        .expect("first snapshot should be written");
+    store
+        .save_symbol_snapshot(&snapshot_after_journal_prefix(&journal, 2))
+        .expect("second snapshot should be written");
+    store
+        .mark_symbol_snapshot_verified_by(&symbol, JournalSeq(2), &signer)
+        .expect("latest snapshot should be signed")
+        .expect("latest snapshot should exist before signing");
+
+    let report = SnapshotVerificationOrchestrator::new(symbol.clone())
+        .run_once(&journal, &store, &signer)
+        .expect("verification scheduling should run");
+
+    assert_eq!(report.candidate_safe_point, Some(JournalSeq(1)));
+    assert_eq!(
+        report.outcome,
+        SnapshotVerificationSchedulingOutcome::Verified
+    );
+    assert_eq!(
+        report.skipped_already_verified_safe_points,
+        vec![JournalSeq(2)]
+    );
+    assert!(
+        report
+            .verification
+            .expect("older unverified candidate should be verified")
+            .verified_manifest_written
+    );
+    assert!(store
+        .load_symbol_snapshot_verification_manifest(&symbol, JournalSeq(1))
+        .expect("manifest lookup should read store")
+        .is_some());
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
+}
+
+#[test]
+fn snapshot_verification_orchestrator_run_once_reports_no_candidate_from_public_api() {
+    let dir = temporary_snapshot_dir("snapshot-verification-orchestrator-run-once-no-candidate");
+    let symbol = Symbol("BTC-USDT".to_string());
+    let store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 3);
+    let signer = test_snapshot_manifest_signer();
+    let journal = TestJournalInputReader::new();
+
+    let report = SnapshotVerificationOrchestrator::new(symbol.clone())
+        .run_once(&journal, &store, &signer)
+        .expect("verification scheduling should run");
+
+    assert_eq!(report.symbol, symbol);
+    assert_eq!(
+        report.outcome,
+        SnapshotVerificationSchedulingOutcome::NoCandidate
+    );
+    assert_eq!(report.candidate_safe_point, None);
+    assert_eq!(report.skipped_already_verified_safe_points, Vec::new());
+    assert_eq!(report.verification, None);
+
+    fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
+}
+
+#[test]
+fn snapshot_verification_orchestrator_run_once_reports_mismatch_without_manifest_from_public_api() {
+    let dir = temporary_snapshot_dir("snapshot-verification-orchestrator-run-once-mismatch");
+    let symbol = Symbol("BTC-USDT".to_string());
+    let mut store = FileSnapshotStore::new_with_retention_limit(dir.clone(), 3);
+    let signer = test_snapshot_manifest_signer();
+    let mut journal = TestJournalInputReader::new();
+
+    journal.append(
+        CommandId(1),
+        Command::PlaceLimit(Order {
+            order_id: OrderId(1),
+            symbol: symbol.clone(),
+            side: Side::Buy,
+            price: Price(100),
+            quantity: Quantity(5),
+        }),
+    );
+    journal.append(
+        CommandId(2),
+        Command::PlaceLimit(Order {
+            order_id: OrderId(2),
+            symbol: symbol.clone(),
+            side: Side::Sell,
+            price: Price(105),
+            quantity: Quantity(3),
+        }),
+    );
+
+    let mut snapshot = snapshot_after_journal_prefix(&journal, 1);
+    snapshot.next_market_seq += 1;
+    store
+        .save_symbol_snapshot(&snapshot)
+        .expect("drifted snapshot should be written");
+
+    let report = SnapshotVerificationOrchestrator::new(symbol.clone())
+        .run_once(&journal, &store, &signer)
+        .expect("verification scheduling should run");
+
+    assert_eq!(report.candidate_safe_point, Some(JournalSeq(1)));
+    assert_eq!(
+        report.outcome,
+        SnapshotVerificationSchedulingOutcome::Mismatch
+    );
+    assert!(
+        !report
+            .verification
+            .expect("mismatched candidate should still produce comparison evidence")
+            .verified_manifest_written
+    );
+    assert!(store
+        .load_symbol_snapshot_verification_manifest(&symbol, JournalSeq(1))
+        .expect("manifest lookup should read store")
+        .is_none());
 
     fs::remove_dir_all(dir).expect("temporary snapshot dir should be removed");
 }

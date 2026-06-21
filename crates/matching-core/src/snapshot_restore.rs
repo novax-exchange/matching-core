@@ -33,6 +33,22 @@ pub struct SnapshotVerificationReport {
     pub verified_manifest_written: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotVerificationSchedulingReport {
+    pub symbol: Symbol,
+    pub outcome: SnapshotVerificationSchedulingOutcome,
+    pub candidate_safe_point: Option<JournalSeq>,
+    pub skipped_already_verified_safe_points: Vec<JournalSeq>,
+    pub verification: Option<SnapshotVerificationReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnapshotVerificationSchedulingOutcome {
+    NoCandidate,
+    Verified,
+    Mismatch,
+}
+
 #[derive(Debug, Clone)]
 pub struct SnapshotVerificationOrchestrator {
     symbol: Symbol,
@@ -69,6 +85,81 @@ impl SnapshotVerificationOrchestrator {
             comparison,
             verified_manifest_written,
         })
+    }
+
+    pub fn run_once(
+        &self,
+        journal: &dyn JournalInputReader,
+        snapshot_store: &FileSnapshotStore,
+        signer: &SnapshotManifestSigner,
+    ) -> Result<SnapshotVerificationSchedulingReport, SnapshotStoreError> {
+        let mut skipped_already_verified_safe_points = Vec::new();
+
+        for record in snapshot_store
+            .symbol_snapshot_records(&self.symbol)?
+            .into_iter()
+            .rev()
+        {
+            if snapshot_store
+                .load_symbol_snapshot_verification_manifest(&self.symbol, record.safe_point)?
+                .is_some()
+            {
+                skipped_already_verified_safe_points.push(record.safe_point);
+                continue;
+            }
+
+            let snapshot = SymbolRuntimeSnapshot::from_canonical_bytes(&record.bytes)
+                .map_err(SnapshotStoreError::SnapshotSerialization)?;
+            let full_replay_result = ReplayRunner::new(self.symbol.clone()).replay_result(journal);
+            let expected = expected_replay_tail_result_after_safe_point(
+                &full_replay_result,
+                record.safe_point,
+            );
+            let verification = self.verify_and_sign_snapshot_candidate(
+                &snapshot,
+                journal,
+                &expected,
+                snapshot_store,
+                signer,
+            )?;
+            let outcome = if verification.comparison.is_match() {
+                SnapshotVerificationSchedulingOutcome::Verified
+            } else {
+                SnapshotVerificationSchedulingOutcome::Mismatch
+            };
+
+            return Ok(SnapshotVerificationSchedulingReport {
+                symbol: self.symbol.clone(),
+                outcome,
+                candidate_safe_point: Some(record.safe_point),
+                skipped_already_verified_safe_points,
+                verification: Some(verification),
+            });
+        }
+
+        Ok(SnapshotVerificationSchedulingReport {
+            symbol: self.symbol.clone(),
+            outcome: SnapshotVerificationSchedulingOutcome::NoCandidate,
+            candidate_safe_point: None,
+            skipped_already_verified_safe_points,
+            verification: None,
+        })
+    }
+}
+
+fn expected_replay_tail_result_after_safe_point(
+    full_replay_result: &ReplayResult,
+    safe_point: JournalSeq,
+) -> ReplayResult {
+    ReplayResult {
+        checksum: full_replay_result.checksum,
+        last_replayed_seq: full_replay_result.last_replayed_seq,
+        output_entries: full_replay_result
+            .output_entries
+            .iter()
+            .filter(|entry| entry.journal_seq.0 > safe_point.0)
+            .cloned()
+            .collect(),
     }
 }
 
