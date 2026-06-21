@@ -488,6 +488,11 @@ fn matching_runtime_drain_configured_closes_input_and_drains_existing_work() {
     assert_eq!(runtime.input_state(), MatchingRuntimeInputState::Closed);
     assert_eq!(report.stop_reason, MatchingRuntimeDrainStopReason::Drained);
     assert!(report.is_drained());
+    assert!(!report.has_work_remaining());
+    assert_eq!(
+        report.shards_with_remaining_work(),
+        Vec::<RuntimeShardId>::new()
+    );
     assert_eq!(report.configured_run_count(), 2);
     assert_eq!(output.read_all().len(), 2);
     assert_eq!(
@@ -515,7 +520,9 @@ fn matching_runtime_drain_configured_reports_blocked_output() {
 
     assert_eq!(runtime.input_state(), MatchingRuntimeInputState::Closed);
     assert_eq!(report.stop_reason, MatchingRuntimeDrainStopReason::Blocked);
+    assert!(report.has_work_remaining());
     assert!(report.has_blocked_symbols());
+    assert_eq!(report.shards_with_remaining_work(), vec![RuntimeShardId(0)]);
     assert_eq!(report.blocked_shards(), vec![RuntimeShardId(0)]);
 }
 
@@ -749,6 +756,41 @@ fn matching_runtime_run_until_idle_reports_call_limit_before_idle() {
     assert_eq!(report.configured_run_count(), 2);
     assert!(report.has_work_remaining());
     assert_eq!(output.read_all().len(), 2);
+}
+
+#[test]
+fn matching_runtime_run_until_idle_reports_final_status_when_no_run_is_allowed() {
+    let btc = symbol("BTC-USDT");
+    let mut runtime = MatchingRuntime::new_for_symbols_with_config(
+        vec![btc.clone()],
+        MatchingRuntimeConfig::default(),
+    )
+    .expect("manual matching runtime should be supported");
+    let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
+    let mut output = TestJournalOutputAppender::new();
+
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+
+    let report = runtime
+        .run_until_idle(
+            &mut journal_client,
+            &mut output,
+            MatchingRuntimeRunUntilIdleLimit { max_run_calls: 0 },
+        )
+        .expect("manual matching runtime should report final status without running");
+
+    assert_eq!(
+        report.stop_reason,
+        MatchingRuntimeRunUntilIdleStopReason::CallLimitReached
+    );
+    assert_eq!(report.configured_run_count(), 0);
+    assert!(report.has_work_remaining());
+    assert_eq!(report.shards_with_remaining_work(), vec![RuntimeShardId(0)]);
+    assert_eq!(
+        report.final_status.input_state,
+        MatchingRuntimeInputState::Open
+    );
+    assert_eq!(output.read_all().len(), 0);
 }
 
 #[test]

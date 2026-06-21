@@ -78,6 +78,7 @@ pub enum MatchingRuntimeRunUntilIdleStopReason {
 pub struct MatchingRuntimeRunUntilIdleReport {
     pub run_reports: Vec<MatchingRuntimeRunReport>,
     pub stop_reason: MatchingRuntimeRunUntilIdleStopReason,
+    pub final_status: MatchingRuntimeStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -338,16 +339,22 @@ impl MatchingRuntime {
             run_reports.push(run_report);
 
             if let Some(stop_reason) = stop_reason {
+                let final_status = self.status()?;
+
                 return Ok(MatchingRuntimeRunUntilIdleReport {
                     run_reports,
                     stop_reason,
+                    final_status,
                 });
             }
         }
 
+        let final_status = self.status()?;
+
         Ok(MatchingRuntimeRunUntilIdleReport {
             run_reports,
             stop_reason: MatchingRuntimeRunUntilIdleStopReason::CallLimitReached,
+            final_status,
         })
     }
 }
@@ -599,21 +606,19 @@ impl MatchingRuntimeRunUntilIdleReport {
     }
 
     pub fn has_work_remaining(&self) -> bool {
-        self.last_run_report()
-            .map(MatchingRuntimeRunReport::has_work_remaining)
-            .unwrap_or(false)
+        self.final_status.has_work_remaining()
     }
 
     pub fn has_blocked_symbols(&self) -> bool {
-        self.last_run_report()
-            .map(MatchingRuntimeRunReport::has_blocked_symbols)
-            .unwrap_or(false)
+        self.final_status.has_blocked_symbols()
     }
 
     pub fn blocked_shards(&self) -> Vec<RuntimeShardId> {
-        self.last_run_report()
-            .map(MatchingRuntimeRunReport::blocked_shards)
-            .unwrap_or_default()
+        self.final_status.blocked_shards()
+    }
+
+    pub fn shards_with_remaining_work(&self) -> Vec<RuntimeShardId> {
+        self.final_status.shards_with_remaining_work()
     }
 }
 
@@ -624,6 +629,14 @@ impl MatchingRuntimeDrainReport {
 
     pub fn is_drained(&self) -> bool {
         self.stop_reason == MatchingRuntimeDrainStopReason::Drained
+    }
+
+    pub fn has_work_remaining(&self) -> bool {
+        self.run_report.has_work_remaining()
+    }
+
+    pub fn shards_with_remaining_work(&self) -> Vec<RuntimeShardId> {
+        self.run_report.shards_with_remaining_work()
     }
 
     pub fn has_blocked_symbols(&self) -> bool {
