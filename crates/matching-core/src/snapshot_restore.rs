@@ -1,5 +1,8 @@
+use crate::journal_adapter::JournalInputReader;
 use crate::order::Order;
 use crate::order_book::OrderBook;
+use crate::replay_runner::{ReplayComparisonResult, ReplayResult, ReplayRunner};
+use crate::snapshot_store::{FileSnapshotStore, SnapshotManifestSigner, SnapshotStoreError};
 use crate::types::*;
 
 const SNAPSHOT_MAGIC: &[u8; 8] = b"NVXSNP01";
@@ -20,6 +23,53 @@ pub struct OrderBookSnapshot {
     pub last_input_seq: JournalSeq,
     pub checksum: Checksum,
     pub resting_orders: Vec<Order>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotVerificationReport {
+    pub symbol: Symbol,
+    pub safe_point: JournalSeq,
+    pub comparison: ReplayComparisonResult,
+    pub verified_manifest_written: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SnapshotVerificationOrchestrator {
+    symbol: Symbol,
+}
+
+impl SnapshotVerificationOrchestrator {
+    pub fn new(symbol: Symbol) -> Self {
+        Self { symbol }
+    }
+
+    pub fn verify_and_sign_snapshot_candidate(
+        &self,
+        snapshot: &SymbolRuntimeSnapshot,
+        journal: &dyn JournalInputReader,
+        expected: &ReplayResult,
+        snapshot_store: &FileSnapshotStore,
+        signer: &SnapshotManifestSigner,
+    ) -> Result<SnapshotVerificationReport, SnapshotStoreError> {
+        let safe_point = snapshot.order_book_snapshot.last_input_seq;
+        let actual = ReplayRunner::new(self.symbol.clone())
+            .replay_result_from_snapshot(snapshot.clone(), journal);
+        let comparison = actual.compare_with(expected);
+        let verified_manifest_written = if comparison.is_match() {
+            snapshot_store
+                .mark_symbol_snapshot_verified_by(&self.symbol, safe_point, signer)?
+                .is_some()
+        } else {
+            false
+        };
+
+        Ok(SnapshotVerificationReport {
+            symbol: self.symbol.clone(),
+            safe_point,
+            comparison,
+            verified_manifest_written,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
