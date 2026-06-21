@@ -1,8 +1,8 @@
-# NovaX Matching Core
+# Matching Core
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-NovaX Matching Core is the deterministic matching library behind the NovaX Matching Service.
+Matching Core is a deterministic matching library for a Matching Service.
 
 This repository is not the whole exchange and not yet the production service process. It is the part that must stay explainable under replay: confirmed input goes in, order books change in a deterministic way, matching output is committed durably, and safe points move only after that output is known to be durable.
 
@@ -19,7 +19,7 @@ It does not own order-entry APIs, account balances, custody, settlement, fee cal
 
 ## Architecture
 
-The diagrams below come from the Matching Service architecture reference in `docs/matching-service-reference/Matching Service.md`.
+The diagrams below mirror the Matching Service architecture reference.
 
 ### Service Context
 
@@ -168,7 +168,7 @@ The core crate already has working pieces for:
 
 - Domain types, command validation, limit orders, cancellation, acknowledgements, trades, and market events.
 - Deterministic bid / ask books with FIFO price levels, indexed cancellation, checksum, snapshot, and restore.
-- Multi-symbol runtime management, symbol routing, bounded handoff queues, configured manual matching runtime runs, input-batch preflight, drain boundaries, pending output pressure, and runtime policy configuration.
+- Multi-symbol runtime management, symbol routing, bounded handoff queues, configured inline matching runtime runs, input-batch preflight, drain boundaries, pending output pressure, and runtime policy configuration.
 - Output batch identity, output commit retry / query handling, and safe-point advancement after durable output.
 - Replay, snapshot storage, verified manifests, and snapshot verification evidence.
 
@@ -197,13 +197,7 @@ feat(core): add shard runtime scheduling
 
 ## Documentation
 
-The full Matching Service architecture reference is maintained in the NovaX architecture workspace and exposed locally through:
-
-```text
-docs/matching-service-reference
-```
-
-The repository-local roadmap lives in:
+The full Matching Service architecture reference is maintained outside this repository. The repository-local roadmap lives in:
 
 ```text
 docs/roadmap.md

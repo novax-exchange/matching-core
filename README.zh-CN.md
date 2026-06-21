@@ -1,8 +1,8 @@
-# NovaX Matching Core
+# Matching Core
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-NovaX Matching Core 是 NovaX Matching Service 背后的确定性撮合库。
+Matching Core 是面向 Matching Service 的确定性撮合库。
 
 这个仓库不是完整交易所，也还不是生产级 service process。它负责那条必须能被 replay 解释清楚的核心路径：confirmed input 进入系统，order book 以确定性方式变化，matching output 先完成 durable commit，然后 safe point 才能推进。
 
@@ -19,7 +19,7 @@ NovaX Matching Core 是 NovaX Matching Service 背后的确定性撮合库。
 
 ## 架构
 
-下面两张图直接来自 Matching Service 架构参考：`docs/matching-service-reference/Matching Service.md`。
+下面两张图对齐 Matching Service 架构参考。
 
 ### Service Context
 
@@ -168,7 +168,7 @@ flowchart TB
 
 - Domain types、command validation、limit order、cancel、ack、trade 和 market event。
 - 确定性的 bid / ask book、同价位 FIFO、indexed cancellation、checksum、snapshot 和 restore。
-- Multi-symbol runtime management、symbol routing、bounded handoff queue、configured manual matching runtime run、input-batch preflight、drain boundary、pending output pressure 和 runtime policy config。
+- Multi-symbol runtime management、symbol routing、bounded handoff queue、configured inline matching runtime run、input-batch preflight、drain boundary、pending output pressure 和 runtime policy config。
 - Output batch identity、output commit retry / query handling，以及 durable output 之后的 safe-point advancement。
 - Replay、snapshot storage、verified manifest 和 snapshot verification evidence。
 
@@ -197,13 +197,7 @@ feat(core): add shard runtime scheduling
 
 ## 文档
 
-完整的 Matching Service 架构参考维护在 NovaX architecture workspace 中，本地通过下面路径暴露：
-
-```text
-docs/matching-service-reference
-```
-
-仓库内 roadmap 在：
+完整的 Matching Service 架构参考维护在这个仓库外。仓库内 roadmap 在：
 
 ```text
 docs/roadmap.md

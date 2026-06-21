@@ -1,6 +1,6 @@
 # Matching Core Roadmap
 
-This document is the repository-local roadmap for NovaX Matching Core. It records the current learning and implementation plan for this codebase. Do not rely on external NovaX project notes for the active status of this repository.
+This document is the repository-local roadmap for Matching Core. It records the current learning and implementation plan for this codebase. Do not rely on external project notes for the active status of this repository.
 
 ## Learning Positioning
 
