@@ -24,6 +24,7 @@ pub struct RuntimeHost {
 pub enum RuntimeHostError {
     InputClosed,
     UnsupportedMode(RuntimeHostMode),
+    RuntimeDriverRequired(RuntimeHostMode),
     Topology(RuntimeTopologyError),
     RuntimeLoop(RuntimeLoopError),
 }
@@ -141,6 +142,11 @@ impl RuntimeHost {
                     run_until_idle_limit,
                     input_state: RuntimeHostInputState::Open,
                 })
+            }
+            RuntimeHostMode::ThreadPerShard
+            | RuntimeHostMode::AsyncTaskPerShard
+            | RuntimeHostMode::ProcessPerShard => {
+                Err(RuntimeHostError::RuntimeDriverRequired(config.host.mode))
             }
             unsupported => Err(RuntimeHostError::UnsupportedMode(unsupported)),
         }
