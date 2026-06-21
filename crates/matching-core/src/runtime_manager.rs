@@ -12,6 +12,7 @@ use crate::per_symbol_execution_loop::{
     PerSymbolExecutionLoopOutputCommitStepError, PerSymbolExecutionLoopOutputCommitStepReport,
     SymbolRuntime,
 };
+use crate::snapshot_restore::SymbolRuntimeSnapshot;
 use crate::types::{Checksum, JournalSeq, Symbol};
 use std::collections::HashMap;
 
@@ -199,6 +200,10 @@ impl RuntimeManager {
 
     pub fn checksum(&self, symbol: &Symbol) -> Option<Checksum> {
         self.runtimes.get(symbol).map(SymbolRuntime::checksum)
+    }
+
+    pub fn symbol_snapshot(&self, symbol: &Symbol) -> Option<Option<SymbolRuntimeSnapshot>> {
+        self.runtimes.get(symbol).map(SymbolRuntime::snapshot)
     }
 
     pub fn pending_output_len(&self, symbol: &Symbol) -> Option<usize> {

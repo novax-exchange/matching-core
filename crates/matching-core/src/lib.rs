@@ -13,5 +13,6 @@ pub mod replay_runner;
 pub mod runtime_loop;
 pub mod runtime_manager;
 pub mod snapshot_restore;
+pub mod snapshot_store;
 pub mod symbol_routing;
 pub mod types;

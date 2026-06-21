@@ -7,6 +7,7 @@ use crate::output_commit_boundary::{
 use crate::runtime_manager::{
     RuntimeManager, RuntimeManagerError, RuntimeManagerRetryAwareStepReport, SymbolRuntimeStatus,
 };
+use crate::snapshot_store::{SnapshotRecord, SnapshotStore, SnapshotStoreError};
 use crate::types::{Checksum, JournalSeq, Symbol};
 use std::collections::HashMap;
 
@@ -136,6 +137,18 @@ impl RuntimeLoop {
 
     pub fn checksum(&self, symbol: &Symbol) -> Option<Checksum> {
         self.manager.checksum(symbol)
+    }
+
+    pub fn save_symbol_snapshot(
+        &self,
+        symbol: &Symbol,
+        snapshot_store: &mut dyn SnapshotStore,
+    ) -> Result<Option<SnapshotRecord>, SnapshotStoreError> {
+        let Some(snapshot) = self.manager.symbol_snapshot(symbol).flatten() else {
+            return Ok(None);
+        };
+
+        snapshot_store.save_symbol_snapshot(&snapshot).map(Some)
     }
 
     pub fn symbol_status(&self, symbol: &Symbol) -> Option<SymbolRuntimeStatus> {

@@ -5,6 +5,7 @@ use matching_core::replay_runner::ReplayRunner;
 use matching_core::snapshot_restore::{
     OrderBookSnapshot, SnapshotSerializationError, SymbolRuntimeSnapshot,
 };
+use matching_core::snapshot_store::{InMemorySnapshotStore, SnapshotStore, SnapshotStoreError};
 use matching_core::types::*;
 
 #[test]
@@ -84,6 +85,54 @@ fn symbol_runtime_snapshot_rejects_invalid_canonical_bytes_magic_from_public_api
     assert_eq!(
         SymbolRuntimeSnapshot::from_canonical_bytes(&encoded),
         Err(SnapshotSerializationError::InvalidMagic)
+    );
+}
+
+#[test]
+fn in_memory_snapshot_store_saves_and_loads_latest_symbol_snapshot_from_public_api() {
+    let snapshot = symbol_runtime_snapshot();
+    let mut store = InMemorySnapshotStore::new();
+
+    let record = store
+        .save_symbol_snapshot(&snapshot)
+        .expect("snapshot should be saved");
+    let loaded = store
+        .load_latest_symbol_snapshot(&snapshot.order_book_snapshot.symbol)
+        .expect("stored snapshot should decode")
+        .expect("stored snapshot should exist");
+
+    assert_eq!(record.symbol, snapshot.order_book_snapshot.symbol);
+    assert_eq!(
+        record.safe_point,
+        snapshot.order_book_snapshot.last_input_seq
+    );
+    assert_eq!(loaded, snapshot);
+}
+
+#[test]
+fn in_memory_snapshot_store_returns_none_for_missing_symbol_from_public_api() {
+    let store = InMemorySnapshotStore::new();
+
+    assert_eq!(
+        store.load_latest_symbol_snapshot(&Symbol("ETH-USDT".to_string())),
+        Ok(None)
+    );
+}
+
+#[test]
+fn in_memory_snapshot_store_rejects_corrupt_snapshot_bytes_from_public_api() {
+    let mut store = InMemorySnapshotStore::new();
+    let symbol = Symbol("BTC-USDT".to_string());
+    let mut bytes = symbol_runtime_snapshot().to_canonical_bytes();
+
+    bytes[0] = b'X';
+    store.write_raw_symbol_snapshot_bytes(symbol.clone(), bytes);
+
+    assert_eq!(
+        store.load_latest_symbol_snapshot(&symbol),
+        Err(SnapshotStoreError::SnapshotSerialization(
+            SnapshotSerializationError::InvalidMagic
+        ))
     );
 }
 

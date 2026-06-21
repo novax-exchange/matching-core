@@ -11,6 +11,7 @@ use matching_core::output_commit_boundary::{
 use matching_core::replay_runner::{ReplayResult, ReplayRunner};
 use matching_core::runtime_loop::{RuntimeLoop, RuntimeLoopError, RuntimeLoopTickLimits};
 use matching_core::runtime_manager::RuntimeManager;
+use matching_core::snapshot_store::{InMemorySnapshotStore, SnapshotStore};
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 use std::collections::HashMap;
 
@@ -559,6 +560,64 @@ fn runtime_loop_live_path_matches_replay_output_checksum_and_safe_point_per_symb
 
         assert!(live_result.compare_with(&replay_result).is_match());
     }
+}
+
+#[test]
+fn runtime_loop_can_save_symbol_snapshot_to_store_after_safe_point_advances() {
+    let btc = Symbol("BTC-USDT".to_string());
+    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone()], 4, 8);
+    let mut journal_client = OutputJournalClient::new();
+    let mut output = AcceptingJournalOutputAppender::new();
+    let mut snapshot_store = InMemorySnapshotStore::new();
+
+    assert_eq!(
+        runtime_loop.enqueue_input(command_entry(1, btc.clone())),
+        Ok(())
+    );
+    runtime_loop
+        .run_tick(
+            &mut journal_client,
+            &mut output,
+            RuntimeLoopTickLimits {
+                max_input_entries_per_symbol: 1,
+                max_output_requests_per_symbol: 10,
+            },
+        )
+        .expect("runtime loop should advance a safe point");
+
+    let saved = runtime_loop
+        .save_symbol_snapshot(&btc, &mut snapshot_store)
+        .expect("snapshot store should accept a runtime snapshot")
+        .expect("safe point should produce a snapshot");
+    let loaded = snapshot_store
+        .load_latest_symbol_snapshot(&btc)
+        .expect("saved snapshot should decode")
+        .expect("saved snapshot should exist");
+
+    assert_eq!(saved.symbol, btc);
+    assert_eq!(saved.safe_point, JournalSeq(1));
+    assert_eq!(loaded.order_book_snapshot.last_input_seq, JournalSeq(1));
+    assert_eq!(
+        loaded.order_book_snapshot.checksum,
+        runtime_loop
+            .checksum(&loaded.order_book_snapshot.symbol)
+            .expect("runtime loop should expose checksum")
+    );
+}
+
+#[test]
+fn runtime_loop_returns_no_snapshot_before_symbol_safe_point_exists() {
+    let btc = Symbol("BTC-USDT".to_string());
+    let runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone()], 4, 8);
+    let mut snapshot_store = InMemorySnapshotStore::new();
+
+    assert_eq!(
+        runtime_loop
+            .save_symbol_snapshot(&btc, &mut snapshot_store)
+            .expect("snapshot store should not be called without a snapshot"),
+        None
+    );
+    assert_eq!(snapshot_store.load_latest_symbol_snapshot(&btc), Ok(None));
 }
 
 #[test]
