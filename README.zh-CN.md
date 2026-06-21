@@ -29,7 +29,7 @@ flowchart LR
         RuntimeShell["Service Runtime Shell"]
         Interface["Service Interface Boundary"]
         StreamBoundary["Messaging Reliability Boundary"]
-        Service["Matching Service"]
+        MatchingRuntime["Matching Runtime"]
         Execution["Per-Symbol Execution Pipeline"]
     end
 
@@ -48,17 +48,17 @@ flowchart LR
     end
 
     Input -->|"confirmed commands"| Transport
-    Transport --> StreamBoundary --> Service
-    Service -->|"per-symbol command"| Execution
-    Execution -->|"OrderAck / TradeEvent / MarketDataEvent"| Service
-    Service --> StreamBoundary -->|"matching output"| Transport
+    Transport --> StreamBoundary --> MatchingRuntime
+    MatchingRuntime -->|"per-symbol command"| Execution
+    Execution -->|"OrderAck / TradeEvent / MarketDataEvent"| MatchingRuntime
+    MatchingRuntime --> StreamBoundary -->|"matching output"| Transport
     Transport --> Output
     Governance -->|"governed control"| Transport
-    RuntimeShell -.->|"health / readiness / scheduled tasks"| Service
+    RuntimeShell -.->|"health / readiness / scheduled tasks"| MatchingRuntime
     RuntimeShell -.-> Interface
-    Interface --> Service
-    Service <-->|"snapshot / restore"| SnapshotStore
-    Service <-->|"leader lease / fencing"| Coordination
+    Interface --> MatchingRuntime
+    MatchingRuntime <-->|"snapshot / restore"| SnapshotStore
+    MatchingRuntime <-->|"leader lease / fencing"| Coordination
 
     style GovernanceZone fill:#f8fafc,stroke:#cbd5e1,stroke-dasharray: 4 4,color:#64748b;
     style InfraZone fill:#f8fafc,stroke:#cbd5e1,stroke-dasharray: 4 4,color:#64748b;
