@@ -47,6 +47,33 @@ pub struct RuntimeLoopTickReport {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeLoopRunBudget {
+    pub max_ticks: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeLoopRunStopReason {
+    Idle,
+    Blocked,
+    TickBudgetExhausted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeLoopRunReport {
+    pub tick_reports: Vec<RuntimeLoopTickReport>,
+    pub stop_reason: RuntimeLoopRunStopReason,
+    pub made_progress: bool,
+    pub has_work_remaining: bool,
+    pub has_blocked_symbols: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeLoopWorkState {
+    has_work_remaining: bool,
+    has_blocked_symbols: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeLoopInputStatus {
     pub len: usize,
     pub capacity: usize,
@@ -192,6 +219,78 @@ impl RuntimeLoop {
         Ok(RuntimeLoopTickReport { symbol_reports })
     }
 
+    pub fn run_budgeted(
+        &mut self,
+        journal_client: &mut OutputJournalClient,
+        output: &mut dyn JournalOutputAppender,
+        limits: RuntimeLoopTickLimits,
+        budget: RuntimeLoopRunBudget,
+    ) -> Result<RuntimeLoopRunReport, RuntimeLoopError> {
+        let initial_state = self.current_work_state()?;
+
+        if !initial_state.has_work_remaining && !initial_state.has_blocked_symbols {
+            return Ok(RuntimeLoopRunReport {
+                tick_reports: Vec::new(),
+                stop_reason: RuntimeLoopRunStopReason::Idle,
+                made_progress: false,
+                has_work_remaining: false,
+                has_blocked_symbols: false,
+            });
+        }
+
+        if budget.max_ticks == 0 {
+            return Ok(RuntimeLoopRunReport {
+                tick_reports: Vec::new(),
+                stop_reason: RuntimeLoopRunStopReason::TickBudgetExhausted,
+                made_progress: false,
+                has_work_remaining: initial_state.has_work_remaining,
+                has_blocked_symbols: initial_state.has_blocked_symbols,
+            });
+        }
+
+        let mut tick_reports = Vec::new();
+        let mut made_progress = false;
+        let mut has_work_remaining = initial_state.has_work_remaining;
+        let mut has_blocked_symbols = initial_state.has_blocked_symbols;
+
+        for _ in 0..budget.max_ticks {
+            let tick_report = self.run_tick(journal_client, output, limits)?;
+            let tick_made_progress = tick_report.made_progress();
+
+            made_progress |= tick_made_progress;
+            has_work_remaining = tick_report.has_work_remaining();
+            has_blocked_symbols = tick_report.has_blocked_symbols();
+
+            let stop_reason = if !has_work_remaining && !has_blocked_symbols {
+                Some(RuntimeLoopRunStopReason::Idle)
+            } else if has_blocked_symbols && !tick_made_progress {
+                Some(RuntimeLoopRunStopReason::Blocked)
+            } else {
+                None
+            };
+
+            tick_reports.push(tick_report);
+
+            if let Some(stop_reason) = stop_reason {
+                return Ok(RuntimeLoopRunReport {
+                    tick_reports,
+                    stop_reason,
+                    made_progress,
+                    has_work_remaining,
+                    has_blocked_symbols,
+                });
+            }
+        }
+
+        Ok(RuntimeLoopRunReport {
+            tick_reports,
+            stop_reason: RuntimeLoopRunStopReason::TickBudgetExhausted,
+            made_progress,
+            has_work_remaining,
+            has_blocked_symbols,
+        })
+    }
+
     pub fn last_input_seq(&self, symbol: &Symbol) -> Option<Option<JournalSeq>> {
         self.manager.last_input_seq(symbol)
     }
@@ -250,6 +349,38 @@ impl RuntimeLoop {
         }
 
         Ok(())
+    }
+
+    fn current_work_state(&self) -> Result<RuntimeLoopWorkState, RuntimeLoopError> {
+        self.validate_configuration()?;
+
+        let mut has_work_remaining = false;
+        let mut has_blocked_symbols = false;
+        let mut symbols = self.manager.symbols();
+        symbols.sort_by(|left, right| left.0.cmp(&right.0));
+
+        for symbol in symbols {
+            let handoff = self
+                .handoffs
+                .get(&symbol)
+                .ok_or_else(|| RuntimeLoopError::MissingHandoff(symbol.clone()))?;
+            let runtime_status =
+                self.manager
+                    .symbol_status(&symbol)
+                    .ok_or(RuntimeLoopError::RuntimeManager(
+                        RuntimeManagerError::UnknownSymbol,
+                    ))?;
+
+            has_blocked_symbols |= runtime_status.output_commit_blockage.is_some();
+            has_work_remaining |= handoff.len() > 0
+                || runtime_status.pending_output_len > 0
+                || runtime_status.output_commit_blockage.is_some();
+        }
+
+        Ok(RuntimeLoopWorkState {
+            has_work_remaining,
+            has_blocked_symbols,
+        })
     }
 
     pub fn enqueue_input(&mut self, entry: JournalInputEntry) -> Result<(), RuntimeLoopError> {
@@ -370,6 +501,22 @@ impl RuntimeLoopTickReport {
 
     pub fn is_idle(&self) -> bool {
         !self.made_progress() && !self.has_work_remaining() && !self.has_blocked_symbols()
+    }
+}
+
+impl RuntimeLoopRunReport {
+    pub fn tick_count(&self) -> usize {
+        self.tick_reports.len()
+    }
+
+    pub fn last_tick_report(&self) -> Option<&RuntimeLoopTickReport> {
+        self.tick_reports.last()
+    }
+
+    pub fn is_idle(&self) -> bool {
+        self.stop_reason == RuntimeLoopRunStopReason::Idle
+            && !self.has_work_remaining
+            && !self.has_blocked_symbols
     }
 }
 

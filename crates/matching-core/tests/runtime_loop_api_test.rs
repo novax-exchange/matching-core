@@ -10,7 +10,10 @@ use matching_core::output_commit_boundary::{
 };
 use matching_core::replay_runner::{ReplayResult, ReplayRunner};
 use matching_core::runtime_config::MatchingRuntimeConfig;
-use matching_core::runtime_loop::{RuntimeLoop, RuntimeLoopError, RuntimeLoopTickLimits};
+use matching_core::runtime_loop::{
+    RuntimeLoop, RuntimeLoopError, RuntimeLoopRunBudget, RuntimeLoopRunStopReason,
+    RuntimeLoopTickLimits,
+};
 use matching_core::runtime_manager::RuntimeManager;
 use matching_core::snapshot_restore::{OrderBookSnapshot, SymbolRuntimeSnapshot};
 use matching_core::snapshot_store::{FileSnapshotStore, InMemorySnapshotStore, SnapshotStore};
@@ -1654,4 +1657,131 @@ fn runtime_loop_tick_reports_symbols_in_deterministic_order() {
     assert_eq!(report_symbols, vec![btc.clone(), eth.clone()]);
     assert_eq!(runtime_loop.last_input_seq(&btc), Some(Some(JournalSeq(1))));
     assert_eq!(runtime_loop.last_input_seq(&eth), Some(Some(JournalSeq(1))));
+}
+
+#[test]
+fn runtime_loop_run_budgeted_drains_work_until_idle() {
+    let btc = Symbol("BTC-USDT".to_string());
+    let mut journal_client = OutputJournalClient::new();
+    let mut output = AcceptingJournalOutputAppender::new();
+    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone()], 4, 8);
+
+    assert_eq!(
+        runtime_loop.enqueue_inputs(vec![
+            command_entry(1, btc.clone()),
+            command_entry(2, btc.clone()),
+        ]),
+        Ok(2)
+    );
+
+    let report = runtime_loop
+        .run_budgeted(
+            &mut journal_client,
+            &mut output,
+            RuntimeLoopTickLimits {
+                max_input_entries_per_symbol: 1,
+                max_output_requests_per_symbol: 10,
+            },
+            RuntimeLoopRunBudget { max_ticks: 4 },
+        )
+        .expect("budgeted run should drain queued work");
+
+    assert_eq!(report.stop_reason, RuntimeLoopRunStopReason::Idle);
+    assert_eq!(report.tick_count(), 2);
+    assert!(report.made_progress);
+    assert!(!report.has_work_remaining);
+    assert!(!report.has_blocked_symbols);
+    assert!(report.is_idle());
+    assert_eq!(runtime_loop.last_input_seq(&btc), Some(Some(JournalSeq(2))));
+    assert_eq!(runtime_loop.pending_input_len(&btc), Some(0));
+    assert_eq!(output.read_all().len(), 2);
+}
+
+#[test]
+fn runtime_loop_run_budgeted_reports_tick_budget_exhaustion_with_remaining_work() {
+    let btc = Symbol("BTC-USDT".to_string());
+    let mut journal_client = OutputJournalClient::new();
+    let mut output = AcceptingJournalOutputAppender::new();
+    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone()], 4, 8);
+
+    assert_eq!(
+        runtime_loop.enqueue_inputs(vec![
+            command_entry(1, btc.clone()),
+            command_entry(2, btc.clone()),
+        ]),
+        Ok(2)
+    );
+
+    let report = runtime_loop
+        .run_budgeted(
+            &mut journal_client,
+            &mut output,
+            RuntimeLoopTickLimits {
+                max_input_entries_per_symbol: 1,
+                max_output_requests_per_symbol: 10,
+            },
+            RuntimeLoopRunBudget { max_ticks: 1 },
+        )
+        .expect("budgeted run should stop when tick budget is consumed");
+
+    assert_eq!(
+        report.stop_reason,
+        RuntimeLoopRunStopReason::TickBudgetExhausted
+    );
+    assert_eq!(report.tick_count(), 1);
+    assert!(report.made_progress);
+    assert!(report.has_work_remaining);
+    assert!(!report.has_blocked_symbols);
+    assert!(!report.is_idle());
+    assert_eq!(runtime_loop.last_input_seq(&btc), Some(Some(JournalSeq(1))));
+    assert_eq!(runtime_loop.pending_input_len(&btc), Some(1));
+    assert_eq!(output.read_all().len(), 1);
+}
+
+#[test]
+fn runtime_loop_run_budgeted_stops_after_unblocked_work_drains_when_symbol_is_blocked() {
+    let btc = Symbol("BTC-USDT".to_string());
+    let eth = Symbol("ETH-USDT".to_string());
+    let mut journal_client = OutputJournalClient::new();
+    let mut output = RejectOneSymbolJournalOutputAppender::new(btc.clone());
+    let mut runtime_loop = RuntimeLoop::new_for_symbols(vec![btc.clone(), eth.clone()], 4, 8);
+
+    assert_eq!(
+        runtime_loop.enqueue_inputs(vec![
+            command_entry(1, btc.clone()),
+            command_entry(1, eth.clone()),
+            command_entry(2, eth.clone()),
+        ]),
+        Ok(3)
+    );
+
+    let report = runtime_loop
+        .run_budgeted(
+            &mut journal_client,
+            &mut output,
+            RuntimeLoopTickLimits {
+                max_input_entries_per_symbol: 1,
+                max_output_requests_per_symbol: 10,
+            },
+            RuntimeLoopRunBudget { max_ticks: 4 },
+        )
+        .expect("budgeted run should stop once only blocked work remains");
+
+    assert_eq!(report.stop_reason, RuntimeLoopRunStopReason::Blocked);
+    assert_eq!(report.tick_count(), 3);
+    assert!(report.made_progress);
+    assert!(report.has_work_remaining);
+    assert!(report.has_blocked_symbols);
+    assert!(!report.is_idle());
+    assert_eq!(runtime_loop.last_input_seq(&btc), Some(None));
+    assert_eq!(runtime_loop.last_input_seq(&eth), Some(Some(JournalSeq(2))));
+    assert_eq!(runtime_loop.pending_input_len(&eth), Some(0));
+    assert_eq!(
+        runtime_loop
+            .symbol_status(&btc)
+            .expect("btc status should exist")
+            .pending_output_len,
+        1
+    );
+    assert_eq!(output.read_all().len(), 2);
 }
