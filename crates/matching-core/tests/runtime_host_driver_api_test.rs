@@ -2,7 +2,7 @@ use matching_core::runtime_config::{
     MatchingRuntimeConfig, RuntimeShardId, RuntimeTopologyConfig, SymbolAssignmentPolicy,
 };
 use matching_core::runtime_host_driver::{
-    ManualRuntimeHostDriver, RuntimeHostDriver, RuntimeHostDriverError,
+    ManualRuntimeHostDriver, RuntimeHostDriver, RuntimeHostDriverCommand, RuntimeHostDriverError,
 };
 use matching_core::runtime_loop::RuntimeLoopError;
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
@@ -76,5 +76,43 @@ fn manual_runtime_host_driver_wraps_runtime_loop_errors_from_public_api() {
         Err(RuntimeHostDriverError::RuntimeLoop(
             RuntimeLoopError::UnregisteredHandoff(eth)
         ))
+    );
+}
+
+#[test]
+fn manual_runtime_host_driver_plans_enqueue_inputs_by_owning_shard_from_public_api() {
+    let btc = symbol("BTC-USDT");
+    let eth = symbol("ETH-USDT");
+    let sol = symbol("SOL-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.topology = RuntimeTopologyConfig {
+        shard_count: 2,
+        assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
+    };
+    let driver = ManualRuntimeHostDriver::from_symbols_with_config(
+        vec![btc.clone(), eth.clone(), sol.clone()],
+        config,
+    )
+    .expect("manual runtime host driver topology should resolve");
+    let btc_entry = command_entry(1, btc);
+    let eth_entry = command_entry(2, eth);
+    let sol_entry = command_entry(3, sol);
+
+    let commands = driver
+        .plan_enqueue_inputs(&[btc_entry.clone(), eth_entry.clone(), sol_entry.clone()])
+        .expect("manual runtime host driver should plan enqueue commands");
+
+    assert_eq!(
+        commands,
+        vec![
+            RuntimeHostDriverCommand::EnqueueInputs {
+                shard_id: RuntimeShardId(0),
+                entries: vec![btc_entry, sol_entry],
+            },
+            RuntimeHostDriverCommand::EnqueueInputs {
+                shard_id: RuntimeShardId(1),
+                entries: vec![eth_entry],
+            },
+        ]
     );
 }

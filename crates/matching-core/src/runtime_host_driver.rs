@@ -19,6 +19,10 @@ pub trait RuntimeHostDriver {
     fn shard_count(&self) -> usize;
     fn shard_ids(&self) -> Vec<RuntimeShardId>;
     fn symbols_for_shard(&self, shard_id: RuntimeShardId) -> Option<&[Symbol]>;
+    fn plan_enqueue_inputs(
+        &self,
+        entries: &[JournalInputEntry],
+    ) -> Result<Vec<RuntimeHostDriverCommand>, RuntimeHostDriverError>;
     fn enqueue_input(&mut self, entry: JournalInputEntry) -> Result<(), RuntimeHostDriverError>;
     fn enqueue_inputs(
         &mut self,
@@ -49,6 +53,14 @@ pub trait RuntimeHostDriver {
 pub enum RuntimeHostDriverError {
     RuntimeLoop(RuntimeLoopError),
     DriverUnavailable(RuntimeShardId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeHostDriverCommand {
+    EnqueueInputs {
+        shard_id: RuntimeShardId,
+        entries: Vec<JournalInputEntry>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,6 +164,36 @@ impl RuntimeHostDriver for ManualRuntimeHostDriver {
             .map(RuntimeShardRunner::symbols)
     }
 
+    fn plan_enqueue_inputs(
+        &self,
+        entries: &[JournalInputEntry],
+    ) -> Result<Vec<RuntimeHostDriverCommand>, RuntimeHostDriverError> {
+        let owner_by_symbol = self.validate_enqueue_inputs(entries)?;
+        let mut entries_by_runner: Vec<Vec<JournalInputEntry>> =
+            (0..self.runners.len()).map(|_| Vec::new()).collect();
+
+        for entry in entries {
+            let symbol = entry.command.symbol().clone();
+            let runner_index = owner_by_symbol
+                .get(&symbol)
+                .expect("entry symbol should have an owning runner after validation");
+            entries_by_runner[*runner_index].push(entry.clone());
+        }
+
+        Ok(self
+            .runners
+            .iter()
+            .zip(entries_by_runner)
+            .filter(|(_, entries)| !entries.is_empty())
+            .map(
+                |(runner, entries)| RuntimeHostDriverCommand::EnqueueInputs {
+                    shard_id: runner.shard_id(),
+                    entries,
+                },
+            )
+            .collect())
+    }
+
     fn enqueue_input(&mut self, entry: JournalInputEntry) -> Result<(), RuntimeHostDriverError> {
         let symbol = entry.command.symbol().clone();
         let runner_index =
@@ -169,24 +211,21 @@ impl RuntimeHostDriver for ManualRuntimeHostDriver {
         &mut self,
         entries: Vec<JournalInputEntry>,
     ) -> Result<usize, RuntimeHostDriverError> {
-        let owner_by_symbol = self.validate_enqueue_inputs(&entries)?;
         let enqueued_count = entries.len();
-        let mut entries_by_runner: Vec<Vec<JournalInputEntry>> =
-            (0..self.runners.len()).map(|_| Vec::new()).collect();
+        let commands = self.plan_enqueue_inputs(&entries)?;
 
-        for entry in entries {
-            let symbol = entry.command.symbol().clone();
-            let runner_index = owner_by_symbol
-                .get(&symbol)
-                .expect("entry symbol should have an owning runner after validation");
-            entries_by_runner[*runner_index].push(entry);
-        }
-
-        for (runner, runner_entries) in self.runners.iter_mut().zip(entries_by_runner) {
-            if !runner_entries.is_empty() {
-                runner
-                    .enqueue_inputs(runner_entries)
-                    .map_err(RuntimeHostDriverError::from)?;
+        for command in commands {
+            match command {
+                RuntimeHostDriverCommand::EnqueueInputs { shard_id, entries } => {
+                    let runner = self
+                        .runners
+                        .iter_mut()
+                        .find(|runner| runner.shard_id() == shard_id)
+                        .ok_or(RuntimeHostDriverError::DriverUnavailable(shard_id))?;
+                    runner
+                        .enqueue_inputs(entries)
+                        .map_err(RuntimeHostDriverError::from)?;
+                }
             }
         }
 
