@@ -11,6 +11,7 @@ pub mod output_commit_boundary;
 pub mod replay_runner;
 pub mod runtime_config;
 pub mod runtime_host;
+pub mod runtime_host_driver;
 pub mod runtime_loop;
 pub mod runtime_manager;
 pub mod runtime_shard_runner;

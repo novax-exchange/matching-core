@@ -1,19 +1,17 @@
 use crate::journal_adapter::{JournalInputEntry, JournalOutputAppender};
 use crate::output_commit_boundary::OutputJournalClient;
 use crate::runtime_config::{MatchingRuntimeConfig, RuntimeHostMode, RuntimeShardId};
+use crate::runtime_host_driver::{ManualRuntimeHostDriver, RuntimeHostDriver};
 use crate::runtime_loop::{
     RuntimeLoopError, RuntimeLoopRunLimit, RuntimeLoopRunOnceLimits, RuntimeLoopRunOnceReport,
     RuntimeLoopRunReport, RuntimeLoopRunStopReason,
 };
-use crate::runtime_manager::RuntimeManagerError;
-use crate::runtime_shard_runner::RuntimeShardRunner;
 use crate::runtime_topology::RuntimeTopologyError;
 use crate::types::Symbol;
-use std::collections::HashMap;
 
 pub struct RuntimeHost {
     mode: RuntimeHostMode,
-    runners: Vec<RuntimeShardRunner>,
+    driver: Box<dyn RuntimeHostDriver>,
     run_once_limits: RuntimeLoopRunOnceLimits,
     run_limit: RuntimeLoopRunLimit,
     run_until_idle_limit: RuntimeHostRunUntilIdleLimit,
@@ -131,12 +129,12 @@ impl RuntimeHost {
                 let run_once_limits = RuntimeLoopRunOnceLimits::from_config(&config);
                 let run_limit = RuntimeLoopRunLimit::from_config(&config);
                 let run_until_idle_limit = RuntimeHostRunUntilIdleLimit::from_config(&config);
-                let runners = RuntimeShardRunner::from_symbols_with_config(symbols, config)
+                let driver = ManualRuntimeHostDriver::from_symbols_with_config(symbols, config)
                     .map_err(RuntimeHostError::Topology)?;
 
                 Ok(Self {
                     mode,
-                    runners,
+                    driver: Box::new(driver),
                     run_once_limits,
                     run_limit,
                     run_until_idle_limit,
@@ -157,21 +155,15 @@ impl RuntimeHost {
     }
 
     pub fn shard_count(&self) -> usize {
-        self.runners.len()
+        self.driver.shard_count()
     }
 
     pub fn shard_ids(&self) -> Vec<RuntimeShardId> {
-        self.runners
-            .iter()
-            .map(RuntimeShardRunner::shard_id)
-            .collect()
+        self.driver.shard_ids()
     }
 
     pub fn symbols_for_shard(&self, shard_id: RuntimeShardId) -> Option<&[Symbol]> {
-        self.runners
-            .iter()
-            .find(|runner| runner.shard_id() == shard_id)
-            .map(RuntimeShardRunner::symbols)
+        self.driver.symbols_for_shard(shard_id)
     }
 
     pub fn input_state(&self) -> RuntimeHostInputState {
@@ -185,16 +177,7 @@ impl RuntimeHost {
     pub fn enqueue_input(&mut self, entry: JournalInputEntry) -> Result<(), RuntimeHostError> {
         self.ensure_input_open()?;
 
-        let symbol = entry.command.symbol().clone();
-        let runner = self
-            .runners
-            .iter_mut()
-            .find(|runner| runner.symbols().contains(&symbol))
-            .ok_or_else(|| {
-                RuntimeHostError::RuntimeLoop(RuntimeLoopError::UnregisteredHandoff(symbol))
-            })?;
-
-        runner
+        self.driver
             .enqueue_input(entry)
             .map_err(RuntimeHostError::RuntimeLoop)
     }
@@ -205,28 +188,9 @@ impl RuntimeHost {
     ) -> Result<usize, RuntimeHostError> {
         self.ensure_input_open()?;
 
-        let owner_by_symbol = self.validate_enqueue_inputs(&entries)?;
-        let enqueued_count = entries.len();
-        let mut entries_by_runner: Vec<Vec<JournalInputEntry>> =
-            (0..self.runners.len()).map(|_| Vec::new()).collect();
-
-        for entry in entries {
-            let symbol = entry.command.symbol().clone();
-            let runner_index = owner_by_symbol
-                .get(&symbol)
-                .expect("entry symbol should have an owning runner after validation");
-            entries_by_runner[*runner_index].push(entry);
-        }
-
-        for (runner, runner_entries) in self.runners.iter_mut().zip(entries_by_runner) {
-            if !runner_entries.is_empty() {
-                runner
-                    .enqueue_inputs(runner_entries)
-                    .map_err(RuntimeHostError::RuntimeLoop)?;
-            }
-        }
-
-        Ok(enqueued_count)
+        self.driver
+            .enqueue_inputs(entries)
+            .map_err(RuntimeHostError::RuntimeLoop)
     }
 
     pub fn can_enqueue_inputs(
@@ -234,7 +198,21 @@ impl RuntimeHost {
         entries: &[JournalInputEntry],
     ) -> Result<(), RuntimeHostError> {
         self.ensure_input_open()?;
-        self.validate_enqueue_inputs(entries).map(|_| ())
+        self.driver
+            .can_enqueue_inputs(entries)
+            .map_err(RuntimeHostError::RuntimeLoop)
+    }
+
+    pub fn status(&self) -> Result<RuntimeHostStatus, RuntimeHostError> {
+        let shard_statuses = self
+            .driver
+            .shard_statuses()
+            .map_err(RuntimeHostError::RuntimeLoop)?;
+
+        Ok(RuntimeHostStatus {
+            input_state: self.input_state,
+            shard_statuses,
+        })
     }
 
     fn ensure_input_open(&self) -> Result<(), RuntimeHostError> {
@@ -245,120 +223,15 @@ impl RuntimeHost {
         Ok(())
     }
 
-    fn validate_enqueue_inputs(
-        &self,
-        entries: &[JournalInputEntry],
-    ) -> Result<HashMap<Symbol, usize>, RuntimeHostError> {
-        let mut requested_by_symbol: HashMap<Symbol, usize> = HashMap::new();
-        let mut owner_by_symbol: HashMap<Symbol, usize> = HashMap::new();
-
-        for entry in entries {
-            let symbol = entry.command.symbol().clone();
-            let runner_index = self
-                .runners
-                .iter()
-                .position(|runner| runner.symbols().contains(&symbol))
-                .ok_or_else(|| {
-                    RuntimeHostError::RuntimeLoop(RuntimeLoopError::UnregisteredHandoff(
-                        symbol.clone(),
-                    ))
-                })?;
-
-            *requested_by_symbol.entry(symbol.clone()).or_insert(0) += 1;
-            owner_by_symbol.insert(symbol, runner_index);
-        }
-
-        let mut requested_symbols: Vec<Symbol> = requested_by_symbol.keys().cloned().collect();
-        requested_symbols.sort_by(|left, right| left.0.cmp(&right.0));
-
-        for symbol in requested_symbols {
-            let requested_count = requested_by_symbol
-                .get(&symbol)
-                .expect("requested symbol should have a requested count");
-            let runner_index = owner_by_symbol
-                .get(&symbol)
-                .expect("requested symbol should have an owning runner");
-            let pending_input_status = self.runners[*runner_index]
-                .pending_input_status(&symbol)
-                .ok_or_else(|| {
-                    RuntimeHostError::RuntimeLoop(RuntimeLoopError::MissingHandoff(symbol.clone()))
-                })?;
-            let available_capacity = pending_input_status
-                .capacity
-                .saturating_sub(pending_input_status.len);
-
-            if available_capacity < *requested_count {
-                return Err(RuntimeHostError::RuntimeLoop(
-                    RuntimeLoopError::InputHandoffFull(symbol),
-                ));
-            }
-        }
-
-        Ok(owner_by_symbol)
-    }
-
-    pub fn status(&self) -> Result<RuntimeHostStatus, RuntimeHostError> {
-        let mut shard_statuses = Vec::new();
-
-        for runner in &self.runners {
-            let mut symbol_statuses = Vec::new();
-
-            for symbol in runner.symbols() {
-                let pending_input_status =
-                    runner.pending_input_status(symbol).ok_or_else(|| {
-                        RuntimeHostError::RuntimeLoop(RuntimeLoopError::MissingHandoff(
-                            symbol.clone(),
-                        ))
-                    })?;
-                let runtime_status = runner.symbol_status(symbol).ok_or_else(|| {
-                    RuntimeHostError::RuntimeLoop(RuntimeLoopError::RuntimeManager(
-                        RuntimeManagerError::UnknownSymbol,
-                    ))
-                })?;
-
-                symbol_statuses.push(RuntimeHostSymbolStatus {
-                    symbol: symbol.clone(),
-                    pending_input_len: pending_input_status.len,
-                    pending_input_capacity: pending_input_status.capacity,
-                    pending_input_full: pending_input_status.full,
-                    pending_output_len: runtime_status.pending_output_len,
-                    pending_output_capacity: runtime_status.pending_output_capacity,
-                    pending_output_full: runtime_status.pending_output_full,
-                    output_commit_blocked: runtime_status.output_commit_blockage.is_some(),
-                });
-            }
-
-            shard_statuses.push(RuntimeHostShardStatus {
-                shard_id: runner.shard_id(),
-                symbol_statuses,
-            });
-        }
-
-        Ok(RuntimeHostStatus {
-            input_state: self.input_state,
-            shard_statuses,
-        })
-    }
-
     pub fn run_once_all(
         &mut self,
         journal_client: &mut OutputJournalClient,
         output: &mut dyn JournalOutputAppender,
         limits: RuntimeLoopRunOnceLimits,
     ) -> Result<RuntimeHostRunOnceReport, RuntimeHostError> {
-        let mut shard_reports = Vec::new();
-
-        for runner in &mut self.runners {
-            let run_once_report = runner
-                .run_once(journal_client, output, limits)
-                .map_err(RuntimeHostError::RuntimeLoop)?;
-            shard_reports.push(RuntimeHostShardRunOnceReport {
-                shard_id: runner.shard_id(),
-                run_once_report,
-            });
-        }
-
-        Ok(RuntimeHostRunOnceReport { shard_reports })
+        self.driver
+            .run_once_all(journal_client, output, limits)
+            .map_err(RuntimeHostError::RuntimeLoop)
     }
 
     pub fn run_limited_all(
@@ -368,19 +241,9 @@ impl RuntimeHost {
         limits: RuntimeLoopRunOnceLimits,
         limit: RuntimeLoopRunLimit,
     ) -> Result<RuntimeHostRunReport, RuntimeHostError> {
-        let mut shard_reports = Vec::new();
-
-        for runner in &mut self.runners {
-            let run_report = runner
-                .run_limited(journal_client, output, limits, limit)
-                .map_err(RuntimeHostError::RuntimeLoop)?;
-            shard_reports.push(RuntimeHostShardRunReport {
-                shard_id: runner.shard_id(),
-                run_report,
-            });
-        }
-
-        Ok(RuntimeHostRunReport { shard_reports })
+        self.driver
+            .run_limited_all(journal_client, output, limits, limit)
+            .map_err(RuntimeHostError::RuntimeLoop)
     }
 
     pub fn run_configured_all(
