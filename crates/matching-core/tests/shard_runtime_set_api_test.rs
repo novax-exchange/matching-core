@@ -6,8 +6,8 @@ use matching_core::runtime_config::{
 use matching_core::shard_runtime::ShardRuntimeError;
 use matching_core::shard_runtime::ShardRuntimeRunOnceLimits;
 use matching_core::shard_runtime_set::{
-    InlineShardRuntimeSet, InputHandoffWritePlan, InputHandoffWriter, ShardRuntimeSet,
-    ShardRuntimeSetError, ThreadPerShardRuntimeSet,
+    AsyncShardTaskPlan, AsyncTaskPerShardRuntimeSet, InlineShardRuntimeSet, InputHandoffWritePlan,
+    InputHandoffWriter, ShardRuntimeSet, ShardRuntimeSetError, ThreadPerShardRuntimeSet,
 };
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 use matching_core::{
@@ -203,6 +203,61 @@ fn thread_per_shard_runtime_set_wraps_shard_runtime_errors_from_public_api() {
         Err(ShardRuntimeSetError::ShardRuntime(
             ShardRuntimeError::UnregisteredHandoff(eth)
         ))
+    );
+}
+
+#[test]
+fn async_task_per_shard_runtime_set_builds_shard_plan_from_runtime_topology_from_public_api() {
+    let btc = symbol("BTC-USDT");
+    let eth = symbol("ETH-USDT");
+    let sol = symbol("SOL-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.execution.mode = matching_core::runtime_config::RuntimeExecutionMode::AsyncTaskPerShard;
+    config.topology = RuntimeTopologyConfig {
+        shard_count: 2,
+        assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
+    };
+
+    let runtime_set = AsyncTaskPerShardRuntimeSet::from_symbols_with_config(
+        vec![btc.clone(), eth.clone(), sol.clone()],
+        config,
+    )
+    .expect("async-task-per-shard runtime set topology should resolve");
+
+    assert_eq!(runtime_set.shard_count(), 2);
+    assert_eq!(
+        runtime_set.shard_ids(),
+        vec![RuntimeShardId(0), RuntimeShardId(1)]
+    );
+    assert_eq!(
+        runtime_set.symbols_for_shard(RuntimeShardId(0)),
+        Some(&[btc.clone(), sol.clone()][..])
+    );
+    assert_eq!(
+        runtime_set.symbols_for_shard(RuntimeShardId(1)),
+        Some(&[eth.clone()][..])
+    );
+    assert_eq!(runtime_set.task_count(), 2);
+    assert_eq!(
+        runtime_set.task_plans(),
+        &[
+            AsyncShardTaskPlan {
+                shard_id: RuntimeShardId(0),
+                symbols: vec![btc.clone(), sol.clone()],
+            },
+            AsyncShardTaskPlan {
+                shard_id: RuntimeShardId(1),
+                symbols: vec![eth.clone()],
+            },
+        ]
+    );
+    assert_eq!(
+        runtime_set.task_symbols_for_shard(RuntimeShardId(0)),
+        Some(&[btc.clone(), sol.clone()][..])
+    );
+    assert_eq!(
+        runtime_set.task_symbols_for_shard(RuntimeShardId(1)),
+        Some(&[eth.clone()][..])
     );
 }
 
