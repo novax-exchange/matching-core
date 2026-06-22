@@ -68,7 +68,7 @@ pub struct RuntimeExecutionConfig {
 impl Default for RuntimeExecutionConfig {
     fn default() -> Self {
         Self {
-            mode: RuntimeExecutionMode::Inline,
+            mode: RuntimeExecutionMode::ShardWorker,
             max_run_cycles_per_call: 1024,
             max_run_calls_per_until_idle: 1024,
         }
@@ -78,8 +78,7 @@ impl Default for RuntimeExecutionConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeExecutionMode {
     Inline,
-    ThreadPerShard,
-    AsyncTaskPerShard,
+    ShardWorker,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

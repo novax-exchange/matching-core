@@ -5,7 +5,7 @@ use crate::matching_runtime::{
 };
 use crate::output_commit_boundary::OutputJournalClient;
 use crate::runtime_config::{MatchingRuntimeConfig, RuntimeShardId};
-use crate::runtime_topology::{RuntimeTopology, RuntimeTopologyError};
+use crate::runtime_topology::RuntimeTopologyError;
 use crate::shard_execution_core::{ShardExecutionCoreError, SymbolRuntimeStatus};
 use crate::shard_runtime::{
     ShardRuntime, ShardRuntimeError, ShardRuntimeRunLimit, ShardRuntimeRunOnceLimits,
@@ -75,12 +75,8 @@ pub enum InputHandoffWritePlan {
     },
 }
 
-pub struct ThreadPerShardRuntimeSet {
+pub struct ShardWorkerRuntimeSet {
     worker_handles: Vec<ShardRuntimeWorkerHandle>,
-}
-
-pub struct AsyncTaskPerShardRuntimeSet {
-    task_plans: Vec<AsyncShardTaskPlan>,
 }
 
 pub type ShardRuntimeOutputWriter = Box<dyn JournalOutputAppender + Send>;
@@ -100,12 +96,6 @@ struct ThreadedShardRuntimeWorkerHandle {
     request_sender: Sender<ShardRuntimeWorkerRequest>,
     response_receiver: Receiver<ShardRuntimeWorkerResponse>,
     join_handle: Option<JoinHandle<()>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AsyncShardTaskPlan {
-    pub shard_id: RuntimeShardId,
-    pub symbols: Vec<Symbol>,
 }
 
 struct ShardRuntimeWorker {
@@ -643,7 +633,7 @@ impl ShardRuntimeWorker {
     }
 }
 
-impl ThreadPerShardRuntimeSet {
+impl ShardWorkerRuntimeSet {
     pub fn from_symbols_with_config(
         symbols: Vec<Symbol>,
         config: MatchingRuntimeConfig,
@@ -870,7 +860,7 @@ impl ThreadPerShardRuntimeSet {
     }
 }
 
-impl InputHandoffWriter for ThreadPerShardRuntimeSet {
+impl InputHandoffWriter for ShardWorkerRuntimeSet {
     fn plan_writes(
         &self,
         entries: &[JournalInputEntry],
@@ -929,7 +919,7 @@ impl InputHandoffWriter for ThreadPerShardRuntimeSet {
     }
 }
 
-impl ShardRuntimeSet for ThreadPerShardRuntimeSet {
+impl ShardRuntimeSet for ShardWorkerRuntimeSet {
     fn shard_count(&self) -> usize {
         self.worker_handles.len()
     }
@@ -1064,52 +1054,6 @@ pub struct ShardRuntimeSetShutdownReport {
 impl From<ShardRuntimeError> for ShardRuntimeSetError {
     fn from(error: ShardRuntimeError) -> Self {
         Self::ShardRuntime(error)
-    }
-}
-
-impl AsyncTaskPerShardRuntimeSet {
-    pub fn from_symbols_with_config(
-        symbols: Vec<Symbol>,
-        config: MatchingRuntimeConfig,
-    ) -> Result<Self, RuntimeTopologyError> {
-        let topology = RuntimeTopology::resolve(&symbols, &config.topology)?;
-        let task_plans = topology
-            .shards()
-            .iter()
-            .map(|shard| AsyncShardTaskPlan {
-                shard_id: shard.id,
-                symbols: shard.symbols.clone(),
-            })
-            .collect();
-
-        Ok(Self { task_plans })
-    }
-
-    pub fn shard_count(&self) -> usize {
-        self.task_plans.len()
-    }
-
-    pub fn shard_ids(&self) -> Vec<RuntimeShardId> {
-        self.task_plans.iter().map(|task| task.shard_id).collect()
-    }
-
-    pub fn task_plans(&self) -> &[AsyncShardTaskPlan] {
-        self.task_plans.as_slice()
-    }
-
-    pub fn symbols_for_shard(&self, shard_id: RuntimeShardId) -> Option<&[Symbol]> {
-        self.task_plans
-            .iter()
-            .find(|task| task.shard_id == shard_id)
-            .map(|task| task.symbols.as_slice())
-    }
-
-    pub fn task_count(&self) -> usize {
-        self.task_plans.len()
-    }
-
-    pub fn task_symbols_for_shard(&self, shard_id: RuntimeShardId) -> Option<&[Symbol]> {
-        self.symbols_for_shard(shard_id)
     }
 }
 

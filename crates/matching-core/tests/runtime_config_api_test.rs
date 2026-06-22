@@ -72,7 +72,7 @@ fn matching_runtime_config_defaults_are_available_from_public_api() {
         config.topology.assignment_policy,
         SymbolAssignmentPolicy::DeclarationOrder
     );
-    assert_eq!(config.execution.mode, RuntimeExecutionMode::Inline);
+    assert_eq!(config.execution.mode, RuntimeExecutionMode::ShardWorker);
     assert_eq!(config.execution.max_run_cycles_per_call, 1024);
     assert_eq!(config.execution.max_run_calls_per_until_idle, 1024);
     assert_eq!(config.output_commit.pending_output_capacity, 1024);

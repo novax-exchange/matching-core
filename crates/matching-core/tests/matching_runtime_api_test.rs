@@ -227,7 +227,7 @@ fn matching_runtime_builds_inline_runtime_from_public_api() {
 }
 
 #[test]
-fn matching_runtime_builds_thread_per_shard_runtime_from_public_api() {
+fn matching_runtime_builds_shard_worker_runtime_from_public_api() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -236,16 +236,16 @@ fn matching_runtime_builds_thread_per_shard_runtime_from_public_api() {
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
     config.execution = RuntimeExecutionConfig {
-        mode: RuntimeExecutionMode::ThreadPerShard,
+        mode: RuntimeExecutionMode::ShardWorker,
         max_run_cycles_per_call: 1024,
         max_run_calls_per_until_idle: 1024,
     };
 
     let runtime =
         MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-            .expect("thread-per-shard matching runtime should be supported");
+            .expect("shard-worker matching runtime should be supported");
 
-    assert_eq!(runtime.mode(), RuntimeExecutionMode::ThreadPerShard);
+    assert_eq!(runtime.mode(), RuntimeExecutionMode::ShardWorker);
     assert_eq!(runtime.shard_count(), 2);
     assert_eq!(
         runtime.symbols_for_shard(RuntimeShardId(0)),
@@ -258,7 +258,7 @@ fn matching_runtime_builds_thread_per_shard_runtime_from_public_api() {
 }
 
 #[test]
-fn matching_runtime_thread_per_shard_can_own_per_shard_output_writers_from_public_api() {
+fn matching_runtime_shard_worker_can_own_per_shard_output_writers_from_public_api() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -267,13 +267,13 @@ fn matching_runtime_thread_per_shard_can_own_per_shard_output_writers_from_publi
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
     config.execution = RuntimeExecutionConfig {
-        mode: RuntimeExecutionMode::ThreadPerShard,
+        mode: RuntimeExecutionMode::ShardWorker,
         max_run_cycles_per_call: 1024,
         max_run_calls_per_until_idle: 1024,
     };
     let shard_zero_entries = Arc::new(Mutex::new(Vec::new()));
     let shard_one_entries = Arc::new(Mutex::new(Vec::new()));
-    let mut runtime = MatchingRuntime::new_thread_per_shard_with_output_factory(
+    let mut runtime = MatchingRuntime::new_shard_worker_with_output_factory(
         vec![btc.clone(), eth.clone()],
         config,
         {
@@ -291,7 +291,7 @@ fn matching_runtime_thread_per_shard_can_own_per_shard_output_writers_from_publi
             }
         },
     )
-    .expect("thread-per-shard matching runtime should own per-shard output writers");
+    .expect("shard-worker matching runtime should own per-shard output writers");
     let external_entries = Arc::new(Mutex::new(Vec::new()));
     let mut external_output = SharedJournalOutputAppender::new(Arc::clone(&external_entries));
     let mut external_journal_client =
@@ -314,7 +314,7 @@ fn matching_runtime_thread_per_shard_can_own_per_shard_output_writers_from_publi
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("thread-per-shard matching runtime should run with owned outputs");
+        .expect("shard-worker matching runtime should run with owned outputs");
 
     assert_eq!(external_output.read_all().len(), 0);
     let shard_zero_entry = shard_zero_entries
@@ -339,16 +339,17 @@ fn matching_runtime_thread_per_shard_can_own_per_shard_output_writers_from_publi
 
     runtime
         .shutdown()
-        .expect("thread-per-shard matching runtime should shut down worker threads");
+        .expect("shard-worker matching runtime should shut down worker threads");
 }
 
 #[test]
-fn matching_runtime_thread_per_shard_output_factory_rejects_non_thread_mode_from_public_api() {
+fn matching_runtime_shard_worker_output_factory_rejects_non_thread_mode_from_public_api() {
     let btc = symbol("BTC-USDT");
-    let config = MatchingRuntimeConfig::default();
+    let mut config = MatchingRuntimeConfig::default();
+    config.execution.mode = RuntimeExecutionMode::Inline;
     let entries = Arc::new(Mutex::new(Vec::new()));
 
-    let result = MatchingRuntime::new_thread_per_shard_with_output_factory(vec![btc], config, {
+    let result = MatchingRuntime::new_shard_worker_with_output_factory(vec![btc], config, {
         let entries = Arc::clone(&entries);
 
         move |_| {
@@ -361,26 +362,6 @@ fn matching_runtime_thread_per_shard_output_factory_rejects_non_thread_mode_from
         result,
         Err(MatchingRuntimeError::UnsupportedMode(
             RuntimeExecutionMode::Inline
-        ))
-    ));
-}
-
-#[test]
-fn matching_runtime_rejects_async_mode_until_runtime_mode_exists_from_public_api() {
-    let btc = symbol("BTC-USDT");
-    let mut config = MatchingRuntimeConfig::default();
-    config.execution = RuntimeExecutionConfig {
-        mode: RuntimeExecutionMode::AsyncTaskPerShard,
-        max_run_cycles_per_call: 1024,
-        max_run_calls_per_until_idle: 1024,
-    };
-
-    let result = MatchingRuntime::new_for_symbols_with_config(vec![btc], config);
-
-    assert!(matches!(
-        result,
-        Err(MatchingRuntimeError::RuntimeModeUnavailable(
-            RuntimeExecutionMode::AsyncTaskPerShard
         ))
     ));
 }
@@ -424,7 +405,7 @@ fn matching_runtime_routes_input_to_owning_shard_and_runs_once_all() {
 }
 
 #[test]
-fn thread_per_shard_runtime_routes_input_to_owning_shard_and_runs_once_all() {
+fn shard_worker_runtime_routes_input_to_owning_shard_and_runs_once_all() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -432,11 +413,11 @@ fn thread_per_shard_runtime_routes_input_to_owning_shard_and_runs_once_all() {
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
-    config.execution.mode = RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = RuntimeExecutionMode::ShardWorker;
 
     let mut runtime =
         MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-            .expect("thread-per-shard matching runtime should be supported");
+            .expect("shard-worker matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
@@ -451,7 +432,7 @@ fn thread_per_shard_runtime_routes_input_to_owning_shard_and_runs_once_all() {
                 max_output_requests_per_symbol: 1,
             },
         )
-        .expect("thread-per-shard matching runtime should run all shard run_once cycles");
+        .expect("shard-worker matching runtime should run all shard run_once cycles");
 
     assert_eq!(report.shard_reports.len(), 2);
     assert_eq!(
@@ -464,13 +445,13 @@ fn thread_per_shard_runtime_routes_input_to_owning_shard_and_runs_once_all() {
 }
 
 #[test]
-fn thread_per_shard_runtime_allows_enqueue_after_worker_consumes_input_capacity() {
+fn shard_worker_runtime_allows_enqueue_after_worker_consumes_input_capacity() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = RuntimeExecutionMode::ShardWorker;
     config.handoff.capacity = 1;
     let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("thread-per-shard matching runtime should be supported");
+        .expect("shard-worker matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
@@ -484,7 +465,7 @@ fn thread_per_shard_runtime_allows_enqueue_after_worker_consumes_input_capacity(
                 max_output_requests_per_symbol: 1,
             },
         )
-        .expect("thread-per-shard matching runtime should consume pending input");
+        .expect("shard-worker matching runtime should consume pending input");
 
     assert_eq!(
         runtime.can_enqueue_inputs(&[command_entry(2, btc.clone())]),
@@ -535,11 +516,11 @@ fn matching_runtime_enqueue_inputs_routes_batch_across_shards() {
 }
 
 #[test]
-fn thread_per_shard_runtime_enqueue_inputs_routes_batch_across_shards() {
+fn shard_worker_runtime_enqueue_inputs_routes_batch_across_shards() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = RuntimeExecutionMode::ShardWorker;
     config.topology = RuntimeTopologyConfig {
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
@@ -547,7 +528,7 @@ fn thread_per_shard_runtime_enqueue_inputs_routes_batch_across_shards() {
 
     let mut runtime =
         MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-            .expect("thread-per-shard matching runtime should be supported");
+            .expect("shard-worker matching runtime should be supported");
 
     assert_eq!(
         runtime.enqueue_inputs(vec![
@@ -560,7 +541,7 @@ fn thread_per_shard_runtime_enqueue_inputs_routes_batch_across_shards() {
 
     let status = runtime
         .status()
-        .expect("thread-per-shard matching runtime should report status");
+        .expect("shard-worker matching runtime should report status");
     assert_eq!(
         status
             .shard_status(RuntimeShardId(0))
@@ -637,11 +618,11 @@ fn matching_runtime_can_enqueue_inputs_reports_capacity_without_partial_enqueue(
 }
 
 #[test]
-fn thread_per_shard_runtime_can_enqueue_inputs_reports_capacity_without_partial_enqueue() {
+fn shard_worker_runtime_can_enqueue_inputs_reports_capacity_without_partial_enqueue() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = RuntimeExecutionMode::ShardWorker;
     config.topology = RuntimeTopologyConfig {
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
@@ -650,7 +631,7 @@ fn thread_per_shard_runtime_can_enqueue_inputs_reports_capacity_without_partial_
 
     let runtime =
         MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-            .expect("thread-per-shard matching runtime should be supported");
+            .expect("shard-worker matching runtime should be supported");
 
     assert_eq!(
         runtime.can_enqueue_inputs(&[
@@ -665,7 +646,7 @@ fn thread_per_shard_runtime_can_enqueue_inputs_reports_capacity_without_partial_
 
     let status = runtime
         .status()
-        .expect("thread-per-shard matching runtime should report status");
+        .expect("shard-worker matching runtime should report status");
     assert!(status.is_idle());
 }
 
@@ -705,12 +686,12 @@ fn matching_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue_when_ha
 }
 
 #[test]
-fn thread_per_shard_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue_when_handoff_would_fill(
+fn shard_worker_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue_when_handoff_would_fill(
 ) {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = RuntimeExecutionMode::ShardWorker;
     config.topology = RuntimeTopologyConfig {
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
@@ -718,7 +699,7 @@ fn thread_per_shard_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue
     config.handoff.capacity = 1;
     let mut runtime =
         MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-            .expect("thread-per-shard matching runtime should be supported");
+            .expect("shard-worker matching runtime should be supported");
 
     assert_eq!(
         runtime.enqueue_inputs(vec![
@@ -733,7 +714,7 @@ fn thread_per_shard_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue
 
     let status = runtime
         .status()
-        .expect("thread-per-shard matching runtime should report status");
+        .expect("shard-worker matching runtime should report status");
     assert!(status.is_idle());
     assert_eq!(
         status.shards_with_remaining_work(),
@@ -768,14 +749,14 @@ fn matching_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue_when_sy
 }
 
 #[test]
-fn thread_per_shard_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue_when_symbol_is_unknown(
+fn shard_worker_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue_when_symbol_is_unknown(
 ) {
     let btc = symbol("BTC-USDT");
     let sol = symbol("SOL-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = RuntimeExecutionMode::ShardWorker;
     let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("thread-per-shard matching runtime should be supported");
+        .expect("shard-worker matching runtime should be supported");
 
     assert_eq!(
         runtime.enqueue_inputs(vec![
@@ -789,7 +770,7 @@ fn thread_per_shard_runtime_enqueue_inputs_rejects_batch_without_partial_enqueue
 
     let status = runtime
         .status()
-        .expect("thread-per-shard matching runtime should report status");
+        .expect("shard-worker matching runtime should report status");
     assert!(status.is_idle());
 }
 
@@ -888,18 +869,18 @@ fn matching_runtime_shutdown_closes_input_without_draining_pending_work() {
 }
 
 #[test]
-fn thread_per_shard_runtime_shutdown_closes_input_without_draining_pending_work() {
+fn shard_worker_runtime_shutdown_closes_input_without_draining_pending_work() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = RuntimeExecutionMode::ShardWorker;
     let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("thread-per-shard matching runtime should be supported");
+        .expect("shard-worker matching runtime should be supported");
 
     assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
 
     let report = runtime
         .shutdown()
-        .expect("thread-per-shard matching runtime should shut down");
+        .expect("shard-worker matching runtime should shut down");
 
     assert_eq!(report.input_state, MatchingRuntimeInputState::Closed);
     assert_eq!(
@@ -937,7 +918,7 @@ fn thread_per_shard_runtime_shutdown_closes_input_without_draining_pending_work(
 
     let status = runtime
         .status()
-        .expect("thread-per-shard matching runtime status should remain available");
+        .expect("shard-worker matching runtime status should remain available");
     assert_eq!(
         status.lifecycle_state,
         MatchingRuntimeLifecycleState::Shutdown
@@ -1001,19 +982,19 @@ fn matching_runtime_shutdown_rejects_later_execution_without_losing_status() {
 }
 
 #[test]
-fn thread_per_shard_runtime_shutdown_rejects_later_execution_without_losing_status() {
+fn shard_worker_runtime_shutdown_rejects_later_execution_without_losing_status() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = RuntimeExecutionMode::ShardWorker;
     let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("thread-per-shard matching runtime should be supported");
+        .expect("shard-worker matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
     assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
     runtime
         .shutdown()
-        .expect("thread-per-shard matching runtime should shut down");
+        .expect("shard-worker matching runtime should shut down");
 
     assert_eq!(
         runtime.run_once_all(
@@ -1041,7 +1022,7 @@ fn thread_per_shard_runtime_shutdown_rejects_later_execution_without_losing_stat
 
     let status = runtime
         .status()
-        .expect("thread-per-shard matching runtime status should remain queryable after shutdown");
+        .expect("shard-worker matching runtime status should remain queryable after shutdown");
     assert_eq!(
         status.lifecycle_state,
         MatchingRuntimeLifecycleState::Shutdown
@@ -1080,17 +1061,17 @@ fn matching_runtime_shutdown_rejects_repeated_shutdown_without_losing_status() {
 }
 
 #[test]
-fn thread_per_shard_runtime_shutdown_rejects_repeated_shutdown_without_losing_status() {
+fn shard_worker_runtime_shutdown_rejects_repeated_shutdown_without_losing_status() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = RuntimeExecutionMode::ShardWorker;
     let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("thread-per-shard matching runtime should be supported");
+        .expect("shard-worker matching runtime should be supported");
 
     assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
     runtime
         .shutdown()
-        .expect("thread-per-shard matching runtime should shut down once");
+        .expect("shard-worker matching runtime should shut down once");
 
     assert_eq!(
         runtime.shutdown(),
@@ -1098,7 +1079,7 @@ fn thread_per_shard_runtime_shutdown_rejects_repeated_shutdown_without_losing_st
     );
 
     let status = runtime.status().expect(
-        "thread-per-shard matching runtime status should remain queryable after repeated shutdown",
+        "shard-worker matching runtime status should remain queryable after repeated shutdown",
     );
     assert_eq!(
         status.lifecycle_state,
@@ -1144,17 +1125,17 @@ fn matching_runtime_drain_configured_closes_input_and_drains_existing_work() {
 }
 
 #[test]
-fn thread_per_shard_runtime_drain_configured_closes_input_and_drains_existing_work() {
+fn shard_worker_runtime_drain_configured_closes_input_and_drains_existing_work() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = RuntimeExecutionMode::ShardWorker;
     config.execution.max_run_cycles_per_call = 1;
     config.execution.max_run_calls_per_until_idle = 4;
     config.symbol_runtime.max_input_entries_per_step = 1;
     config.output_commit.max_output_requests_per_step = 1;
 
     let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("thread-per-shard matching runtime should be supported");
+        .expect("shard-worker matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
@@ -1163,7 +1144,7 @@ fn thread_per_shard_runtime_drain_configured_closes_input_and_drains_existing_wo
 
     let report = runtime
         .drain_configured(&mut journal_client, &mut output)
-        .expect("thread-per-shard matching runtime should drain with configured limits");
+        .expect("shard-worker matching runtime should drain with configured limits");
 
     assert_eq!(runtime.input_state(), MatchingRuntimeInputState::Closed);
     assert_eq!(report.stop_reason, MatchingRuntimeDrainStopReason::Drained);
@@ -1270,7 +1251,7 @@ fn matching_runtime_run_limited_all_drives_all_shards_until_idle() {
 }
 
 #[test]
-fn thread_per_shard_runtime_run_limited_all_drives_all_shards_until_idle() {
+fn shard_worker_runtime_run_limited_all_drives_all_shards_until_idle() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -1278,11 +1259,11 @@ fn thread_per_shard_runtime_run_limited_all_drives_all_shards_until_idle() {
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
-    config.execution.mode = RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = RuntimeExecutionMode::ShardWorker;
 
     let mut runtime =
         MatchingRuntime::new_for_symbols_with_config(vec![btc.clone(), eth.clone()], config)
-            .expect("thread-per-shard matching runtime should be supported");
+            .expect("shard-worker matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
@@ -1299,7 +1280,7 @@ fn thread_per_shard_runtime_run_limited_all_drives_all_shards_until_idle() {
             },
             ShardRuntimeRunLimit { max_cycles: 2 },
         )
-        .expect("thread-per-shard matching runtime should run all shard run limits");
+        .expect("shard-worker matching runtime should run all shard run limits");
 
     assert_eq!(report.shard_reports.len(), 2);
     assert!(report.is_idle());
@@ -1445,16 +1426,16 @@ fn matching_runtime_run_configured_all_uses_runtime_config_limits() {
 }
 
 #[test]
-fn thread_per_shard_runtime_run_configured_all_uses_runtime_config_limits() {
+fn shard_worker_runtime_run_configured_all_uses_runtime_config_limits() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = RuntimeExecutionMode::ShardWorker;
     config.execution.max_run_cycles_per_call = 1;
     config.symbol_runtime.max_input_entries_per_step = 1;
     config.output_commit.max_output_requests_per_step = 1;
 
     let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("thread-per-shard matching runtime should be supported");
+        .expect("shard-worker matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
@@ -1463,7 +1444,7 @@ fn thread_per_shard_runtime_run_configured_all_uses_runtime_config_limits() {
 
     let report = runtime
         .run_configured_all(&mut journal_client, &mut output)
-        .expect("thread-per-shard matching runtime should run with configured limits");
+        .expect("shard-worker matching runtime should run with configured limits");
 
     assert!(report.needs_another_run());
     assert_eq!(report.shards_reaching_run_limit(), vec![RuntimeShardId(0)]);
@@ -1504,16 +1485,16 @@ fn matching_runtime_run_until_idle_repeats_configured_runs_until_idle() {
 }
 
 #[test]
-fn thread_per_shard_runtime_run_until_idle_repeats_configured_runs_until_idle() {
+fn shard_worker_runtime_run_until_idle_repeats_configured_runs_until_idle() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = RuntimeExecutionMode::ShardWorker;
     config.execution.max_run_cycles_per_call = 1;
     config.symbol_runtime.max_input_entries_per_step = 1;
     config.output_commit.max_output_requests_per_step = 1;
 
     let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("thread-per-shard matching runtime should be supported");
+        .expect("shard-worker matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
@@ -1527,7 +1508,7 @@ fn thread_per_shard_runtime_run_until_idle_repeats_configured_runs_until_idle() 
             &mut output,
             MatchingRuntimeRunUntilIdleLimit { max_run_calls: 4 },
         )
-        .expect("thread-per-shard matching runtime should run configured calls until idle");
+        .expect("shard-worker matching runtime should run configured calls until idle");
 
     assert_eq!(
         report.stop_reason,
@@ -1572,16 +1553,16 @@ fn matching_runtime_run_until_idle_reports_call_limit_before_idle() {
 }
 
 #[test]
-fn thread_per_shard_runtime_run_until_idle_reports_call_limit_before_idle() {
+fn shard_worker_runtime_run_until_idle_reports_call_limit_before_idle() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = RuntimeExecutionMode::ShardWorker;
     config.execution.max_run_cycles_per_call = 1;
     config.symbol_runtime.max_input_entries_per_step = 1;
     config.output_commit.max_output_requests_per_step = 1;
 
     let mut runtime = MatchingRuntime::new_for_symbols_with_config(vec![btc.clone()], config)
-        .expect("thread-per-shard matching runtime should be supported");
+        .expect("shard-worker matching runtime should be supported");
     let mut journal_client = matching_core::output_commit_boundary::OutputJournalClient::new();
     let mut output = TestJournalOutputAppender::new();
 
@@ -1595,7 +1576,7 @@ fn thread_per_shard_runtime_run_until_idle_reports_call_limit_before_idle() {
             &mut output,
             MatchingRuntimeRunUntilIdleLimit { max_run_calls: 2 },
         )
-        .expect("thread-per-shard matching runtime should stop at outer call limit");
+        .expect("shard-worker matching runtime should stop at outer call limit");
 
     assert_eq!(
         report.stop_reason,

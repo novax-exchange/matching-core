@@ -8,7 +8,7 @@ use crate::shard_runtime::{
 };
 use crate::shard_runtime_set::{
     InlineShardRuntimeSet, ShardRuntimeOutputWriter, ShardRuntimeSet, ShardRuntimeSetError,
-    ShardRuntimeSetShutdownReport, ThreadPerShardRuntimeSet,
+    ShardRuntimeSetShutdownReport, ShardWorkerRuntimeSet,
 };
 use crate::types::Symbol;
 
@@ -27,7 +27,6 @@ pub enum MatchingRuntimeError {
     InputClosed,
     RuntimeShutdown,
     UnsupportedMode(RuntimeExecutionMode),
-    RuntimeModeUnavailable(RuntimeExecutionMode),
     ShardRuntimeSet(ShardRuntimeSetError),
     Topology(RuntimeTopologyError),
     ShardRuntime(ShardRuntimeError),
@@ -181,10 +180,10 @@ impl MatchingRuntime {
                     Box::new(runtime_set),
                 ))
             }
-            RuntimeExecutionMode::ThreadPerShard => {
+            RuntimeExecutionMode::ShardWorker => {
                 let mode = config.execution.mode;
                 let runtime_set =
-                    ThreadPerShardRuntimeSet::from_symbols_with_config(symbols, config.clone())
+                    ShardWorkerRuntimeSet::from_symbols_with_config(symbols, config.clone())
                         .map_err(MatchingRuntimeError::Topology)?;
 
                 Ok(Self::new_with_runtime_set(
@@ -193,13 +192,10 @@ impl MatchingRuntime {
                     Box::new(runtime_set),
                 ))
             }
-            RuntimeExecutionMode::AsyncTaskPerShard => Err(
-                MatchingRuntimeError::RuntimeModeUnavailable(config.execution.mode),
-            ),
         }
     }
 
-    pub fn new_thread_per_shard_for_symbols_with_config_and_output_factory<F>(
+    pub fn new_shard_worker_for_symbols_with_config_and_output_factory<F>(
         symbols: Vec<Symbol>,
         config: MatchingRuntimeConfig,
         output_factory: F,
@@ -207,11 +203,11 @@ impl MatchingRuntime {
     where
         F: FnMut(RuntimeShardId) -> ShardRuntimeOutputWriter,
     {
-        if config.execution.mode != RuntimeExecutionMode::ThreadPerShard {
+        if config.execution.mode != RuntimeExecutionMode::ShardWorker {
             return Err(MatchingRuntimeError::UnsupportedMode(config.execution.mode));
         }
 
-        let runtime_set = ThreadPerShardRuntimeSet::from_symbols_with_config_and_output_factory(
+        let runtime_set = ShardWorkerRuntimeSet::from_symbols_with_config_and_output_factory(
             symbols,
             config.clone(),
             output_factory,
@@ -219,13 +215,13 @@ impl MatchingRuntime {
         .map_err(MatchingRuntimeError::Topology)?;
 
         Ok(Self::new_with_runtime_set(
-            RuntimeExecutionMode::ThreadPerShard,
+            RuntimeExecutionMode::ShardWorker,
             &config,
             Box::new(runtime_set),
         ))
     }
 
-    pub fn new_thread_per_shard_with_output_factory<F>(
+    pub fn new_shard_worker_with_output_factory<F>(
         symbols: Vec<Symbol>,
         config: MatchingRuntimeConfig,
         output_factory: F,
@@ -233,7 +229,7 @@ impl MatchingRuntime {
     where
         F: FnMut(RuntimeShardId) -> ShardRuntimeOutputWriter,
     {
-        Self::new_thread_per_shard_for_symbols_with_config_and_output_factory(
+        Self::new_shard_worker_for_symbols_with_config_and_output_factory(
             symbols,
             config,
             output_factory,

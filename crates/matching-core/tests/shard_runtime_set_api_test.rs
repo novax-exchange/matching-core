@@ -6,8 +6,8 @@ use matching_core::runtime_config::{
 use matching_core::shard_runtime::ShardRuntimeError;
 use matching_core::shard_runtime::ShardRuntimeRunOnceLimits;
 use matching_core::shard_runtime_set::{
-    AsyncShardTaskPlan, AsyncTaskPerShardRuntimeSet, InlineShardRuntimeSet, InputHandoffWritePlan,
-    InputHandoffWriter, ShardRuntimeSet, ShardRuntimeSetError, ThreadPerShardRuntimeSet,
+    InlineShardRuntimeSet, InputHandoffWritePlan, InputHandoffWriter, ShardRuntimeSet,
+    ShardRuntimeSetError, ShardWorkerRuntimeSet,
 };
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 use matching_core::{
@@ -129,22 +129,22 @@ fn inline_shard_runtime_set_builds_shards_from_runtime_topology_from_public_api(
 }
 
 #[test]
-fn thread_per_shard_runtime_set_builds_shards_from_runtime_topology_from_public_api() {
+fn shard_worker_runtime_set_builds_shards_from_runtime_topology_from_public_api() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let sol = symbol("SOL-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = matching_core::runtime_config::RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = matching_core::runtime_config::RuntimeExecutionMode::ShardWorker;
     config.topology = RuntimeTopologyConfig {
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
 
-    let runtime_set = ThreadPerShardRuntimeSet::from_symbols_with_config(
+    let runtime_set = ShardWorkerRuntimeSet::from_symbols_with_config(
         vec![btc.clone(), eth.clone(), sol.clone()],
         config,
     )
-    .expect("thread-per-shard matching runtime runtime_set topology should resolve");
+    .expect("shard-worker matching runtime runtime_set topology should resolve");
 
     assert_eq!(runtime_set.shard_count(), 2);
     assert_eq!(
@@ -190,74 +190,19 @@ fn inline_shard_runtime_set_wraps_shard_runtime_errors_from_public_api() {
 }
 
 #[test]
-fn thread_per_shard_runtime_set_wraps_shard_runtime_errors_from_public_api() {
+fn shard_worker_runtime_set_wraps_shard_runtime_errors_from_public_api() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = matching_core::runtime_config::RuntimeExecutionMode::ThreadPerShard;
-    let mut runtime_set = ThreadPerShardRuntimeSet::from_symbols_with_config(vec![btc], config)
-        .expect("thread-per-shard matching runtime runtime_set topology should resolve");
+    config.execution.mode = matching_core::runtime_config::RuntimeExecutionMode::ShardWorker;
+    let mut runtime_set = ShardWorkerRuntimeSet::from_symbols_with_config(vec![btc], config)
+        .expect("shard-worker matching runtime runtime_set topology should resolve");
 
     assert_eq!(
         runtime_set.write_input(command_entry(1, eth.clone())),
         Err(ShardRuntimeSetError::ShardRuntime(
             ShardRuntimeError::UnregisteredHandoff(eth)
         ))
-    );
-}
-
-#[test]
-fn async_task_per_shard_runtime_set_builds_shard_plan_from_runtime_topology_from_public_api() {
-    let btc = symbol("BTC-USDT");
-    let eth = symbol("ETH-USDT");
-    let sol = symbol("SOL-USDT");
-    let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = matching_core::runtime_config::RuntimeExecutionMode::AsyncTaskPerShard;
-    config.topology = RuntimeTopologyConfig {
-        shard_count: 2,
-        assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
-    };
-
-    let runtime_set = AsyncTaskPerShardRuntimeSet::from_symbols_with_config(
-        vec![btc.clone(), eth.clone(), sol.clone()],
-        config,
-    )
-    .expect("async-task-per-shard runtime set topology should resolve");
-
-    assert_eq!(runtime_set.shard_count(), 2);
-    assert_eq!(
-        runtime_set.shard_ids(),
-        vec![RuntimeShardId(0), RuntimeShardId(1)]
-    );
-    assert_eq!(
-        runtime_set.symbols_for_shard(RuntimeShardId(0)),
-        Some(&[btc.clone(), sol.clone()][..])
-    );
-    assert_eq!(
-        runtime_set.symbols_for_shard(RuntimeShardId(1)),
-        Some(&[eth.clone()][..])
-    );
-    assert_eq!(runtime_set.task_count(), 2);
-    assert_eq!(
-        runtime_set.task_plans(),
-        &[
-            AsyncShardTaskPlan {
-                shard_id: RuntimeShardId(0),
-                symbols: vec![btc.clone(), sol.clone()],
-            },
-            AsyncShardTaskPlan {
-                shard_id: RuntimeShardId(1),
-                symbols: vec![eth.clone()],
-            },
-        ]
-    );
-    assert_eq!(
-        runtime_set.task_symbols_for_shard(RuntimeShardId(0)),
-        Some(&[btc.clone(), sol.clone()][..])
-    );
-    assert_eq!(
-        runtime_set.task_symbols_for_shard(RuntimeShardId(1)),
-        Some(&[eth.clone()][..])
     );
 }
 
@@ -300,28 +245,28 @@ fn inline_shard_runtime_set_plans_input_handoff_writes_by_owning_shard_from_publ
 }
 
 #[test]
-fn thread_per_shard_runtime_set_plans_input_handoff_writes_by_owning_shard_from_public_api() {
+fn shard_worker_runtime_set_plans_input_handoff_writes_by_owning_shard_from_public_api() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let sol = symbol("SOL-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = matching_core::runtime_config::RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = matching_core::runtime_config::RuntimeExecutionMode::ShardWorker;
     config.topology = RuntimeTopologyConfig {
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
-    let runtime_set = ThreadPerShardRuntimeSet::from_symbols_with_config(
+    let runtime_set = ShardWorkerRuntimeSet::from_symbols_with_config(
         vec![btc.clone(), eth.clone(), sol.clone()],
         config,
     )
-    .expect("thread-per-shard matching runtime runtime_set should resolve");
+    .expect("shard-worker matching runtime runtime_set should resolve");
     let btc_entry = command_entry(1, btc);
     let eth_entry = command_entry(2, eth);
     let sol_entry = command_entry(3, sol);
 
     let plans = runtime_set
         .plan_writes(&[btc_entry.clone(), eth_entry.clone(), sol_entry.clone()])
-        .expect("thread-per-shard matching runtime runtime_set should plan input handoff writes");
+        .expect("shard-worker matching runtime runtime_set should plan input handoff writes");
 
     assert_eq!(
         plans,
@@ -339,18 +284,18 @@ fn thread_per_shard_runtime_set_plans_input_handoff_writes_by_owning_shard_from_
 }
 
 #[test]
-fn thread_per_shard_runtime_set_can_own_per_shard_output_writers_from_public_api() {
+fn shard_worker_runtime_set_can_own_per_shard_output_writers_from_public_api() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = matching_core::runtime_config::RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = matching_core::runtime_config::RuntimeExecutionMode::ShardWorker;
     config.topology = RuntimeTopologyConfig {
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
     let shard_zero_entries = Arc::new(Mutex::new(Vec::new()));
     let shard_one_entries = Arc::new(Mutex::new(Vec::new()));
-    let mut runtime_set = ThreadPerShardRuntimeSet::from_symbols_with_config_and_output_factory(
+    let mut runtime_set = ShardWorkerRuntimeSet::from_symbols_with_config_and_output_factory(
         vec![btc.clone(), eth.clone()],
         config,
         {
@@ -368,7 +313,7 @@ fn thread_per_shard_runtime_set_can_own_per_shard_output_writers_from_public_api
             }
         },
     )
-    .expect("thread-per-shard matching runtime runtime_set should resolve");
+    .expect("shard-worker matching runtime runtime_set should resolve");
     let external_entries = Arc::new(Mutex::new(Vec::new()));
     let mut external_output = SharedJournalOutputAppender::new(Arc::clone(&external_entries));
     let mut external_journal_client = OutputJournalClient::new();
@@ -378,7 +323,7 @@ fn thread_per_shard_runtime_set_can_own_per_shard_output_writers_from_public_api
             command_entry(1, btc.clone()),
             command_entry(2, eth.clone()),
         ])
-        .expect("thread-per-shard runtime set should accept inputs");
+        .expect("shard-worker runtime set should accept inputs");
     runtime_set
         .run_once_all(
             &mut external_journal_client,
@@ -388,7 +333,7 @@ fn thread_per_shard_runtime_set_can_own_per_shard_output_writers_from_public_api
                 max_output_requests_per_symbol: 10,
             },
         )
-        .expect("thread-per-shard runtime set should run with owned shard outputs");
+        .expect("shard-worker runtime set should run with owned shard outputs");
 
     assert_eq!(external_output.read_all().len(), 0);
     assert_eq!(
@@ -428,18 +373,18 @@ fn thread_per_shard_runtime_set_can_own_per_shard_output_writers_from_public_api
 }
 
 #[test]
-fn thread_per_shard_runtime_set_with_owned_outputs_shuts_down_worker_threads() {
+fn shard_worker_runtime_set_with_owned_outputs_shuts_down_worker_threads() {
     let btc = symbol("BTC-USDT");
     let eth = symbol("ETH-USDT");
     let mut config = MatchingRuntimeConfig::default();
-    config.execution.mode = matching_core::runtime_config::RuntimeExecutionMode::ThreadPerShard;
+    config.execution.mode = matching_core::runtime_config::RuntimeExecutionMode::ShardWorker;
     config.topology = RuntimeTopologyConfig {
         shard_count: 2,
         assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
     };
     let shard_zero_entries = Arc::new(Mutex::new(Vec::new()));
     let shard_one_entries = Arc::new(Mutex::new(Vec::new()));
-    let mut runtime_set = ThreadPerShardRuntimeSet::from_symbols_with_config_and_output_factory(
+    let mut runtime_set = ShardWorkerRuntimeSet::from_symbols_with_config_and_output_factory(
         vec![btc.clone(), eth.clone()],
         config,
         {
@@ -457,11 +402,11 @@ fn thread_per_shard_runtime_set_with_owned_outputs_shuts_down_worker_threads() {
             }
         },
     )
-    .expect("thread-per-shard matching runtime runtime_set should resolve");
+    .expect("shard-worker matching runtime runtime_set should resolve");
 
     let shutdown_report = runtime_set
         .shutdown()
-        .expect("thread-per-shard runtime set should shut down worker threads");
+        .expect("shard-worker runtime set should shut down worker threads");
 
     assert_eq!(
         shutdown_report.shard_ids,
