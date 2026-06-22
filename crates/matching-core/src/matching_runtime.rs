@@ -8,6 +8,7 @@ use crate::shard_runtime::{
 };
 use crate::shard_runtime_set::{
     InlineShardRuntimeSet, ShardRuntimeSet, ShardRuntimeSetError, ShardRuntimeSetShutdownReport,
+    ThreadPerShardRuntimeSet,
 };
 use crate::types::Symbol;
 
@@ -170,7 +171,26 @@ impl MatchingRuntime {
                     lifecycle_state: MatchingRuntimeLifecycleState::Running,
                 })
             }
-            RuntimeExecutionMode::ThreadPerShard | RuntimeExecutionMode::AsyncTaskPerShard => Err(
+            RuntimeExecutionMode::ThreadPerShard => {
+                let mode = config.execution.mode;
+                let run_once_limits = ShardRuntimeRunOnceLimits::from_config(&config);
+                let run_limit = ShardRuntimeRunLimit::from_config(&config);
+                let run_until_idle_limit = MatchingRuntimeRunUntilIdleLimit::from_config(&config);
+                let runtime_set =
+                    ThreadPerShardRuntimeSet::from_symbols_with_config(symbols, config)
+                        .map_err(MatchingRuntimeError::Topology)?;
+
+                Ok(Self {
+                    mode,
+                    runtime_set: Box::new(runtime_set),
+                    run_once_limits,
+                    run_limit,
+                    run_until_idle_limit,
+                    input_state: MatchingRuntimeInputState::Open,
+                    lifecycle_state: MatchingRuntimeLifecycleState::Running,
+                })
+            }
+            RuntimeExecutionMode::AsyncTaskPerShard => Err(
                 MatchingRuntimeError::RuntimeModeUnavailable(config.execution.mode),
             ),
         }
