@@ -1,17 +1,17 @@
 use crate::bounded_handoff::BoundedHandoff;
 use crate::journal_adapter::{JournalInputEntry, JournalOutputAppender};
 use crate::output_commit_boundary::{
-    run_output_batch_commit_step_report_with_identity, OutputBatchCommitResult,
-    OutputBatchCommitStepReport, OutputBatchIdentity, OutputBatchQueryStatus,
-    OutputCommitBlockAction, OutputCommitBlockDecision, OutputCommitRetryTracker,
-    OutputJournalClient, PendingOutputBuffer,
+    run_output_batch_commit_step_report_with_identity_and_metadata_context,
+    OutputBatchCommitMetadataContext, OutputBatchCommitResult, OutputBatchCommitStepReport,
+    OutputBatchIdentity, OutputBatchQueryStatus, OutputCommitBlockAction,
+    OutputCommitBlockDecision, OutputCommitRetryTracker, OutputJournalClient, PendingOutputBuffer,
 };
 use crate::runtime_config::{MatchingRuntimeConfig, RuntimeTopologyConfig};
 use crate::runtime_topology::{RuntimeTopology, RuntimeTopologyError};
 use crate::snapshot_restore::SymbolRuntimeSnapshot;
 use crate::symbol_runtime::{
     advance_runtime_safe_point_from_output_commit,
-    run_symbol_runtime_step_with_output_batch_commit, SymbolRuntime,
+    run_symbol_runtime_step_with_output_batch_commit_metadata_context, SymbolRuntime,
     SymbolRuntimeOutputCommitStepError, SymbolRuntimeOutputCommitStepReport,
 };
 use crate::types::{Checksum, JournalSeq, Symbol};
@@ -330,6 +330,27 @@ impl ShardExecutionCore {
         max_input_entries: usize,
         max_output_requests: usize,
     ) -> Result<SymbolRuntimeOutputCommitStepReport, ShardExecutionCoreError> {
+        self.run_symbol_step_with_output_batch_commit_metadata_context(
+            symbol,
+            handoff,
+            journal_client,
+            output,
+            max_input_entries,
+            max_output_requests,
+            None,
+        )
+    }
+
+    pub fn run_symbol_step_with_output_batch_commit_metadata_context(
+        &mut self,
+        symbol: &Symbol,
+        handoff: &mut BoundedHandoff,
+        journal_client: &mut OutputJournalClient,
+        output: &mut dyn JournalOutputAppender,
+        max_input_entries: usize,
+        max_output_requests: usize,
+        metadata_context: Option<OutputBatchCommitMetadataContext>,
+    ) -> Result<SymbolRuntimeOutputCommitStepReport, ShardExecutionCoreError> {
         let runtime = self
             .runtimes
             .get_mut(symbol)
@@ -339,7 +360,7 @@ impl ShardExecutionCore {
             .get_mut(symbol)
             .ok_or(ShardExecutionCoreError::UnknownSymbol)?;
 
-        run_symbol_runtime_step_with_output_batch_commit(
+        run_symbol_runtime_step_with_output_batch_commit_metadata_context(
             runtime,
             handoff,
             pending_output_buffer,
@@ -347,6 +368,7 @@ impl ShardExecutionCore {
             output,
             max_input_entries,
             max_output_requests,
+            metadata_context,
         )
         .map_err(ShardExecutionCoreError::OutputCommitStepFailed)
     }
@@ -358,6 +380,23 @@ impl ShardExecutionCore {
         output: &mut dyn JournalOutputAppender,
         max_output_requests: usize,
     ) -> Result<ShardExecutionCoreOutputCommitStepReport, ShardExecutionCoreError> {
+        self.run_symbol_output_batch_commit_step_metadata_context(
+            symbol,
+            journal_client,
+            output,
+            max_output_requests,
+            None,
+        )
+    }
+
+    pub fn run_symbol_output_batch_commit_step_metadata_context(
+        &mut self,
+        symbol: &Symbol,
+        journal_client: &mut OutputJournalClient,
+        output: &mut dyn JournalOutputAppender,
+        max_output_requests: usize,
+        metadata_context: Option<OutputBatchCommitMetadataContext>,
+    ) -> Result<ShardExecutionCoreOutputCommitStepReport, ShardExecutionCoreError> {
         let runtime = self
             .runtimes
             .get_mut(symbol)
@@ -367,13 +406,15 @@ impl ShardExecutionCore {
             .get_mut(symbol)
             .ok_or(ShardExecutionCoreError::UnknownSymbol)?;
 
-        let output_commit_report_with_identity = run_output_batch_commit_step_report_with_identity(
-            symbol,
-            journal_client,
-            pending_output_buffer,
-            output,
-            max_output_requests,
-        );
+        let output_commit_report_with_identity =
+            run_output_batch_commit_step_report_with_identity_and_metadata_context(
+                symbol,
+                journal_client,
+                pending_output_buffer,
+                output,
+                max_output_requests,
+                metadata_context,
+            );
         let output_commit_report = output_commit_report_with_identity.commit_report;
         let safe_point_advanced_count = advance_runtime_safe_point_from_output_commit(
             runtime,
@@ -402,6 +443,27 @@ impl ShardExecutionCore {
         max_input_entries: usize,
         max_output_requests: usize,
     ) -> Result<SymbolRuntimeOutputCommitStepReport, ShardExecutionCoreError> {
+        self.run_symbol_pressure_aware_step_metadata_context(
+            symbol,
+            handoff,
+            journal_client,
+            output,
+            max_input_entries,
+            max_output_requests,
+            None,
+        )
+    }
+
+    pub fn run_symbol_pressure_aware_step_metadata_context(
+        &mut self,
+        symbol: &Symbol,
+        handoff: &mut BoundedHandoff,
+        journal_client: &mut OutputJournalClient,
+        output: &mut dyn JournalOutputAppender,
+        max_input_entries: usize,
+        max_output_requests: usize,
+        metadata_context: Option<OutputBatchCommitMetadataContext>,
+    ) -> Result<SymbolRuntimeOutputCommitStepReport, ShardExecutionCoreError> {
         let pending_output_full = self
             .pending_output_buffers
             .get(symbol)
@@ -409,11 +471,12 @@ impl ShardExecutionCore {
             .is_full();
 
         if pending_output_full {
-            let output_only_report = self.run_symbol_output_batch_commit_step(
+            let output_only_report = self.run_symbol_output_batch_commit_step_metadata_context(
                 symbol,
                 journal_client,
                 output,
                 max_output_requests,
+                metadata_context,
             )?;
 
             return Ok(SymbolRuntimeOutputCommitStepReport {
@@ -425,13 +488,14 @@ impl ShardExecutionCore {
             });
         }
 
-        self.run_symbol_step_with_output_batch_commit(
+        self.run_symbol_step_with_output_batch_commit_metadata_context(
             symbol,
             handoff,
             journal_client,
             output,
             max_input_entries,
             max_output_requests,
+            metadata_context,
         )
     }
 
@@ -443,6 +507,27 @@ impl ShardExecutionCore {
         output: &mut dyn JournalOutputAppender,
         max_input_entries: usize,
         max_output_requests: usize,
+    ) -> Result<ShardExecutionCoreRetryAwareStepReport, ShardExecutionCoreError> {
+        self.run_symbol_retry_aware_step_metadata_context(
+            symbol,
+            handoff,
+            journal_client,
+            output,
+            max_input_entries,
+            max_output_requests,
+            None,
+        )
+    }
+
+    pub fn run_symbol_retry_aware_step_metadata_context(
+        &mut self,
+        symbol: &Symbol,
+        handoff: &mut BoundedHandoff,
+        journal_client: &mut OutputJournalClient,
+        output: &mut dyn JournalOutputAppender,
+        max_input_entries: usize,
+        max_output_requests: usize,
+        metadata_context: Option<OutputBatchCommitMetadataContext>,
     ) -> Result<ShardExecutionCoreRetryAwareStepReport, ShardExecutionCoreError> {
         self.runtimes
             .get(symbol)
@@ -492,13 +577,14 @@ impl ShardExecutionCore {
             });
         }
 
-        let step_report = self.run_symbol_pressure_aware_step(
+        let step_report = self.run_symbol_pressure_aware_step_metadata_context(
             symbol,
             handoff,
             journal_client,
             output,
             max_input_entries,
             max_output_requests,
+            metadata_context,
         )?;
         let retry_tracker = self
             .output_commit_retry_trackers

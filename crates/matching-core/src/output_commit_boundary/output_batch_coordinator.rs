@@ -15,6 +15,7 @@ use super::pending_output_buffer::PendingOutputBuffer;
 use crate::journal_adapter::{
     JournalAdapterError, JournalOutputAppender, JournalOutputCommitMetadata,
 };
+use crate::runtime_config::RuntimeShardId;
 use crate::types::{JournalSeq, Symbol};
 use std::collections::HashMap;
 
@@ -37,6 +38,12 @@ pub struct OutputBatchCommitStepReportWithIdentity {
     pub batch_identity: Option<OutputBatchIdentity>,
     pub output_batch_query_status: Option<OutputBatchQueryStatus>,
     pub commit_report: OutputBatchCommitStepReport,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputBatchCommitMetadataContext {
+    pub shard_id: RuntimeShardId,
+    pub shard_sequence: u64,
 }
 
 struct OutputBatchCommitStepExecutionReport {
@@ -161,11 +168,29 @@ pub fn run_output_batch_commit_step_report_with_identity(
     journal: &mut dyn JournalOutputAppender,
     max_requests: usize,
 ) -> OutputBatchCommitStepReportWithIdentity {
+    run_output_batch_commit_step_report_with_identity_and_metadata_context(
+        symbol,
+        journal_client,
+        pending_buffer,
+        journal,
+        max_requests,
+        None,
+    )
+}
+
+pub fn run_output_batch_commit_step_report_with_identity_and_metadata_context(
+    symbol: &Symbol,
+    journal_client: &mut OutputJournalClient,
+    pending_buffer: &mut PendingOutputBuffer,
+    journal: &mut dyn JournalOutputAppender,
+    max_requests: usize,
+    metadata_context: Option<OutputBatchCommitMetadataContext>,
+) -> OutputBatchCommitStepReportWithIdentity {
     let requests = pending_buffer.drain_batch(max_requests);
     let batch_identity = build_output_batch_identity(symbol, MATCHING_OUTPUT_VERSION, &requests);
     let output_commit_metadata = batch_identity
         .as_ref()
-        .map(JournalOutputCommitMetadata::from_output_batch_identity);
+        .map(|identity| output_commit_metadata_from_identity(identity, metadata_context));
     let execution_report = run_output_batch_commit_step_report_for_requests(
         journal_client,
         pending_buffer,
@@ -179,11 +204,11 @@ pub fn run_output_batch_commit_step_report_with_identity(
         execution_report.duplicate_accepted_count,
     ) {
         (Some(identity), Some(OutputCommitOutcome::Unknown), _) => {
-            let metadata = JournalOutputCommitMetadata::from_output_batch_identity(identity);
+            let metadata = output_commit_metadata_from_identity(identity, metadata_context);
             Some(journal_client.query_output_batch(&metadata, journal))
         }
         (Some(identity), Some(OutputCommitOutcome::Rejected), _) => {
-            let metadata = JournalOutputCommitMetadata::from_output_batch_identity(identity);
+            let metadata = output_commit_metadata_from_identity(identity, metadata_context);
             match journal_client.query_output_batch(&metadata, journal) {
                 OutputBatchQueryStatus::Conflict(error) => {
                     Some(OutputBatchQueryStatus::Conflict(error))
@@ -192,7 +217,7 @@ pub fn run_output_batch_commit_step_report_with_identity(
             }
         }
         (Some(identity), None, duplicate_accepted_count) if duplicate_accepted_count > 0 => {
-            let metadata = JournalOutputCommitMetadata::from_output_batch_identity(identity);
+            let metadata = output_commit_metadata_from_identity(identity, metadata_context);
             Some(journal_client.query_output_batch(&metadata, journal))
         }
         _ => None,
@@ -203,6 +228,20 @@ pub fn run_output_batch_commit_step_report_with_identity(
         output_batch_query_status,
         commit_report: execution_report.commit_report,
     }
+}
+
+fn output_commit_metadata_from_identity(
+    identity: &OutputBatchIdentity,
+    metadata_context: Option<OutputBatchCommitMetadataContext>,
+) -> JournalOutputCommitMetadata {
+    let mut metadata = JournalOutputCommitMetadata::from_output_batch_identity(identity);
+
+    if let Some(metadata_context) = metadata_context {
+        metadata.shard_id = Some(metadata_context.shard_id);
+        metadata.shard_sequence = Some(metadata_context.shard_sequence);
+    }
+
+    metadata
 }
 
 fn run_output_batch_commit_step_report_for_requests(

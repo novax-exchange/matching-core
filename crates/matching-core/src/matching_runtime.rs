@@ -7,8 +7,8 @@ use crate::shard_runtime::{
     ShardRuntimeRunReport, ShardRuntimeRunStopReason,
 };
 use crate::shard_runtime_set::{
-    InlineShardRuntimeSet, ShardRuntimeSet, ShardRuntimeSetError, ShardRuntimeSetShutdownReport,
-    ThreadPerShardRuntimeSet,
+    InlineShardRuntimeSet, ShardRuntimeOutputWriter, ShardRuntimeSet, ShardRuntimeSetError,
+    ShardRuntimeSetShutdownReport, ThreadPerShardRuntimeSet,
 };
 use crate::types::Symbol;
 
@@ -148,6 +148,22 @@ pub struct MatchingRuntimeShardRunReport {
 }
 
 impl MatchingRuntime {
+    fn new_with_runtime_set(
+        mode: RuntimeExecutionMode,
+        config: &MatchingRuntimeConfig,
+        runtime_set: Box<dyn ShardRuntimeSet>,
+    ) -> Self {
+        Self {
+            mode,
+            runtime_set,
+            run_once_limits: ShardRuntimeRunOnceLimits::from_config(config),
+            run_limit: ShardRuntimeRunLimit::from_config(config),
+            run_until_idle_limit: MatchingRuntimeRunUntilIdleLimit::from_config(config),
+            input_state: MatchingRuntimeInputState::Open,
+            lifecycle_state: MatchingRuntimeLifecycleState::Running,
+        }
+    }
+
     pub fn new_for_symbols_with_config(
         symbols: Vec<Symbol>,
         config: MatchingRuntimeConfig,
@@ -155,45 +171,73 @@ impl MatchingRuntime {
         match config.execution.mode {
             RuntimeExecutionMode::Inline => {
                 let mode = config.execution.mode;
-                let run_once_limits = ShardRuntimeRunOnceLimits::from_config(&config);
-                let run_limit = ShardRuntimeRunLimit::from_config(&config);
-                let run_until_idle_limit = MatchingRuntimeRunUntilIdleLimit::from_config(&config);
-                let runtime_set = InlineShardRuntimeSet::from_symbols_with_config(symbols, config)
-                    .map_err(MatchingRuntimeError::Topology)?;
+                let runtime_set =
+                    InlineShardRuntimeSet::from_symbols_with_config(symbols, config.clone())
+                        .map_err(MatchingRuntimeError::Topology)?;
 
-                Ok(Self {
+                Ok(Self::new_with_runtime_set(
                     mode,
-                    runtime_set: Box::new(runtime_set),
-                    run_once_limits,
-                    run_limit,
-                    run_until_idle_limit,
-                    input_state: MatchingRuntimeInputState::Open,
-                    lifecycle_state: MatchingRuntimeLifecycleState::Running,
-                })
+                    &config,
+                    Box::new(runtime_set),
+                ))
             }
             RuntimeExecutionMode::ThreadPerShard => {
                 let mode = config.execution.mode;
-                let run_once_limits = ShardRuntimeRunOnceLimits::from_config(&config);
-                let run_limit = ShardRuntimeRunLimit::from_config(&config);
-                let run_until_idle_limit = MatchingRuntimeRunUntilIdleLimit::from_config(&config);
                 let runtime_set =
-                    ThreadPerShardRuntimeSet::from_symbols_with_config(symbols, config)
+                    ThreadPerShardRuntimeSet::from_symbols_with_config(symbols, config.clone())
                         .map_err(MatchingRuntimeError::Topology)?;
 
-                Ok(Self {
+                Ok(Self::new_with_runtime_set(
                     mode,
-                    runtime_set: Box::new(runtime_set),
-                    run_once_limits,
-                    run_limit,
-                    run_until_idle_limit,
-                    input_state: MatchingRuntimeInputState::Open,
-                    lifecycle_state: MatchingRuntimeLifecycleState::Running,
-                })
+                    &config,
+                    Box::new(runtime_set),
+                ))
             }
             RuntimeExecutionMode::AsyncTaskPerShard => Err(
                 MatchingRuntimeError::RuntimeModeUnavailable(config.execution.mode),
             ),
         }
+    }
+
+    pub fn new_thread_per_shard_for_symbols_with_config_and_output_factory<F>(
+        symbols: Vec<Symbol>,
+        config: MatchingRuntimeConfig,
+        output_factory: F,
+    ) -> Result<Self, MatchingRuntimeError>
+    where
+        F: FnMut(RuntimeShardId) -> ShardRuntimeOutputWriter,
+    {
+        if config.execution.mode != RuntimeExecutionMode::ThreadPerShard {
+            return Err(MatchingRuntimeError::UnsupportedMode(config.execution.mode));
+        }
+
+        let runtime_set = ThreadPerShardRuntimeSet::from_symbols_with_config_and_output_factory(
+            symbols,
+            config.clone(),
+            output_factory,
+        )
+        .map_err(MatchingRuntimeError::Topology)?;
+
+        Ok(Self::new_with_runtime_set(
+            RuntimeExecutionMode::ThreadPerShard,
+            &config,
+            Box::new(runtime_set),
+        ))
+    }
+
+    pub fn new_thread_per_shard_with_output_factory<F>(
+        symbols: Vec<Symbol>,
+        config: MatchingRuntimeConfig,
+        output_factory: F,
+    ) -> Result<Self, MatchingRuntimeError>
+    where
+        F: FnMut(RuntimeShardId) -> ShardRuntimeOutputWriter,
+    {
+        Self::new_thread_per_shard_for_symbols_with_config_and_output_factory(
+            symbols,
+            config,
+            output_factory,
+        )
     }
 
     pub fn mode(&self) -> RuntimeExecutionMode {
@@ -356,13 +400,21 @@ impl MatchingRuntime {
     pub fn shutdown(&mut self) -> Result<MatchingRuntimeShutdownReport, MatchingRuntimeError> {
         self.ensure_runtime_running()?;
         self.close_input();
+        let final_shard_statuses = self
+            .runtime_set
+            .shard_statuses()
+            .map_err(MatchingRuntimeError::from_runtime_set_error)?;
 
         let runtime_set_report = self
             .runtime_set
             .shutdown()
             .map_err(MatchingRuntimeError::from_runtime_set_error)?;
         self.lifecycle_state = MatchingRuntimeLifecycleState::Shutdown;
-        let final_status = self.status()?;
+        let final_status = MatchingRuntimeStatus {
+            input_state: self.input_state,
+            lifecycle_state: self.lifecycle_state,
+            shard_statuses: final_shard_statuses,
+        };
 
         Ok(MatchingRuntimeShutdownReport {
             input_state: self.input_state,

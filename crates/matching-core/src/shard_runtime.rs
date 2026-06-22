@@ -1,8 +1,8 @@
 use crate::bounded_handoff::BoundedHandoff;
 use crate::journal_adapter::{JournalInputEntry, JournalOutputAppender};
 use crate::output_commit_boundary::{
-    OutputBatchIdentity, OutputBatchQueryStatus, OutputCommitBlockDecision, OutputCommitOutcome,
-    OutputJournalClient,
+    OutputBatchCommitMetadataContext, OutputBatchIdentity, OutputBatchQueryStatus,
+    OutputCommitBlockDecision, OutputCommitOutcome, OutputJournalClient,
 };
 use crate::runtime_config::{MatchingRuntimeConfig, RuntimeShardId, RuntimeTopologyConfig};
 use crate::runtime_topology::{RuntimeTopology, RuntimeTopologyError};
@@ -20,6 +20,7 @@ pub struct ShardRuntime {
     symbols: Vec<Symbol>,
     execution_core: ShardExecutionCore,
     handoffs: HashMap<Symbol, BoundedHandoff>,
+    next_output_shard_sequence: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,6 +134,7 @@ impl ShardRuntime {
             symbols,
             execution_core,
             handoffs,
+            next_output_shard_sequence: 1,
         }
     }
 
@@ -169,6 +171,7 @@ impl ShardRuntime {
             symbols,
             execution_core,
             handoffs,
+            next_output_shard_sequence: 1,
         }
     }
 
@@ -197,6 +200,7 @@ impl ShardRuntime {
             symbols,
             execution_core,
             handoffs,
+            next_output_shard_sequence: 1,
         }
     }
 
@@ -242,6 +246,7 @@ impl ShardRuntime {
             symbols,
             execution_core,
             handoffs,
+            next_output_shard_sequence: 1,
         }
     }
 
@@ -266,6 +271,7 @@ impl ShardRuntime {
             symbols,
             execution_core,
             handoffs,
+            next_output_shard_sequence: 1,
         }
     }
 
@@ -275,6 +281,22 @@ impl ShardRuntime {
 
     pub fn symbols(&self) -> &[Symbol] {
         &self.symbols
+    }
+
+    fn next_output_metadata_context(&self) -> OutputBatchCommitMetadataContext {
+        OutputBatchCommitMetadataContext {
+            shard_id: self.shard_id,
+            shard_sequence: self.next_output_shard_sequence,
+        }
+    }
+
+    fn advance_output_shard_sequence_if_needed(
+        &mut self,
+        report: &ShardExecutionCoreRetryAwareStepReport,
+    ) {
+        if report.output_batch_identity.is_some() {
+            self.next_output_shard_sequence += 1;
+        }
     }
 
     pub fn run_once(
@@ -291,24 +313,27 @@ impl ShardRuntime {
         let mut symbol_reports = Vec::new();
 
         for symbol in symbols {
+            let metadata_context = self.next_output_metadata_context();
             let handoff = self
                 .handoffs
                 .get_mut(&symbol)
                 .ok_or_else(|| ShardRuntimeError::MissingHandoff(symbol.clone()))?;
             let report = self
                 .execution_core
-                .run_symbol_retry_aware_step(
+                .run_symbol_retry_aware_step_metadata_context(
                     &symbol,
                     handoff,
                     journal_client,
                     output,
                     limits.max_input_entries_per_symbol,
                     limits.max_output_requests_per_symbol,
+                    Some(metadata_context),
                 )
                 .map_err(ShardRuntimeError::ShardExecutionCore)?;
             let pending_input_len_after_run = handoff.len();
             let pending_input_capacity = handoff.capacity();
             let pending_input_full = handoff.is_full();
+            self.advance_output_shard_sequence_if_needed(&report);
             let runtime_status_after_run = self.execution_core.symbol_status(&symbol).ok_or(
                 ShardRuntimeError::ShardExecutionCore(ShardExecutionCoreError::UnknownSymbol),
             )?;

@@ -13,9 +13,11 @@ pub mod pending_output_buffer;
 
 pub use output_batch_coordinator::{
     run_output_batch_commit_step, run_output_batch_commit_step_report,
-    run_output_batch_commit_step_report_with_identity, OutputBatchCommitResult,
-    OutputBatchCommitStepReport, OutputBatchCommitStepReportWithIdentity, OutputCommitBlockAction,
-    OutputCommitBlockDecision, OutputCommitRetryTracker,
+    run_output_batch_commit_step_report_with_identity,
+    run_output_batch_commit_step_report_with_identity_and_metadata_context,
+    OutputBatchCommitMetadataContext, OutputBatchCommitResult, OutputBatchCommitStepReport,
+    OutputBatchCommitStepReportWithIdentity, OutputCommitBlockAction, OutputCommitBlockDecision,
+    OutputCommitRetryTracker,
 };
 pub use output_batch_identity::{
     build_output_batch_identity, digest_journal_output_entries, OutputBatchId, OutputBatchIdentity,

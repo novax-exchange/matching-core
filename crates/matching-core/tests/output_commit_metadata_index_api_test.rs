@@ -9,6 +9,8 @@ fn metadata(batch_id: &str, digest: u64) -> JournalOutputCommitMetadata {
     JournalOutputCommitMetadata {
         batch_id: batch_id.to_string(),
         symbol: Symbol("BTC-USDT".to_string()),
+        shard_id: None,
+        shard_sequence: None,
         input_seq_start: JournalSeq(1),
         input_seq_end: JournalSeq(2),
         entry_count: 2,

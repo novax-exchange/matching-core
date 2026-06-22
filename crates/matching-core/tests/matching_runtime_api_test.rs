@@ -17,6 +17,7 @@ use matching_core::shard_runtime::{
     ShardRuntimeError, ShardRuntimeRunLimit, ShardRuntimeRunOnceLimits, ShardRuntimeRunStopReason,
 };
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
+use std::sync::{Arc, Mutex};
 
 struct TestJournalOutputAppender {
     entries: Vec<JournalOutputEntry>,
@@ -25,6 +26,11 @@ struct TestJournalOutputAppender {
 struct RejectOneSymbolJournalOutputAppender {
     rejected_symbol: Symbol,
     entries: Vec<JournalOutputEntry>,
+}
+
+#[derive(Clone)]
+struct SharedJournalOutputAppender {
+    entries: Arc<Mutex<Vec<JournalOutputEntry>>>,
 }
 
 impl TestJournalOutputAppender {
@@ -41,6 +47,12 @@ impl RejectOneSymbolJournalOutputAppender {
             rejected_symbol,
             entries: Vec::new(),
         }
+    }
+}
+
+impl SharedJournalOutputAppender {
+    fn new(entries: Arc<Mutex<Vec<JournalOutputEntry>>>) -> Self {
+        Self { entries }
     }
 }
 
@@ -106,6 +118,54 @@ impl JournalOutputAppender for RejectOneSymbolJournalOutputAppender {
 
     fn read_all(&self) -> Vec<JournalOutputEntry> {
         self.entries.clone()
+    }
+}
+
+impl JournalOutputAppender for SharedJournalOutputAppender {
+    fn append(
+        &mut self,
+        command_id: CommandId,
+        journal_seq: JournalSeq,
+        events: Vec<EngineEvent>,
+    ) -> Result<(), JournalAdapterError> {
+        self.entries
+            .lock()
+            .expect("shared output entries lock should be available")
+            .push(JournalOutputEntry {
+                command_id,
+                journal_seq,
+                events,
+                output_commit_metadata: None,
+            });
+
+        Ok(())
+    }
+
+    fn append_with_output_commit_metadata(
+        &mut self,
+        command_id: CommandId,
+        journal_seq: JournalSeq,
+        events: Vec<EngineEvent>,
+        metadata: JournalOutputCommitMetadata,
+    ) -> Result<(), JournalAdapterError> {
+        self.entries
+            .lock()
+            .expect("shared output entries lock should be available")
+            .push(JournalOutputEntry {
+                command_id,
+                journal_seq,
+                events,
+                output_commit_metadata: Some(metadata),
+            });
+
+        Ok(())
+    }
+
+    fn read_all(&self) -> Vec<JournalOutputEntry> {
+        self.entries
+            .lock()
+            .expect("shared output entries lock should be available")
+            .clone()
     }
 }
 
@@ -195,6 +255,114 @@ fn matching_runtime_builds_thread_per_shard_runtime_from_public_api() {
         runtime.symbols_for_shard(RuntimeShardId(1)),
         Some(&[eth][..])
     );
+}
+
+#[test]
+fn matching_runtime_thread_per_shard_can_own_per_shard_output_writers_from_public_api() {
+    let btc = symbol("BTC-USDT");
+    let eth = symbol("ETH-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.topology = RuntimeTopologyConfig {
+        shard_count: 2,
+        assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
+    };
+    config.execution = RuntimeExecutionConfig {
+        mode: RuntimeExecutionMode::ThreadPerShard,
+        max_run_cycles_per_call: 1024,
+        max_run_calls_per_until_idle: 1024,
+    };
+    let shard_zero_entries = Arc::new(Mutex::new(Vec::new()));
+    let shard_one_entries = Arc::new(Mutex::new(Vec::new()));
+    let mut runtime = MatchingRuntime::new_thread_per_shard_with_output_factory(
+        vec![btc.clone(), eth.clone()],
+        config,
+        {
+            let shard_zero_entries = Arc::clone(&shard_zero_entries);
+            let shard_one_entries = Arc::clone(&shard_one_entries);
+
+            move |shard_id| match shard_id {
+                RuntimeShardId(0) => Box::new(SharedJournalOutputAppender::new(Arc::clone(
+                    &shard_zero_entries,
+                ))) as Box<dyn JournalOutputAppender + Send>,
+                RuntimeShardId(1) => Box::new(SharedJournalOutputAppender::new(Arc::clone(
+                    &shard_one_entries,
+                ))) as Box<dyn JournalOutputAppender + Send>,
+                _ => panic!("unexpected shard id"),
+            }
+        },
+    )
+    .expect("thread-per-shard matching runtime should own per-shard output writers");
+    let external_entries = Arc::new(Mutex::new(Vec::new()));
+    let mut external_output = SharedJournalOutputAppender::new(Arc::clone(&external_entries));
+    let mut external_journal_client =
+        matching_core::output_commit_boundary::OutputJournalClient::new();
+
+    assert_eq!(
+        runtime.enqueue_inputs(vec![
+            command_entry(1, btc.clone()),
+            command_entry(2, eth.clone()),
+        ]),
+        Ok(2)
+    );
+
+    runtime
+        .run_once_all(
+            &mut external_journal_client,
+            &mut external_output,
+            ShardRuntimeRunOnceLimits {
+                max_input_entries_per_symbol: 1,
+                max_output_requests_per_symbol: 10,
+            },
+        )
+        .expect("thread-per-shard matching runtime should run with owned outputs");
+
+    assert_eq!(external_output.read_all().len(), 0);
+    let shard_zero_entry = shard_zero_entries
+        .lock()
+        .expect("shard 0 output entries lock should be available")[0]
+        .clone();
+    let shard_one_entry = shard_one_entries
+        .lock()
+        .expect("shard 1 output entries lock should be available")[0]
+        .clone();
+    let shard_zero_metadata = shard_zero_entry
+        .output_commit_metadata
+        .expect("shard 0 output should carry commit metadata");
+    let shard_one_metadata = shard_one_entry
+        .output_commit_metadata
+        .expect("shard 1 output should carry commit metadata");
+
+    assert_eq!(shard_zero_metadata.shard_id, Some(RuntimeShardId(0)));
+    assert_eq!(shard_zero_metadata.shard_sequence, Some(1));
+    assert_eq!(shard_one_metadata.shard_id, Some(RuntimeShardId(1)));
+    assert_eq!(shard_one_metadata.shard_sequence, Some(1));
+
+    runtime
+        .shutdown()
+        .expect("thread-per-shard matching runtime should shut down worker threads");
+}
+
+#[test]
+fn matching_runtime_thread_per_shard_output_factory_rejects_non_thread_mode_from_public_api() {
+    let btc = symbol("BTC-USDT");
+    let config = MatchingRuntimeConfig::default();
+    let entries = Arc::new(Mutex::new(Vec::new()));
+
+    let result = MatchingRuntime::new_thread_per_shard_with_output_factory(vec![btc], config, {
+        let entries = Arc::clone(&entries);
+
+        move |_| {
+            Box::new(SharedJournalOutputAppender::new(Arc::clone(&entries)))
+                as Box<dyn JournalOutputAppender + Send>
+        }
+    });
+
+    assert!(matches!(
+        result,
+        Err(MatchingRuntimeError::UnsupportedMode(
+            RuntimeExecutionMode::Inline
+        ))
+    ));
 }
 
 #[test]

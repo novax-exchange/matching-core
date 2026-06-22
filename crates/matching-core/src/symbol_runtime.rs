@@ -6,9 +6,10 @@ use crate::{
     bounded_handoff::BoundedHandoff,
     journal_adapter::{JournalAdapterError, JournalOutputAppender},
     output_commit_boundary::{
-        run_output_batch_commit_step_report_with_identity, OutputBatchCommitResult,
-        OutputBatchCommitStepReport, OutputBatchIdentity, OutputBatchQueryStatus,
-        OutputJournalClient, PendingOutputBuffer, PendingOutputBufferError,
+        run_output_batch_commit_step_report_with_identity_and_metadata_context,
+        OutputBatchCommitMetadataContext, OutputBatchCommitResult, OutputBatchCommitStepReport,
+        OutputBatchIdentity, OutputBatchQueryStatus, OutputJournalClient, PendingOutputBuffer,
+        PendingOutputBufferError,
     },
 };
 use std::thread::{self, JoinHandle};
@@ -125,6 +126,28 @@ pub fn run_symbol_runtime_step_with_output_batch_commit(
     max_input_entries: usize,
     max_output_requests: usize,
 ) -> Result<SymbolRuntimeOutputCommitStepReport, SymbolRuntimeOutputCommitStepError> {
+    run_symbol_runtime_step_with_output_batch_commit_metadata_context(
+        runtime,
+        handoff,
+        pending_output_buffer,
+        journal_client,
+        output,
+        max_input_entries,
+        max_output_requests,
+        None,
+    )
+}
+
+pub fn run_symbol_runtime_step_with_output_batch_commit_metadata_context(
+    runtime: &mut SymbolRuntime,
+    handoff: &mut BoundedHandoff,
+    pending_output_buffer: &mut PendingOutputBuffer,
+    journal_client: &mut OutputJournalClient,
+    output: &mut dyn JournalOutputAppender,
+    max_input_entries: usize,
+    max_output_requests: usize,
+    metadata_context: Option<OutputBatchCommitMetadataContext>,
+) -> Result<SymbolRuntimeOutputCommitStepReport, SymbolRuntimeOutputCommitStepError> {
     let input_processed_count = run_symbol_runtime_step_to_pending_output_buffer(
         runtime,
         handoff,
@@ -133,13 +156,15 @@ pub fn run_symbol_runtime_step_with_output_batch_commit(
     )
     .map_err(SymbolRuntimeOutputCommitStepError::PendingOutputBuffer)?;
 
-    let output_commit_report_with_identity = run_output_batch_commit_step_report_with_identity(
-        runtime.symbol(),
-        journal_client,
-        pending_output_buffer,
-        output,
-        max_output_requests,
-    );
+    let output_commit_report_with_identity =
+        run_output_batch_commit_step_report_with_identity_and_metadata_context(
+            runtime.symbol(),
+            journal_client,
+            pending_output_buffer,
+            output,
+            max_output_requests,
+            metadata_context,
+        );
     let output_commit_report = output_commit_report_with_identity.commit_report;
     let safe_point_advanced_count =
         advance_runtime_safe_point_from_output_commit(runtime, &output_commit_report.commit_result)

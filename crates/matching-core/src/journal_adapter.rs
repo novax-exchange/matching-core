@@ -1,6 +1,7 @@
 use crate::matching_engine::EngineEvent;
 use crate::order::Command;
 use crate::output_commit_boundary::OutputBatchIdentity;
+use crate::runtime_config::RuntimeShardId;
 use crate::types::{CommandId, JournalSeq, Symbol};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +23,8 @@ pub struct JournalOutputEntry {
 pub struct JournalOutputCommitMetadata {
     pub batch_id: String,
     pub symbol: Symbol,
+    pub shard_id: Option<RuntimeShardId>,
+    pub shard_sequence: Option<u64>,
     pub input_seq_start: JournalSeq,
     pub input_seq_end: JournalSeq,
     pub entry_count: usize,
@@ -34,6 +37,8 @@ impl JournalOutputCommitMetadata {
         Self {
             batch_id: identity.batch_id.0.clone(),
             symbol: identity.symbol.clone(),
+            shard_id: None,
+            shard_sequence: None,
             input_seq_start: identity.input_seq_start,
             input_seq_end: identity.input_seq_end,
             entry_count: identity.entry_count,
