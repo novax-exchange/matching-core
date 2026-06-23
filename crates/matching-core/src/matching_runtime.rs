@@ -183,8 +183,11 @@ impl MatchingRuntime {
             RuntimeExecutionMode::ShardWorker => {
                 let mode = config.execution.mode;
                 let runtime_set =
-                    ShardWorkerRuntimeSet::from_symbols_with_config(symbols, config.clone())
-                        .map_err(MatchingRuntimeError::Topology)?;
+                    ShardWorkerRuntimeSet::from_symbols_with_config_for_manual_execution(
+                        symbols,
+                        config.clone(),
+                    )
+                    .map_err(MatchingRuntimeError::Topology)?;
 
                 Ok(Self::new_with_runtime_set(
                     mode,
@@ -207,12 +210,12 @@ impl MatchingRuntime {
             return Err(MatchingRuntimeError::UnsupportedMode(config.execution.mode));
         }
 
-        let runtime_set = ShardWorkerRuntimeSet::from_symbols_with_config_and_output_factory(
+        let runtime_set = ShardWorkerRuntimeSet::from_symbols_with_config_for_autonomous_execution(
             symbols,
             config.clone(),
             output_factory,
         )
-        .map_err(MatchingRuntimeError::Topology)?;
+        .map_err(MatchingRuntimeError::ShardRuntimeSet)?;
 
         Ok(Self::new_with_runtime_set(
             RuntimeExecutionMode::ShardWorker,

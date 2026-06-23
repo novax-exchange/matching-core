@@ -26,17 +26,14 @@ The diagrams below mirror the Matching Service architecture reference.
 ```mermaid
 flowchart LR
     subgraph MatchingGroup["Matching Service"]
-        RuntimeShell["Service Runtime Shell"]
-        Interface["Service Interface Boundary"]
-        StreamBoundary["Messaging Reliability Boundary"]
-        MatchingRuntime["Matching Runtime"]
-        Execution["Per-Symbol Execution Pipeline"]
+        RuntimeBoundary["Runtime boundary"]
     end
 
     Transport["MQ / Stream Transport"]
 
     Input["Confirmed input stream"]
     Output["Durable output append"]
+    AdminCaller["Admin / Health / Recovery Caller"]
 
     subgraph GovernanceZone["Governance"]
         Governance["Product Configuration\nPlatform Risk Control\nOps Controls"]
@@ -48,17 +45,13 @@ flowchart LR
     end
 
     Input -->|"confirmed commands"| Transport
-    Transport --> StreamBoundary --> MatchingRuntime
-    MatchingRuntime -->|"per-symbol command"| Execution
-    Execution -->|"OrderAck / TradeEvent / MarketDataEvent"| MatchingRuntime
-    MatchingRuntime --> StreamBoundary -->|"matching output"| Transport
+    Transport -->|"confirmed input / control"| RuntimeBoundary
+    RuntimeBoundary -->|"OrderAck / TradeEvent / MarketDataEvent"| Transport
     Transport --> Output
     Governance -->|"governed control"| Transport
-    RuntimeShell -.->|"health / readiness / scheduled tasks"| MatchingRuntime
-    RuntimeShell -.-> Interface
-    Interface --> MatchingRuntime
-    MatchingRuntime <-->|"snapshot / restore"| SnapshotStore
-    MatchingRuntime <-->|"leader lease / fencing"| Coordination
+    AdminCaller -.->|"admin / health / replay request"| RuntimeBoundary
+    RuntimeBoundary <-->|"snapshot / restore"| SnapshotStore
+    RuntimeBoundary <-->|"leader lease / fencing"| Coordination
 
     style GovernanceZone fill:#f8fafc,stroke:#cbd5e1,stroke-dasharray: 4 4,color:#64748b;
     style InfraZone fill:#f8fafc,stroke:#cbd5e1,stroke-dasharray: 4 4,color:#64748b;
@@ -70,97 +63,66 @@ flowchart LR
 %%{init: {"flowchart": {"nodeSpacing": 28, "rankSpacing": 38, "diagramPadding": 12, "subGraphTitleMargin": {"top": 8, "bottom": 10}}}}%%
 flowchart TB
     Journal["Trading Event Journal"]
-    SnapshotBytes[("Snapshot Bytes\n.snap")]
-    VerifiedManifest[("Verified Manifest\n.verified")]
-
     EventBus["MQ / Derived Streams"]
 
-    subgraph Boundary["Interface / Messaging Boundary"]
+    subgraph ServiceBoundary["Service Boundary"]
         RuntimeShell["Service Runtime Shell"]
         Interface["Service Interface Boundary"]
         Messaging["Messaging Reliability Boundary"]
-        JournalAdapter["Journal Adapter"]
     end
 
-    subgraph Control["Control"]
+    subgraph ControlEvidence["Control And Evidence"]
         Governance["Governance Control Boundary"]
         Evidence["Evidence Boundary"]
     end
 
-    subgraph Input["Input"]
+    subgraph MatchingPipeline["Matching Pipeline"]
         Consumer["Confirmed Input Consumer"]
-        Router["Symbol Routing"]
-        Handoff["Bounded Handoff"]
-    end
-
-    subgraph Execution["Execution"]
         MatchingRuntime["Matching Runtime"]
-        ShardRuntime["Shard Runtime(s)\nshard 0, shard 1, ..."]
-        ExecutionCore["Shard Execution Core"]
-        SymbolRuntime["Symbol Runtime(s)\nBTC-USDT, ETH-USDT, ..."]
         Engine["Matching Engine"]
-        Book["Order Book"]
-    end
-
-    subgraph Output["Output"]
         Commit["Output Commit Boundary"]
     end
 
-    subgraph Recovery["Recovery"]
+    subgraph RecoveryReplay["Recovery And Replay"]
         Snapshot["Snapshot Restore"]
         SnapshotStore["Snapshot Store"]
         Replay["Replay Runner"]
     end
 
-    Journal --> JournalAdapter --> Consumer
-    JournalAdapter --> Messaging
+    Journal -->|"input"| Messaging --> Consumer
     EventBus --> Messaging
-    RuntimeShell -.->|"runtime context"| Interface
-    RuntimeShell -.->|"dependency / pressure context"| Messaging
-    RuntimeShell -.->|"governed runtime context"| Governance
-    RuntimeShell -.->|"trace / degradation context"| Evidence
+    RuntimeShell -.->|"context"| Interface
+    RuntimeShell -.->|"context"| Messaging
+    RuntimeShell -.->|"context"| Governance
+    RuntimeShell -.->|"trace"| Evidence
     Interface --> Governance
     Governance -.-> MatchingRuntime
     MatchingRuntime -.->|"status"| Interface
     RuntimeShell -.->|"lifecycle"| MatchingRuntime
-    MatchingRuntime --> ShardRuntime
-    Consumer --> Router
-    Router --> Handoff
-    Handoff --> ShardRuntime
-    Governance -.-> ShardRuntime
-    ShardRuntime --> ExecutionCore
-    ExecutionCore --> SymbolRuntime
-    SymbolRuntime --> Engine
-    Engine --> Book
-    Engine --> SymbolRuntime
-    SymbolRuntime --> ExecutionCore
-    ExecutionCore --> Commit
-    Commit --> Messaging --> EventBus
-    Commit --> JournalAdapter --> Journal
-    Commit -.->|"safe point"| ExecutionCore
+    Consumer -->|"commands"| MatchingRuntime
+    MatchingRuntime --> Engine
+    Engine --> MatchingRuntime
+    MatchingRuntime --> Commit
+    Commit -->|"append"| Messaging
+    Messaging -->|"output"| Journal
+    Messaging -->|"events"| EventBus
+    Commit -.->|"safe point"| MatchingRuntime
     Governance -.-> Evidence
     MatchingRuntime -.-> Evidence
-    ShardRuntime -.-> Evidence
-    ExecutionCore -.-> Evidence
-    SymbolRuntime -.-> Evidence
     Commit -.-> Evidence
-    RuntimeShell -.->|"scheduled snapshot verification task"| Snapshot
-    SymbolRuntime --> Snapshot
+    RuntimeShell -.->|"schedule"| Snapshot
+    MatchingRuntime --> Snapshot
     Snapshot --> SnapshotStore
-    Snapshot -.->|"verification replay / comparison"| Replay
-    Snapshot -.->|"signed verification evidence"| SnapshotStore
-    Snapshot -.->|"mismatch evidence"| Evidence
-    SnapshotStore --> SnapshotBytes
-    SnapshotBytes --> SnapshotStore
-    SnapshotStore --> VerifiedManifest
-    VerifiedManifest --> SnapshotStore
+    Snapshot -.->|"verify"| Replay
+    Snapshot -.->|"manifest"| SnapshotStore
+    Snapshot -.->|"mismatch"| Evidence
     SnapshotStore --> Snapshot
     Interface -.-> Replay
-    JournalAdapter -.-> Replay
-    Replay --> SymbolRuntime
+    Journal -.->|"replay tail"| Replay
+    Replay --> MatchingRuntime
 ```
 
-`Matching Runtime` owns the in-process core runtime. `Shard Runtime` owns shard-level scheduling and pressure; `Shard Execution Core` owns the per-shard symbol set and safe-point discipline; `Symbol Runtime` owns one symbol's deterministic order book execution. Snapshot bytes and verified manifests are stored recovery artifacts, not live runtime components.
+`Matching Runtime` owns runtime topology, symbol-runtime placement, routing, and bounded handoff. Symbol Routing, Bounded Handoff, Symbol Runtime, Shard Runtime, and Shard Execution Core are internal runtime responsibilities, so they are described in the runtime ownership model rather than drawn as standalone components here. `Matching Engine` owns deterministic execution and order-book mutation through its internal order-book state structure. `Snapshot Restore` and `Replay Runner` operate on a selected symbol / symbol group and sequence range; they are not drawn as one component per trading pair. Snapshot bytes and verified manifests are stored artifacts, so they are described in the component responsibility text rather than drawn as components.
 
 ## Current State
 

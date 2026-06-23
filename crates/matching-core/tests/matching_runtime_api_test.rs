@@ -13,9 +13,11 @@ use matching_core::runtime_config::{
     MatchingRuntimeConfig, RuntimeExecutionConfig, RuntimeExecutionMode, RuntimeShardId,
     RuntimeTopologyConfig, SymbolAssignmentPolicy,
 };
+use matching_core::runtime_topology::RuntimeTopologyError;
 use matching_core::shard_runtime::{
     ShardRuntimeError, ShardRuntimeRunLimit, ShardRuntimeRunOnceLimits, ShardRuntimeRunStopReason,
 };
+use matching_core::shard_runtime_set::ShardRuntimeSetError;
 use matching_core::types::{CommandId, JournalSeq, OrderId, Price, Quantity, Side, Symbol};
 use std::sync::{Arc, Mutex};
 
@@ -343,6 +345,106 @@ fn matching_runtime_shard_worker_can_own_per_shard_output_writers_from_public_ap
 }
 
 #[test]
+fn matching_runtime_shard_worker_owned_outputs_run_after_enqueue_from_public_api() {
+    let btc = symbol("BTC-USDT");
+    let eth = symbol("ETH-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.topology = RuntimeTopologyConfig {
+        shard_count: 2,
+        assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
+    };
+    config.execution = RuntimeExecutionConfig {
+        mode: RuntimeExecutionMode::ShardWorker,
+        max_run_cycles_per_call: 1024,
+        max_run_calls_per_until_idle: 1024,
+    };
+    let shard_zero_entries = Arc::new(Mutex::new(Vec::new()));
+    let shard_one_entries = Arc::new(Mutex::new(Vec::new()));
+    let mut runtime = MatchingRuntime::new_shard_worker_with_output_factory(
+        vec![btc.clone(), eth.clone()],
+        config,
+        {
+            let shard_zero_entries = Arc::clone(&shard_zero_entries);
+            let shard_one_entries = Arc::clone(&shard_one_entries);
+
+            move |shard_id| match shard_id {
+                RuntimeShardId(0) => Box::new(SharedJournalOutputAppender::new(Arc::clone(
+                    &shard_zero_entries,
+                ))) as Box<dyn JournalOutputAppender + Send>,
+                RuntimeShardId(1) => Box::new(SharedJournalOutputAppender::new(Arc::clone(
+                    &shard_one_entries,
+                ))) as Box<dyn JournalOutputAppender + Send>,
+                _ => panic!("unexpected shard id"),
+            }
+        },
+    )
+    .expect("shard-worker matching runtime should own per-shard output writers");
+
+    assert_eq!(
+        runtime.enqueue_inputs(vec![
+            command_entry(1, btc.clone()),
+            command_entry(2, eth.clone()),
+        ]),
+        Ok(2)
+    );
+
+    assert_eq!(
+        shard_zero_entries
+            .lock()
+            .expect("shard 0 output entries lock should be available")
+            .len(),
+        1
+    );
+    assert_eq!(
+        shard_one_entries
+            .lock()
+            .expect("shard 1 output entries lock should be available")
+            .len(),
+        1
+    );
+
+    runtime
+        .shutdown()
+        .expect("shard-worker matching runtime should shut down worker threads");
+}
+
+#[test]
+fn matching_runtime_shard_worker_owned_output_enqueue_reports_acceptance_when_output_blocks() {
+    let btc = symbol("BTC-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.execution = RuntimeExecutionConfig {
+        mode: RuntimeExecutionMode::ShardWorker,
+        max_run_cycles_per_call: 1024,
+        max_run_calls_per_until_idle: 1024,
+    };
+    let rejected_symbol = btc.clone();
+    let mut runtime = MatchingRuntime::new_shard_worker_with_output_factory(
+        vec![btc.clone()],
+        config,
+        move |_| {
+            Box::new(RejectOneSymbolJournalOutputAppender::new(
+                rejected_symbol.clone(),
+            )) as Box<dyn JournalOutputAppender + Send>
+        },
+    )
+    .expect("shard-worker matching runtime should own per-shard output writer");
+
+    assert_eq!(runtime.enqueue_input(command_entry(1, btc.clone())), Ok(()));
+
+    let status = runtime
+        .status()
+        .expect("shard-worker matching runtime should report blocked owned output status");
+    assert_eq!(status.shards_with_remaining_work(), vec![RuntimeShardId(0)]);
+    assert_eq!(status.blocked_shards(), vec![RuntimeShardId(0)]);
+    assert_eq!(status.symbols_with_remaining_work(), vec![btc.clone()]);
+    assert_eq!(status.blocked_symbols(), vec![btc.clone()]);
+
+    runtime
+        .shutdown()
+        .expect("shard-worker matching runtime should shut down worker threads");
+}
+
+#[test]
 fn matching_runtime_shard_worker_output_factory_rejects_non_thread_mode_from_public_api() {
     let btc = symbol("BTC-USDT");
     let mut config = MatchingRuntimeConfig::default();
@@ -364,6 +466,36 @@ fn matching_runtime_shard_worker_output_factory_rejects_non_thread_mode_from_pub
             RuntimeExecutionMode::Inline
         ))
     ));
+}
+
+#[test]
+fn matching_runtime_shard_worker_output_factory_wraps_topology_errors_from_public_api() {
+    let btc = symbol("BTC-USDT");
+    let mut config = MatchingRuntimeConfig::default();
+    config.execution.mode = RuntimeExecutionMode::ShardWorker;
+    config.topology = RuntimeTopologyConfig {
+        shard_count: 0,
+        assignment_policy: SymbolAssignmentPolicy::DeclarationOrder,
+    };
+    let entries = Arc::new(Mutex::new(Vec::new()));
+
+    let result = MatchingRuntime::new_shard_worker_with_output_factory(vec![btc], config, {
+        let entries = Arc::clone(&entries);
+
+        move |_| {
+            Box::new(SharedJournalOutputAppender::new(Arc::clone(&entries)))
+                as Box<dyn JournalOutputAppender + Send>
+        }
+    });
+
+    match result {
+        Err(MatchingRuntimeError::ShardRuntimeSet(ShardRuntimeSetError::Topology(
+            RuntimeTopologyError::ZeroShardCount,
+        ))) => {}
+        _ => {
+            panic!("matching runtime should wrap owned-output topology errors in runtime-set error")
+        }
+    }
 }
 
 #[test]

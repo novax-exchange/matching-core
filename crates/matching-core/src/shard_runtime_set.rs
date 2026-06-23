@@ -52,6 +52,7 @@ pub trait ShardRuntimeSet: InputHandoffWriter {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShardRuntimeSetError {
+    Topology(RuntimeTopologyError),
     ShardRuntime(ShardRuntimeError),
     ShardRuntimeUnavailable(RuntimeShardId),
     ShardRuntimeWorkerRequestFailed(RuntimeShardId),
@@ -65,6 +66,7 @@ pub enum ShardRuntimeSetError {
         expected: &'static str,
     },
     ShardRuntimeWorkerThreadPanicked(RuntimeShardId),
+    ShardRuntimeWorkerSpawnFailed(RuntimeShardId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,12 +102,19 @@ struct ThreadedShardRuntimeWorkerHandle {
 
 struct ShardRuntimeWorker {
     runtime: ShardRuntime,
-    owned_output: Option<ShardRuntimeWorkerOwnedOutput>,
+    execution: ShardRuntimeWorkerExecution,
 }
 
-struct ShardRuntimeWorkerOwnedOutput {
+enum ShardRuntimeWorkerExecution {
+    Manual,
+    Autonomous(ShardRuntimeWorkerAutonomousExecution),
+}
+
+struct ShardRuntimeWorkerAutonomousExecution {
     journal_client: OutputJournalClient,
     output: ShardRuntimeOutputWriter,
+    run_once_limits: ShardRuntimeRunOnceLimits,
+    run_limit: ShardRuntimeRunLimit,
 }
 
 struct ShardRuntimeWorkerRequest {
@@ -153,23 +162,35 @@ impl ShardRuntimeWorkerHandle {
         runtime: ShardRuntime,
         journal_client: OutputJournalClient,
         output: ShardRuntimeOutputWriter,
-    ) -> Self {
+        run_once_limits: ShardRuntimeRunOnceLimits,
+        run_limit: ShardRuntimeRunLimit,
+    ) -> Result<Self, ShardRuntimeSetError> {
         let shard_id = runtime.shard_id();
         let symbols = runtime.symbols().to_vec();
-        let worker = ShardRuntimeWorker::new_with_owned_output(runtime, journal_client, output);
+        let worker = ShardRuntimeWorker::new_with_owned_output(
+            runtime,
+            journal_client,
+            output,
+            run_once_limits,
+            run_limit,
+        );
         let (request_sender, request_receiver) = mpsc::channel();
         let (response_sender, response_receiver) = mpsc::channel();
-        let join_handle = thread::spawn(move || {
-            run_shard_runtime_worker_loop(worker, request_receiver, response_sender);
-        });
+        let thread_name = format!("matching-shard-worker-{}", shard_id.0);
+        let join_handle = thread::Builder::new()
+            .name(thread_name)
+            .spawn(move || {
+                run_shard_runtime_worker_loop(worker, request_receiver, response_sender);
+            })
+            .map_err(|_| ShardRuntimeSetError::ShardRuntimeWorkerSpawnFailed(shard_id))?;
 
-        Self::Threaded(ThreadedShardRuntimeWorkerHandle {
+        Ok(Self::Threaded(ThreadedShardRuntimeWorkerHandle {
             shard_id,
             symbols,
             request_sender,
             response_receiver,
             join_handle: Some(join_handle),
-        })
+        }))
     }
 
     fn shard_id(&self) -> RuntimeShardId {
@@ -390,7 +411,7 @@ impl ShardRuntimeWorker {
     fn new(runtime: ShardRuntime) -> Self {
         Self {
             runtime,
-            owned_output: None,
+            execution: ShardRuntimeWorkerExecution::Manual,
         }
     }
 
@@ -398,13 +419,19 @@ impl ShardRuntimeWorker {
         runtime: ShardRuntime,
         journal_client: OutputJournalClient,
         output: ShardRuntimeOutputWriter,
+        run_once_limits: ShardRuntimeRunOnceLimits,
+        run_limit: ShardRuntimeRunLimit,
     ) -> Self {
         Self {
             runtime,
-            owned_output: Some(ShardRuntimeWorkerOwnedOutput {
-                journal_client,
-                output,
-            }),
+            execution: ShardRuntimeWorkerExecution::Autonomous(
+                ShardRuntimeWorkerAutonomousExecution {
+                    journal_client,
+                    output,
+                    run_once_limits,
+                    run_limit,
+                },
+            ),
         }
     }
 
@@ -432,6 +459,22 @@ impl ShardRuntimeWorker {
     ) -> Result<usize, ShardRuntimeSetError> {
         self.runtime
             .enqueue_inputs(entries)
+            .map_err(ShardRuntimeSetError::from)
+    }
+
+    fn run_owned_output_until_idle(&mut self) -> Result<(), ShardRuntimeSetError> {
+        let ShardRuntimeWorkerExecution::Autonomous(owned_output) = &mut self.execution else {
+            return Ok(());
+        };
+
+        self.runtime
+            .run_limited(
+                &mut owned_output.journal_client,
+                owned_output.output.as_mut(),
+                owned_output.run_once_limits,
+                owned_output.run_limit,
+            )
+            .map(|_| ())
             .map_err(ShardRuntimeSetError::from)
     }
 
@@ -472,7 +515,7 @@ impl ShardRuntimeWorker {
         run_context: Option<ShardRuntimeWorkerRunContext<'_>>,
         limits: ShardRuntimeRunOnceLimits,
     ) -> Result<ShardRuntimeRunOnceReport, ShardRuntimeSetError> {
-        if let Some(owned_output) = self.owned_output.as_mut() {
+        if let ShardRuntimeWorkerExecution::Autonomous(owned_output) = &mut self.execution {
             return self
                 .runtime
                 .run_once(
@@ -505,7 +548,7 @@ impl ShardRuntimeWorker {
         limits: ShardRuntimeRunOnceLimits,
         limit: ShardRuntimeRunLimit,
     ) -> Result<ShardRuntimeRunReport, ShardRuntimeSetError> {
-        if let Some(owned_output) = self.owned_output.as_mut() {
+        if let ShardRuntimeWorkerExecution::Autonomous(owned_output) = &mut self.execution {
             return self
                 .runtime
                 .run_limited(
@@ -541,9 +584,13 @@ impl ShardRuntimeWorker {
         &mut self,
         entries: Vec<JournalInputEntry>,
     ) -> ShardRuntimeWorkerResponse {
+        let result = self
+            .write_inputs(entries)
+            .and_then(|written_count| self.run_owned_output_until_idle().map(|_| written_count));
+
         ShardRuntimeWorkerResponse {
             shard_id: self.shard_id(),
-            payload: ShardRuntimeWorkerResponsePayload::WriteInputs(self.write_inputs(entries)),
+            payload: ShardRuntimeWorkerResponsePayload::WriteInputs(result),
         }
     }
 
@@ -638,6 +685,13 @@ impl ShardWorkerRuntimeSet {
         symbols: Vec<Symbol>,
         config: MatchingRuntimeConfig,
     ) -> Result<Self, RuntimeTopologyError> {
+        Self::from_symbols_with_config_for_manual_execution(symbols, config)
+    }
+
+    pub fn from_symbols_with_config_for_manual_execution(
+        symbols: Vec<Symbol>,
+        config: MatchingRuntimeConfig,
+    ) -> Result<Self, RuntimeTopologyError> {
         let worker_runtimes = ShardRuntime::from_symbols_with_config(symbols, config)?;
         let worker_handles = worker_runtimes
             .into_iter()
@@ -650,11 +704,24 @@ impl ShardWorkerRuntimeSet {
     pub fn from_symbols_with_config_and_output_factory<F>(
         symbols: Vec<Symbol>,
         config: MatchingRuntimeConfig,
-        mut output_factory: F,
-    ) -> Result<Self, RuntimeTopologyError>
+        output_factory: F,
+    ) -> Result<Self, ShardRuntimeSetError>
     where
         F: FnMut(RuntimeShardId) -> ShardRuntimeOutputWriter,
     {
+        Self::from_symbols_with_config_for_autonomous_execution(symbols, config, output_factory)
+    }
+
+    pub fn from_symbols_with_config_for_autonomous_execution<F>(
+        symbols: Vec<Symbol>,
+        config: MatchingRuntimeConfig,
+        mut output_factory: F,
+    ) -> Result<Self, ShardRuntimeSetError>
+    where
+        F: FnMut(RuntimeShardId) -> ShardRuntimeOutputWriter,
+    {
+        let run_once_limits = ShardRuntimeRunOnceLimits::from_config(&config);
+        let run_limit = ShardRuntimeRunLimit::from_config(&config);
         let worker_runtimes = ShardRuntime::from_symbols_with_config(symbols, config)?;
         let worker_handles = worker_runtimes
             .into_iter()
@@ -664,9 +731,11 @@ impl ShardWorkerRuntimeSet {
                     runtime,
                     OutputJournalClient::new(),
                     output_factory(shard_id),
+                    run_once_limits,
+                    run_limit,
                 )
             })
-            .collect();
+            .collect::<Result<Vec<_>, ShardRuntimeSetError>>()?;
 
         Ok(Self { worker_handles })
     }
@@ -1054,6 +1123,12 @@ pub struct ShardRuntimeSetShutdownReport {
 impl From<ShardRuntimeError> for ShardRuntimeSetError {
     fn from(error: ShardRuntimeError) -> Self {
         Self::ShardRuntime(error)
+    }
+}
+
+impl From<RuntimeTopologyError> for ShardRuntimeSetError {
+    fn from(error: RuntimeTopologyError) -> Self {
+        Self::Topology(error)
     }
 }
 
